@@ -10,9 +10,8 @@ import sys
 # Leer variables de entorno
 USUARIO = os.getenv('USUARIO', '16205')
 CONTRASEÑA = os.getenv('CONTRASEÑA', 'Aventura60,')
-TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM', '7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU
-')
-CHAT_ID = os.getenv('CHAT_ID', '1573811842')
+TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM', '')
+CHAT_ID = os.getenv('CHAT_ID', '')
 INTERVALO_SEGUNDOS = 120
 
 # URLs
