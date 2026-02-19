@@ -1,25 +1,17 @@
+import os
 import requests
 from bs4 import BeautifulSoup
 import time
 from datetime import datetime
 import json
-import os
 import logging
-from pathlib import Path
-import re
 import sys
 
-# Solucionar encoding en Windows
-if sys.platform == 'win32':
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-
-# ============ CONFIGURACIÓN ============
-USUARIO = "16205"
-CONTRASEÑA = "Aventura60,"
-TOKEN_TELEGRAM = "7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU"
-CHAT_ID = "1573811842"
+# Leer variables de entorno
+USUARIO = os.getenv('USUARIO', '16205')
+CONTRASEÑA = os.getenv('CONTRASEÑA', 'Aventura60,')
+TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM', '')
+CHAT_ID = os.getenv('CHAT_ID', '')
 INTERVALO_SEGUNDOS = 120
 
 # URLs
@@ -48,7 +40,6 @@ logger = logging.getLogger(__name__)
 class MonitorHomeServe:
     def __init__(self):
         self.session = requests.Session()
-        # Headers más realistas
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -79,21 +70,17 @@ class MonitorHomeServe:
             logger.error(f"Error al guardar servicios: {e}")
     
     def login(self):
-        """Realiza el login en HomeServe con los campos CODIGO y PASSW"""
+        """Realiza el login en HomeServe"""
         try:
             logger.info("[INICIO] Intentando login en HomeServe...")
             
-            # Paso 1: Obtener la página de login
-            logger.info("[LOGIN] Solicitando página de login...")
             response = self.session.get(URL_LOGIN, timeout=10)
             logger.info(f"[LOGIN] GET inicial - Status: {response.status_code}")
-            logger.info(f"[LOGIN] Cookies: {self.session.cookies.get_dict()}")
             
-            # Paso 2: Preparar datos de login con los CAMPOS CORRECTOS
             payload = {
-                'CODIGO': USUARIO,      # Campo correcto: CODIGO
-                'PASSW': CONTRASEÑA,    # Campo correcto: PASSW
-                'ACEPT': 'Aceptar'      # Campo de submit
+                'CODIGO': USUARIO,
+                'PASSW': CONTRASEÑA,
+                'ACEPT': 'Aceptar'
             }
             
             logger.info(f"[LOGIN] Enviando login con CODIGO={USUARIO}...")
@@ -105,13 +92,7 @@ class MonitorHomeServe:
             )
             
             logger.info(f"[LOGIN] POST - Status: {response.status_code}")
-            logger.info(f"[LOGIN] Cookies despues de POST: {self.session.cookies.get_dict()}")
             
-            # Guardar respuesta para debug
-            with open('debug_login_respuesta.html', 'w', encoding='utf-8') as f:
-                f.write(response.text[:5000])
-            
-            # Paso 3: Verificar si el login fue exitoso
             indicadores_exito = [
                 'prof_asignacion',
                 'logout',
@@ -124,14 +105,13 @@ class MonitorHomeServe:
             
             login_exitoso = any(indicator in response.text.lower() for indicator in indicadores_exito)
             
-            # Tambien intentar acceder directamente a servicios como verificacion
             if not login_exitoso:
                 logger.info("[LOGIN] Verificando login intentando acceder a servicios...")
                 response_servicios = self.session.get(URL_SERVICIOS, timeout=10)
                 
                 if response_servicios.status_code == 200:
                     if 'prof_asignacion' in response_servicios.text.lower():
-                        logger.info("[EXITO] Login exitoso! Podemos acceder a servicios.")
+                        logger.info("[EXITO] Login exitoso!")
                         login_exitoso = True
             
             if login_exitoso:
@@ -139,11 +119,6 @@ class MonitorHomeServe:
                 return True
             else:
                 logger.error("[FALLO] Login fallido")
-                logger.error("[CONSEJO] Verifica que:")
-                logger.error("  - Las credenciales sean correctas (usuario: 16205)")
-                logger.error("  - La contraseña sea: Aventura60,")
-                logger.error("  - Tu cuenta no este bloqueada")
-                logger.info("[DEBUG] Respuesta guardada en debug_login_respuesta.html")
                 return False
                 
         except requests.RequestException as e:
@@ -161,14 +136,9 @@ class MonitorHomeServe:
                 logger.error(f"[SERVICIOS] Error en la solicitud: {response.status_code}")
                 return {}
             
-            # Guardar HTML para inspeccionar
-            with open('debug_servicios.html', 'w', encoding='utf-8') as f:
-                f.write(response.text)
-            
             soup = BeautifulSoup(response.text, 'html.parser')
             servicios = {}
             
-            # Buscar todas las filas de tabla
             filas = soup.find_all('tr')
             logger.info(f"[SERVICIOS] Total de filas encontradas: {len(filas)}")
             
@@ -180,7 +150,6 @@ class MonitorHomeServe:
                         tipo = celdas[1].get_text(strip=True)
                         estado = celdas[2].get_text(strip=True)
                         
-                        # Validar que numero sea numerico
                         if numero.replace('.', '').replace(',', '').isdigit() and len(numero) >= 6:
                             servicios[numero] = {
                                 'tipo': tipo,
