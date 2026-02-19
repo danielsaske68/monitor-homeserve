@@ -12,7 +12,7 @@ USUARIO = os.getenv('USUARIO', '16205')
 CONTRASEÑA = os.getenv('CONTRASEÑA', 'Aventura60,')
 TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM', '')
 CHAT_ID = os.getenv('CHAT_ID', '')
-INTERVALO_SEGUNDOS = 120
+INTERVALO_SEGUNDOS = int(os.getenv('INTERVALO_SEGUNDOS', '120'))
 
 # URLs
 URL_LOGIN = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS"
@@ -21,17 +21,10 @@ URL_SERVICIOS = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof
 ARCHIVO_SERVICIOS = "servicios_alertados.json"
 
 # ============ LOGGING ============
-class UTF8LogHandler(logging.FileHandler):
-    def __init__(self, filename):
-        super().__init__(filename, encoding='utf-8')
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        UTF8LogHandler('monitor_homeserve.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
