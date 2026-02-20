@@ -1,165 +1,101 @@
 import os
-import time
-import threading
-import logging
-import requests
 import psycopg2
-from bs4 import BeautifulSoup
-from flask import Flask
+from datetime import datetime
+import requests
+import logging
 
-# ==============================
-# CONFIGURACIÓN
-# ==============================
-
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-
-USERNAME = os.getenv("CODIGO")
-PASSWORD = os.getenv("PASSW")
-DATABASE_URL = os.getenv("DATABASE_URL")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-CHECK_INTERVAL = 60  # segundos entre revisiones
-
-logging.basicConfig(level=logging.INFO)
+# ===== LOGGING =====
+import sys
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+# ===== VARIABLES =====
+DATABASE_URL = os.getenv('DATABASE_URL')
+TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM')
+CHAT_ID = os.getenv('CHAT_ID')
 
-# ==============================
-# FLASK WEB SERVICE (Render Free)
-# ==============================
-@app.route("/")
-def home():
-    return "Bot activo y funcionando ✅"
-
-# ==============================
-# TELEGRAM
-# ==============================
-def enviar_telegram(mensaje):
-    enviar_telegram("🔔 TEST DE BOT FUNCIONANDO 🔔")
+# ===== FUNCIONES =====
+def conectar_db():
+    """Conecta a PostgreSQL usando DATABASE_URL"""
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}
-        response = requests.post(url, data=data, timeout=10)
-        if response.status_code != 200:
-            logger.warning(f"No se pudo enviar Telegram: {response.text}")
+        conn = psycopg2.connect(DATABASE_URL)
+        logger.info("Conexión a PostgreSQL exitosa ✅")
+        return conn
     except Exception as e:
-        logger.error(f"Error enviando Telegram: {e}")
+        logger.error(f"No se pudo conectar a la base de datos: {e}")
+        return None
 
-# ==============================
-# BASE DE DATOS
-# ==============================
-def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+def crear_tabla(conn):
+    """Crea tabla de servicios si no existe"""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS servicios_vistos (
+                    id SERIAL PRIMARY KEY,
+                    numero VARCHAR(50) UNIQUE,
+                    tipo VARCHAR(100),
+                    estado VARCHAR(100),
+                    fecha_detectado TIMESTAMP
+                )
+            """)
+            conn.commit()
+            logger.info("Tabla servicios_vistos lista ✅")
+    except Exception as e:
+        logger.error(f"Error creando tabla: {e}")
 
-def init_db():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS servicios_vistos (
-            id TEXT PRIMARY KEY
-        );
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+def insertar_servicio(conn, numero, tipo, estado):
+    """Inserta un servicio nuevo si no existe"""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO servicios_vistos (numero, tipo, estado, fecha_detectado)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (numero) DO NOTHING
+            """, (numero, tipo, estado, datetime.now()))
+            conn.commit()
+            logger.info(f"Servicio insertado: {numero} | {tipo} | {estado}")
+            return True
+    except Exception as e:
+        logger.error(f"Error insertando servicio: {e}")
+        return False
 
-def servicio_existe(servicio_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM servicios_vistos WHERE id = %s;", (servicio_id,))
-    existe = cur.fetchone()
-    cur.close()
-    conn.close()
-    return existe is not None
-
-def guardar_servicio(servicio_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO servicios_vistos (id) VALUES (%s);", (servicio_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# ==============================
-# MONITOR HOMESERVE
-# ==============================
-class Monitor:
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        })
-
-    def login(self):
-        try:
-            payload = {"CODIGO": USERNAME, "PASSW": PASSWORD, "ACEPT": "Aceptar"}
-            response = self.session.post(LOGIN_URL, data=payload, timeout=15)
-            if response.status_code == 200 and "prof_asignacion" in response.text.lower():
-                logger.info("✅ Login exitoso")
-                enviar_telegram("✅ Login exitoso en HomeServe")
-                return True
-            logger.warning("❌ Login fallido, revisa usuario/contraseña")
+def enviar_alerta_telegram(numero, tipo, estado):
+    """Envía alerta de Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
+        mensaje = f"NUEVO SERVICIO TEST\nNumero: {numero}\nTipo: {tipo}\nEstado: {estado}\nHora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        payload = {'chat_id': CHAT_ID, 'text': mensaje}
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            logger.info(f"Alerta enviada a Telegram ✅: {numero}")
+            return True
+        else:
+            logger.error(f"Error Telegram {r.status_code}: {r.text}")
             return False
-        except Exception as e:
-            logger.error(f"Error en login: {e}")
-            return False
+    except Exception as e:
+        logger.error(f"Excepción Telegram: {e}")
+        return False
 
-    def obtener_servicios(self):
-        try:
-            response = self.session.get(SERVICIOS_URL, timeout=15)
-            if response.status_code != 200:
-                logger.warning("No se pudo acceder a la página de servicios")
-                return None
-
-            soup = BeautifulSoup(response.text, "html.parser")
-            servicios = []
-
-            filas = soup.find_all("tr")
-            for fila in filas:
-                columnas = fila.find_all("td")
-                if len(columnas) >= 3:
-                    servicio_id = columnas[0].text.strip()
-                    if servicio_id.replace(".", "").replace(",", "").isdigit() and len(servicio_id) >= 6:
-                        servicios.append(servicio_id)
-            logger.info(f"Servicios encontrados: {servicios}")
-            return servicios
-        except Exception as e:
-            logger.error(f"Error obteniendo servicios: {e}")
-            return None
-
-    def run(self):
-        enviar_telegram("🤖 Bot iniciado y funcionando en Render")
-        while True:
-            while not self.login():
-                logger.warning("Login fallido, reintentando en 30s...")
-                time.sleep(30)
-
-            servicios = self.obtener_servicios()
-            if servicios is None:
-                time.sleep(30)
-                continue
-
-            for servicio in servicios:
-                if not servicio_existe(servicio):
-                    guardar_servicio(servicio)
-                    enviar_telegram(f"🚨 Nuevo servicio detectado:\nID: {servicio}")
-                    logger.info(f"Alerta enviada para servicio {servicio}")
-
-            time.sleep(CHECK_INTERVAL)
-
-# ==============================
-# INICIO
-# ==============================
-def iniciar_monitor():
-    init_db()
-    monitor = Monitor()
-    monitor.run()
-
+# ===== MAIN =====
 if __name__ == "__main__":
-    threading.Thread(target=iniciar_monitor).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    logger.info("Iniciando prueba completa del bot ⚡")
+    conn = conectar_db()
+    if conn:
+        crear_tabla(conn)
+
+        # Servicio de prueba
+        numero_test = "TEST123"
+        tipo_test = "Prueba"
+        estado_test = "Pendiente"
+
+        # Insertar en DB
+        if insertar_servicio(conn, numero_test, tipo_test, estado_test):
+            # Enviar alerta a Telegram
+            enviar_alerta_telegram(numero_test, tipo_test, estado_test)
+
+        conn.close()
+    logger.info("Script de prueba finalizado ✅")
