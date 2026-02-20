@@ -278,7 +278,7 @@ Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"""
         logger.info(f"Intervalo de monitoreo: {INTERVALO_SEGUNDOS} segundos")
         logger.info("=" * 60)
         
-        while not self.login():
+while not self.login():
     logger.error("Login fallido. Reintentando en 30 segundos...")
     time.sleep(30)
         
