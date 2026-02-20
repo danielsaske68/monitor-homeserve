@@ -1,101 +1,115 @@
 import os
-import psycopg2
-from datetime import datetime
-import requests
+import time
+import threading
 import logging
+import psycopg2
+import requests
+from flask import Flask
 
-# ===== LOGGING =====
-import sys
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
-)
+# --------------------------
+# CONFIGURACIÓN
+# --------------------------
+DATABASE_URL = os.environ.get("DATABASE_URL")  # tu URL de PostgreSQL
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")  # token bot
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")  # chat_id
+
+CHECK_INTERVAL = 120  # segundos entre chequeos
+
+# --------------------------
+# LOGGING
+# --------------------------
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ===== VARIABLES =====
-DATABASE_URL = os.getenv('DATABASE_URL')
-TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM')
-CHAT_ID = os.getenv('CHAT_ID')
+# --------------------------
+# FLASK
+# --------------------------
+app = Flask(__name__)
 
-# ===== FUNCIONES =====
-def conectar_db():
-    """Conecta a PostgreSQL usando DATABASE_URL"""
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        logger.info("Conexión a PostgreSQL exitosa ✅")
-        return conn
-    except Exception as e:
-        logger.error(f"No se pudo conectar a la base de datos: {e}")
-        return None
+@app.route("/")
+def index():
+    return "Bot activo ✅"
 
-def crear_tabla(conn):
-    """Crea tabla de servicios si no existe"""
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS servicios_vistos (
-                    id SERIAL PRIMARY KEY,
-                    numero VARCHAR(50) UNIQUE,
-                    tipo VARCHAR(100),
-                    estado VARCHAR(100),
-                    fecha_detectado TIMESTAMP
-                )
-            """)
-            conn.commit()
-            logger.info("Tabla servicios_vistos lista ✅")
-    except Exception as e:
-        logger.error(f"Error creando tabla: {e}")
+# --------------------------
+# FUNCIONES DE DB
+# --------------------------
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
 
-def insertar_servicio(conn, numero, tipo, estado):
-    """Inserta un servicio nuevo si no existe"""
+def setup_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS servicios_vistos (
+            id SERIAL PRIMARY KEY,
+            servicio_id TEXT UNIQUE,
+            nombre TEXT,
+            estado TEXT,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+    logger.info("Tabla servicios_vistos lista ✅")
+
+def servicio_nuevo(servicio_id, nombre, estado):
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO servicios_vistos (numero, tipo, estado, fecha_detectado)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (numero) DO NOTHING
-            """, (numero, tipo, estado, datetime.now()))
-            conn.commit()
-            logger.info(f"Servicio insertado: {numero} | {tipo} | {estado}")
-            return True
-    except Exception as e:
-        logger.error(f"Error insertando servicio: {e}")
+        cur.execute("INSERT INTO servicios_vistos (servicio_id, nombre, estado) VALUES (%s, %s, %s)", 
+                    (servicio_id, nombre, estado))
+        conn.commit()
+        return True
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
         return False
-
-def enviar_alerta_telegram(numero, tipo, estado):
-    """Envía alerta de Telegram"""
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-        mensaje = f"NUEVO SERVICIO TEST\nNumero: {numero}\nTipo: {tipo}\nEstado: {estado}\nHora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
-        payload = {'chat_id': CHAT_ID, 'text': mensaje}
-        r = requests.post(url, json=payload, timeout=10)
-        if r.status_code == 200:
-            logger.info(f"Alerta enviada a Telegram ✅: {numero}")
-            return True
-        else:
-            logger.error(f"Error Telegram {r.status_code}: {r.text}")
-            return False
-    except Exception as e:
-        logger.error(f"Excepción Telegram: {e}")
-        return False
-
-# ===== MAIN =====
-if __name__ == "__main__":
-    logger.info("Iniciando prueba completa del bot ⚡")
-    conn = conectar_db()
-    if conn:
-        crear_tabla(conn)
-
-        # Servicio de prueba
-        numero_test = "TEST123"
-        tipo_test = "Prueba"
-        estado_test = "Pendiente"
-
-        # Insertar en DB
-        if insertar_servicio(conn, numero_test, tipo_test, estado_test):
-            # Enviar alerta a Telegram
-            enviar_alerta_telegram(numero_test, tipo_test, estado_test)
-
+    finally:
+        cur.close()
         conn.close()
-    logger.info("Script de prueba finalizado ✅")
+
+# --------------------------
+# TELEGRAM
+# --------------------------
+def enviar_telegram(mensaje):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}
+    try:
+        r = requests.post(url, data=data)
+        if r.status_code == 200:
+            logger.info(f"Alerta enviada a Telegram ✅: {mensaje}")
+        else:
+            logger.error(f"Error Telegram: {r.text}")
+    except Exception as e:
+        logger.error(f"Error enviando Telegram: {e}")
+
+# --------------------------
+# MONITOR PRINCIPAL
+# --------------------------
+def monitor_loop():
+    logger.info("Monitor iniciado ⚡")
+    setup_db()
+    while True:
+        # Aquí tu lógica para revisar servicios
+        # EJEMPLO DE PRUEBA
+        servicio_id = "TEST123"
+        nombre = "Prueba"
+        estado = "Pendiente"
+
+        if servicio_nuevo(servicio_id, nombre, estado):
+            enviar_telegram(f"{servicio_id} | {nombre} | {estado}")
+
+        time.sleep(CHECK_INTERVAL)
+
+# --------------------------
+# EJECUTAR HILO
+# --------------------------
+threading.Thread(target=monitor_loop, daemon=True).start()
+
+# --------------------------
+# INICIAR FLASK
+# --------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
