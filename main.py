@@ -1,15 +1,17 @@
 import os
 import time
+import threading
 import logging
 import requests
 import psycopg2
 from bs4 import BeautifulSoup
+from flask import Flask
 
 # ==============================
-# CONFIGURACIÓN
+# CONFIG
 # ==============================
 
-LOGIN_URL = https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
 USERNAME = os.getenv("CODIGO")
@@ -18,10 +20,20 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-CHECK_INTERVAL = 60  # segundos entre revisiones
+CHECK_INTERVAL = 60
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+# ==============================
+# WEB SERVER (para Render)
+# ==============================
+
+@app.route("/")
+def home():
+    return "Bot activo"
 
 # ==============================
 # TELEGRAM
@@ -39,7 +51,7 @@ def enviar_telegram(mensaje):
         logger.error(f"Error enviando Telegram: {e}")
 
 # ==============================
-# BASE DE DATOS
+# DATABASE
 # ==============================
 
 def get_connection():
@@ -95,12 +107,10 @@ class Monitor:
             if response.status_code == 200:
                 logger.info("Login exitoso")
                 return True
-            else:
-                logger.error("Login fallido")
-                return False
+            return False
 
         except Exception as e:
-            logger.error(f"Error en login: {e}")
+            logger.error(f"Error login: {e}")
             return False
 
     def obtener_servicios(self):
@@ -108,14 +118,11 @@ class Monitor:
             response = self.session.get(SERVICIOS_URL, timeout=15)
 
             if response.status_code != 200:
-                logger.error("Sesión expirada o error cargando servicios")
                 return None
 
             soup = BeautifulSoup(response.text, "html.parser")
-
             servicios = []
 
-            # 🔴 AJUSTA ESTO SEGÚN TU HTML
             filas = soup.select("table tr")
 
             for fila in filas:
@@ -133,35 +140,24 @@ class Monitor:
 
     def run(self):
 
-        enviar_telegram("✅ Bot iniciado correctamente")
+        enviar_telegram("✅ Bot iniciado en Render")
 
         while True:
 
-            # 🔁 Reintenta login hasta que funcione
             while not self.login():
-                logger.error("Login fallido. Reintentando en 30 segundos...")
+                logger.error("Login fallido. Reintentando en 30s")
                 time.sleep(30)
 
-            try:
-                servicios = self.obtener_servicios()
+            servicios = self.obtener_servicios()
 
-                if servicios is None:
-                    logger.warning("Reintentando login por posible sesión caída...")
-                    continue
+            if servicios is None:
+                time.sleep(30)
+                continue
 
-                for servicio in servicios:
-
-                    if not servicio_existe(servicio):
-                        logger.info(f"Nuevo servicio detectado: {servicio}")
-                        guardar_servicio(servicio)
-
-                        enviar_telegram(
-                            f"🚨 NUEVO SERVICIO ASIGNADO 🚨\n\n"
-                            f"ID: {servicio}"
-                        )
-
-            except Exception as e:
-                logger.error(f"Error general: {e}")
+            for servicio in servicios:
+                if not servicio_existe(servicio):
+                    guardar_servicio(servicio)
+                    enviar_telegram(f"🚨 Nuevo servicio:\n{servicio}")
 
             time.sleep(CHECK_INTERVAL)
 
@@ -169,7 +165,12 @@ class Monitor:
 # START
 # ==============================
 
-if __name__ == "__main__":
+def iniciar_monitor():
     init_db()
     monitor = Monitor()
     monitor.run()
+
+if __name__ == "__main__":
+    threading.Thread(target=iniciar_monitor).start()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
