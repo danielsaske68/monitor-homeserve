@@ -1,3 +1,5 @@
-CODIGO =16205
-PASSW =Aventura60,
-DATABASE_URL = (postgresql://servicios_db_md79_user:8WzYZdOPdI4XdTclppihkPjgHtLbtzb4@dpg-d6cd3hntn9qs73d8g5hg-a.oregon-postgres.render.com/servicios_db_md79)
+requests
+beautifulsoup4
+psycopg2-binary
+flask
+gunicorn
