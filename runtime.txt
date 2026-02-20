@@ -1,2 +1,5 @@
-python-3.11.9
+requests
+beautifulsoup4
 psycopg2-binary
+flask
+gunicorn
