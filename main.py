@@ -295,15 +295,9 @@ while not self.login():
                     intento_reconexion = 0
                 else:
                     logger.warning("Sin servicios. Reconectando...")
-                    if not self.login():
-                        intento_reconexion += 1
-                        if intento_reconexion > 3:
-    logger.error("Demasiados intentos. Esperando 60 segundos antes de reintentar...")
-    time.sleep(60)
-    intento_reconexion = 0
-                
-                logger.info(f"Proximo chequeo en {INTERVALO_SEGUNDOS} segundos...")
-                time.sleep(INTERVALO_SEGUNDOS)
+                    while not self.login():
+    logger.error("Login fallido. Reintentando en 30 segundos...")
+    time.sleep(30)
                 
             except KeyboardInterrupt:
                 logger.info("Monitoreo detenido por usuario")
