@@ -14,9 +14,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===== VARIABLES =====
-DATABASE_URL = os.getenv('DATABASE_URL')
-TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM')
-CHAT_ID = os.getenv('CHAT_ID')
+DATABASE_URL = os.getenv('postgresql://servicios_db_md79_user:8WzYZdOPdI4XdTclppihkPjgHtLbtzb4@dpg-d6cd3hntn9qs73d8g5hg-a/servicios_db_md79')
+TOKEN_TELEGRAM = os.getenv('7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU')
+CHAT_ID = os.getenv('1573811842')
 
 # ===== FUNCIONES =====
 def conectar_db():
