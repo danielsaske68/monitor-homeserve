@@ -278,9 +278,9 @@ Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"""
         logger.info(f"Intervalo de monitoreo: {INTERVALO_SEGUNDOS} segundos")
         logger.info("=" * 60)
         
-        if not self.login():
-            logger.error("No se pudo hacer login. Abortando...")
-            return
+        while not self.login():
+    logger.error("Login fallido. Reintentando en 30 segundos...")
+    time.sleep(30)
         
         intento_reconexion = 0
         
@@ -298,8 +298,9 @@ Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"""
                     if not self.login():
                         intento_reconexion += 1
                         if intento_reconexion > 3:
-                            logger.error("Demasiados intentos. Abortando...")
-                            break
+    logger.error("Demasiados intentos. Esperando 60 segundos antes de reintentar...")
+    time.sleep(60)
+    intento_reconexion = 0
                 
                 logger.info(f"Proximo chequeo en {INTERVALO_SEGUNDOS} segundos...")
                 time.sleep(INTERVALO_SEGUNDOS)
