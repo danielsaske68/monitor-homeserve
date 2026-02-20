@@ -3,10 +3,9 @@ import requests
 from bs4 import BeautifulSoup
 import time
 from datetime import datetime
+import json
 import logging
 import sys
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 # Leer variables de entorno
 USUARIO = os.getenv('USUARIO', '16205')
@@ -15,16 +14,11 @@ TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM', '')
 CHAT_ID = os.getenv('CHAT_ID', '')
 INTERVALO_SEGUNDOS = int(os.getenv('INTERVALO_SEGUNDOS', '120'))
 
-# Variables de base de datos
-DB_HOST = os.getenv('DB_HOST')
-DB_NAME = os.getenv('DB_NAME', 'postgres')
-DB_USER = os.getenv('DB_USER', 'postgres')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
-DB_PORT = os.getenv('DB_PORT', '5432')
-
 # URLs
 URL_LOGIN = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS"
 URL_SERVICIOS = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+
+ARCHIVO_SERVICIOS = "servicios_alertados.json"
 
 # ============ LOGGING ============
 logging.basicConfig(
@@ -34,85 +28,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ============ BASE DE DATOS ============
-
-class BaseDatos:
-    def __init__(self):
-        try:
-            self.conn = psycopg2.connect(
-                host=DB_HOST,
-                database=DB_NAME,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                port=DB_PORT
-            )
-            logger.info("[BD] Conexion a base de datos exitosa")
-        except Exception as e:
-            logger.error(f"[BD] Error conectando: {e}")
-            self.conn = None
-    
-    def servicio_existe(self, numero):
-        """Verifica si el servicio ya fue alertado"""
-        if not self.conn:
-            return False
-        
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute("SELECT id FROM servicios_alertados WHERE numero = %s", (numero,))
-                return cur.fetchone() is not None
-        except Exception as e:
-            logger.error(f"[BD] Error verificando servicio: {e}")
-            return False
-    
-    def guardar_servicio(self, numero, tipo, estado):
-        """Guarda un nuevo servicio en la base de datos"""
-        if not self.conn:
-            return False
-        
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO servicios_alertados (numero, tipo, estado) VALUES (%s, %s, %s)",
-                    (numero, tipo, estado)
-                )
-            self.conn.commit()
-            logger.info(f"[BD] Servicio {numero} guardado en BD")
-            return True
-        except Exception as e:
-            logger.error(f"[BD] Error guardando servicio: {e}")
-            self.conn.rollback()
-            return False
-    
-    def obtener_servicios(self):
-        """Obtiene todos los servicios alertados"""
-        if not self.conn:
-            return {}
-        
-        try:
-            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT numero, tipo, estado FROM servicios_alertados")
-                servicios = {}
-                for row in cur.fetchall():
-                    servicios[row['numero']] = {
-                        'tipo': row['tipo'],
-                        'estado': row['estado']
-                    }
-                return servicios
-        except Exception as e:
-            logger.error(f"[BD] Error obteniendo servicios: {e}")
-            return {}
-    
-    def cerrar(self):
-        """Cierra la conexion a BD"""
-        if self.conn:
-            self.conn.close()
-            logger.info("[BD] Conexion cerrada")
-
-# ============ MONITOR ============
+# ============ FUNCIONES ============
 
 class MonitorHomeServe:
-    def __init__(self, bd):
-        self.bd = bd
+    def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -122,6 +41,26 @@ class MonitorHomeServe:
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1'
         })
+        self.servicios_alertados = self.cargar_servicios_alertados()
+    
+    def cargar_servicios_alertados(self):
+        """Carga los servicios ya alertados desde archivo JSON"""
+        if os.path.exists(ARCHIVO_SERVICIOS):
+            try:
+                with open(ARCHIVO_SERVICIOS, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                logger.warning("No se pudo cargar archivo de servicios")
+                return {}
+        return {}
+    
+    def guardar_servicios_alertados(self):
+        """Guarda los servicios alertados en archivo JSON"""
+        try:
+            with open(ARCHIVO_SERVICIOS, 'w', encoding='utf-8') as f:
+                json.dump(self.servicios_alertados, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error al guardar servicios: {e}")
     
     def login(self):
         """Realiza el login en HomeServe"""
@@ -207,7 +146,8 @@ class MonitorHomeServe:
                         if numero.replace('.', '').replace(',', '').isdigit() and len(numero) >= 6:
                             servicios[numero] = {
                                 'tipo': tipo,
-                                'estado': estado
+                                'estado': estado,
+                                'fecha_detectado': datetime.now().isoformat()
                             }
                             logger.info(f"[SERVICIOS] Encontrado: {numero} | {tipo} | {estado}")
                     except Exception as e:
@@ -252,22 +192,18 @@ Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"""
             return False
     
     def procesar_servicios(self, servicios_nuevos):
-        """Procesa servicios y alerta sobre los NUEVOS"""
+        """Procesa servicios y alerta sobre los nuevos"""
         servicios_alertados = 0
         
         for numero, datos in servicios_nuevos.items():
-            # Verificar si el servicio YA existe en la BD
-            if not self.bd.servicio_existe(numero):
+            if numero not in self.servicios_alertados:
                 logger.info(f"[NUEVO] Servicio detectado: {numero}")
                 
-                # Enviar alerta
                 if self.enviar_alerta_telegram(numero, datos['tipo'], datos['estado']):
-                    # Guardar en BD
-                    self.bd.guardar_servicio(numero, datos['tipo'], datos['estado'])
+                    self.servicios_alertados[numero] = datos
+                    self.guardar_servicios_alertados()
                     servicios_alertados += 1
                     time.sleep(1)
-            else:
-                logger.info(f"[ANTIGUO] Servicio ya conocido: {numero}")
         
         return servicios_alertados
     
@@ -291,7 +227,7 @@ Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"""
                 if servicios:
                     alertas = self.procesar_servicios(servicios)
                     if alertas > 0:
-                        logger.info(f"NUEVOS servicios alertados: {alertas}")
+                        logger.info(f"Nuevos servicios alertados: {alertas}")
                     intento_reconexion = 0
                 else:
                     logger.warning("Sin servicios. Reconectando...")
@@ -310,20 +246,8 @@ Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"""
             except Exception as e:
                 logger.error(f"Error: {e}")
                 time.sleep(INTERVALO_SEGUNDOS)
-            finally:
-                # Asegurar que la conexion siga abierta
-                if self.bd.conn is None:
-                    logger.warning("Reconectando a BD...")
-                    self.bd = BaseDatos()
 
 # ============ MAIN ============
 if __name__ == "__main__":
-    bd = BaseDatos()
-    if bd.conn:
-        monitor = MonitorHomeServe(bd)
-        try:
-            monitor.ejecutar()
-        finally:
-            bd.cerrar()
-    else:
-        logger.error("No se pudo conectar a la base de datos. Abortando...")
+    monitor = MonitorHomeServe()
+    monitor.ejecutar()
