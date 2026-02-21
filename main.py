@@ -1,42 +1,40 @@
 import os
-import time
+import psycopg2
 import requests
 from bs4 import BeautifulSoup
-import psycopg2
-from flask import Flask
+from time import sleep
 
-# -------------------
-# CONFIGURACIÓN
-# -------------------
-DATABASE_URL = os.environ.get("DATABASE_URL")  # Ej: postgres://user:pass@host/db
+# -----------------------
+# Configuración de Telegram
+# -----------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+def send_telegram_message(message):
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+    else:
+        print("[WARN] Telegram no configurado correctamente.")
 
-# -------------------
-# FLASK APP PARA RENDER
-# -------------------
-app = Flask(__name__)
+# -----------------------
+# Conexión a la base de datos
+# -----------------------
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-@app.route("/")
-def index():
-    return "Bot HomeServe en marcha ✅"
-
-# -------------------
-# FUNCIONES DE DB
-# -------------------
 def get_connection():
+    if not DATABASE_URL:
+        raise Exception("No se ha configurado DATABASE_URL")
     return psycopg2.connect(DATABASE_URL)
 
 def setup_db():
     conn = get_connection()
     cur = conn.cursor()
+    # Crear tabla si no existe (ajusta columnas según tu DB)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS servicios (
             id SERIAL PRIMARY KEY,
-            descripcion TEXT,
+            detalle TEXT,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -44,78 +42,81 @@ def setup_db():
     cur.close()
     conn.close()
 
-def guardar_servicio(descripcion):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO servicios (descripcion) VALUES (%s)", (descripcion,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
+# -----------------------
+# Obtener servicios existentes
+# -----------------------
 def obtener_servicios_existentes():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT descripcion FROM servicios")
-    filas = cur.fetchall()
+    # Asegúrate de usar la columna correcta
+    cur.execute("SELECT detalle FROM servicios")
+    servicios_vistos = [row[0] for row in cur.fetchall()]
     cur.close()
     conn.close()
-    return {fila[0] for fila in filas}
+    return servicios_vistos
 
-# -------------------
-# FUNCIONES DE TELEGRAM
-# -------------------
-def enviar_telegram(mensaje):
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje})
-
-# -------------------
-# FUNCIONES DE MONITOREO
-# -------------------
-def login(session):
-    payload = {
-        "CODIGO": os.environ.get("HOMESERVE_USER"),
-        "PASSW": os.environ.get("HOMESERVE_PASS")
-    }
-    session.post(LOGIN_URL, data=payload)
-
-def obtener_servicios(session):
-    resp = session.get(ASIGNACION_URL)
-    soup = BeautifulSoup(resp.text, "html.parser")
-    servicios = []
-
-    # Aquí parsea los servicios según la estructura de la web
-    for tag in soup.select(".servicio"):  # ajustar selector real
-        descripcion = tag.get_text(strip=True)
-        servicios.append(descripcion)
-    return servicios
-
+# -----------------------
+# Monitor principal
+# -----------------------
 def start_monitor():
-    enviar_telegram("🤖 Bot HomeServe iniciado y en marcha")
     setup_db()
-    session = requests.Session()
-    login(session)
-
     servicios_vistos = obtener_servicios_existentes()
+    # Mensaje inicial al arrancar el bot
+    mensaje_inicial = f"Bot arrancado ✅\nServicios existentes en DB: {len(servicios_vistos)}"
+    print(mensaje_inicial)
+    send_telegram_message(mensaje_inicial)
 
     while True:
         try:
-            servicios_actuales = set(obtener_servicios(session))
-            nuevos = servicios_actuales - servicios_vistos
+            # -----------------------
+            # Login y obtención de servicios
+            # -----------------------
+            session = requests.Session()
+            login_url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+            asignacion_url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-            for servicio in nuevos:
-                guardar_servicio(servicio)
-                enviar_telegram(f"📌 Nuevo servicio detectado:\n{servicio}")
+            # Ajusta tus credenciales aquí
+            payload = {
+                "usuario": os.environ.get("HOMESERVE_USER"),
+                "password": os.environ.get("HOMESERVE_PASS")
+            }
+            session.post(login_url, data=payload)
 
-            servicios_vistos.update(nuevos)
+            response = session.get(asignacion_url)
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Ejemplo: extraer servicios
+            servicios_actuales = []
+            for servicio in soup.select(".servicio"):
+                detalle = servicio.get_text(strip=True)
+                servicios_actuales.append(detalle)
+
+            # -----------------------
+            # Comparar con DB
+            # -----------------------
+            nuevos = [s for s in servicios_actuales if s not in servicios_vistos]
+
+            if nuevos:
+                mensaje = f"🔔 Nuevos servicios detectados:\n" + "\n".join(nuevos)
+                send_telegram_message(mensaje)
+                # Guardar nuevos en DB
+                conn = get_connection()
+                cur = conn.cursor()
+                for s in nuevos:
+                    cur.execute("INSERT INTO servicios (detalle) VALUES (%s)", (s,))
+                conn.commit()
+                cur.close()
+                conn.close()
+                servicios_vistos.extend(nuevos)
 
         except Exception as e:
-            enviar_telegram(f"⚠ Error en monitor: {e}")
+            print(f"[ERROR] {e}")
+            send_telegram_message(f"[ERROR] {e}")
 
-        time.sleep(60)  # espera 1 minuto entre chequeos
+        sleep(60)  # Revisa cada 1 minuto
 
-# -------------------
-# ARRANQUE DIRECTO
-# -------------------
+# -----------------------
+# Ejecutar el bot
+# -----------------------
 if __name__ == "__main__":
     start_monitor()
