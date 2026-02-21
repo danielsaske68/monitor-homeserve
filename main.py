@@ -35,18 +35,57 @@ def home():
     return "Bot HomeServe Profesional Activo ✅"
 
 # ==========================================
-# TELEGRAM
+# TELEGRAM CON BOTONES
 # ==========================================
+from flask import jsonify
 
-def enviar_telegram(mensaje):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": mensaje
-        }, timeout=10)
-    except Exception as e:
-        print("Error Telegram:", e)
+def responder(chat_id, mensaje, keyboard=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": mensaje}
+    if keyboard:
+        data["reply_markup"] = keyboard
+    requests.post(url, json=data)
+
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def recibir_comando():
+    data = request.get_json()
+
+    if "message" in data:
+        texto = data["message"].get("text", "")
+        chat_id = data["message"]["chat"]["id"]
+
+        if texto == "/start":
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "Ver últimos servicios", "callback_data": "ver_ultimos"}],
+                    [{"text": "Servicios hoy", "callback_data": "ver_hoy"}],
+                    [{"text": "Total servicios", "callback_data": "ver_total"}]
+                ]
+            }
+            responder(chat_id, "🤖 Bot activo. Selecciona una opción:", keyboard)
+
+    elif "callback_query" in data:
+        query = data["callback_query"]
+        chat_id = query["message"]["chat"]["id"]
+        data_cb = query["data"]
+
+        if data_cb == "ver_ultimos":
+            ultimos = obtener_ultimos_servicios()
+            if ultimos:
+                mensaje = "🆕 Últimos servicios:\n\n" + "\n\n".join(ultimos)
+            else:
+                mensaje = "No hay servicios aún."
+            responder(chat_id, mensaje)
+
+        elif data_cb == "ver_hoy":
+            hoy = contar_servicios_hoy()
+            responder(chat_id, f"📅 Servicios guardados hoy: {hoy}")
+
+        elif data_cb == "ver_total":
+            total = contar_servicios()
+            responder(chat_id, f"📊 Total servicios almacenados: {total}")
+
+    return jsonify({"status": "ok"})
 
 # Webhook para recibir mensajes
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
