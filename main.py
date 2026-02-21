@@ -1,199 +1,166 @@
 import os
-import threading
 import time
-import logging
+import threading
 import requests
 import psycopg2
-from psycopg2 import sql
-from flask import Flask, jsonify
+from flask import Flask
+from bs4 import BeautifulSoup
 
-# ==========================================
-# CONFIGURACIÓN
-# ==========================================
+# =========================
+# CONFIGURACIÓN DESDE ENV
+# =========================
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+DATABASE_URL = os.getenv("DATABASE_URL")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-MONITOR_INTERVAL = 60  # segundos
+URL_OBJETIVO = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"  # <-- CAMBIA ESTO
 
-# ==========================================
-# LOGGING PROFESIONAL
-# ==========================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-
-logger = logging.getLogger("MonitorHomeserve")
-
-# ==========================================
-# FLASK APP
-# ==========================================
+INTERVALO = 120 # 5 minutos
 
 app = Flask(__name__)
 
-@app.route("/")
-def home():
-    return "Monitor activo ⚡", 200
-
-@app.route("/health")
-def health():
-    return jsonify({
-        "status": "running",
-        "monitor_interval": MONITOR_INTERVAL
-    }), 200
-
-# ==========================================
-# DB CONNECTION
-# ==========================================
+# =========================
+# CONEXIÓN DB
+# =========================
 
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
-# ==========================================
-# DB SETUP + AUTO FIX COLUMN
-# ==========================================
-
-def setup_db():
+def init_db():
     conn = get_connection()
     cur = conn.cursor()
-
-    # Crear tabla si no existe
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS servicios_vistos (
+        CREATE TABLE IF NOT EXISTS servicios (
             id SERIAL PRIMARY KEY,
-            servicio_id TEXT UNIQUE,
-            nombre TEXT,
-            estado TEXT,
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            titulo TEXT UNIQUE
         );
     """)
-
     conn.commit()
-
-    # Verificar que exista columna servicio_id
-    cur.execute("""
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name='servicios_vistos'
-        AND column_name='servicio_id';
-    """)
-
-    if not cur.fetchone():
-        logger.warning("Columna servicio_id no existe. Intentando agregarla...")
-        cur.execute("ALTER TABLE servicios_vistos ADD COLUMN servicio_id TEXT;")
-        conn.commit()
-        logger.info("Columna servicio_id agregada correctamente ✅")
-
     cur.close()
     conn.close()
+    print("Base de datos inicializada")
 
-    logger.info("Base de datos lista ✅")
+# =========================
+# TELEGRAM
+# =========================
 
-# ==========================================
-# INSERT SEGURO
-# ==========================================
+def send_telegram(mensaje):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": mensaje
+        }
+        requests.post(url, data=data, timeout=10)
+    except Exception as e:
+        print("Error enviando Telegram:", e)
 
-def servicio_nuevo(servicio_id, nombre, estado):
+# =========================
+# VERIFICACIÓN INICIAL
+# =========================
+
+def check_database_status():
     try:
         conn = get_connection()
         cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO servicios_vistos (servicio_id, nombre, estado)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (servicio_id) DO NOTHING;
-        """, (servicio_id, nombre, estado))
-
-        conn.commit()
-        inserted = cur.rowcount > 0
-
+        cur.execute("SELECT COUNT(*) FROM servicios;")
+        total = cur.fetchone()[0]
         cur.close()
         conn.close()
 
-        if inserted:
-            logger.info(f"Nuevo servicio detectado: {servicio_id}")
+        mensaje = f"✅ Bot iniciado correctamente\n📊 Registros en DB: {total}"
+        send_telegram(mensaje)
 
-        return inserted
+        print("Chequeo enviado a Telegram")
 
     except Exception as e:
-        logger.error(f"Error DB insert: {e}")
-        return False
+        print("Error verificando DB:", e)
+        send_telegram(f"❌ Error conectando a la base de datos:\n{e}")
 
-# ==========================================
-# TELEGRAM CON REINTENTO
-# ==========================================
+# =========================
+# SCRAPER
+# =========================
 
-def enviar_telegram(mensaje, retries=3):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.error("Telegram no configurado (faltan variables de entorno)")
-        return
+def obtener_servicios():
+    try:
+        response = requests.get(URL_OBJETIVO, timeout=15)
+        soup = BeautifulSoup(response.text, "html.parser")
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        # 👇 AJUSTA ESTE SELECTOR SEGÚN TU PÁGINA
+        elementos = soup.find_all("h2")
 
-    for intento in range(retries):
-        try:
-            response = requests.post(
-                url,
-                data={
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "text": mensaje
-                },
-                timeout=10
-            )
+        servicios = [el.get_text(strip=True) for el in elementos]
+        return servicios
 
-            if response.status_code == 200:
-                logger.info("Mensaje enviado a Telegram ✅")
-                return
-            else:
-                logger.warning(f"Telegram respondió con {response.status_code}")
+    except Exception as e:
+        print("Error scrapeando:", e)
+        return []
 
-        except Exception as e:
-            logger.error(f"Error enviando Telegram (intento {intento+1}): {e}")
+# =========================
+# MONITOR
+# =========================
 
-        time.sleep(2)
-
-    logger.error("No se pudo enviar mensaje a Telegram después de varios intentos ❌")
-
-# ==========================================
-# MONITOR LOOP
-# ==========================================
-
-def monitor_loop():
-    logger.info("Monitor iniciado ⚡")
-
+def monitor():
     while True:
-        try:
-            logger.info("Ejecutando ciclo de monitoreo...")
+        print("Ejecutando ciclo de monitoreo...")
+        servicios = obtener_servicios()
 
-            # ⚠️ REEMPLAZA ESTA PARTE CON TU SCRAPER REAL
-            servicios = [
-                {"id": "TEST001", "nombre": "Servicio prueba", "estado": "Pendiente"}
-            ]
+        if servicios:
+            conn = get_connection()
+            cur = conn.cursor()
 
-            for s in servicios:
-                if servicio_nuevo(s["id"], s["nombre"], s["estado"]):
-                    enviar_telegram(
-                        f"🚨 Nuevo servicio detectado\n\n"
-                        f"ID: {s['id']}\n"
-                        f"Nombre: {s['nombre']}\n"
-                        f"Estado: {s['estado']}"
+            for servicio in servicios:
+                try:
+                    cur.execute(
+                        "INSERT INTO servicios (titulo) VALUES (%s) ON CONFLICT DO NOTHING;",
+                        (servicio,)
                     )
+                    if cur.rowcount > 0:
+                        print("Nuevo servicio:", servicio)
+                        send_telegram(f"🚨 Nuevo servicio detectado:\n{servicio}")
 
-        except Exception as e:
-            logger.error(f"Error en monitor_loop: {e}")
+                except Exception as e:
+                    print("Error insertando:", e)
 
-        time.sleep(MONITOR_INTERVAL)
+            conn.commit()
+            cur.close()
+            conn.close()
 
-# ==========================================
+        time.sleep(INTERVALO)
+
+# =========================
+# FLASK ENDPOINTS
+# =========================
+
+@app.route("/")
+def home():
+    return "Bot funcionando correctamente"
+
+@app.route("/health")
+def health():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM servicios;")
+        total = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        return f"OK - Registros en DB: {total}"
+    except:
+        return "Error conectando a DB", 500
+
+# =========================
 # INICIO
-# ==========================================
+# =========================
 
-def start_monitor():
-    setup_db()
-    thread = threading.Thread(target=monitor_loop, daemon=True)
-    thread.start()
+if __name__ == "__main__":
+    init_db()
+    check_database_status()
 
-start_monitor()
+    hilo = threading.Thread(target=monitor)
+    hilo.daemon = True
+    hilo.start()
+
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
