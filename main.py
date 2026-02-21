@@ -1,6 +1,7 @@
 import os
 import time
 import re
+import threading
 import requests
 import psycopg2
 from bs4 import BeautifulSoup
@@ -15,14 +16,16 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+HOMESERVE_USER = os.environ.get("HOMESERVE_USER")
+HOMESERVE_PASS = os.environ.get("HOMESERVE_PASS")
+
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=login"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
 CHECK_INTERVAL = 60  # segundos
-RESUMEN_HORA = 20    # 20 = 8PM
 
 # ==========================================
-# FLASK APP (Render necesita puerto abierto)
+# FLASK APP (Gunicorn lo usa)
 # ==========================================
 
 app = Flask(__name__)
@@ -39,12 +42,16 @@ def enviar_telegram(mensaje):
     try:
         if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            requests.post(url, data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": mensaje
-            }, timeout=10)
-    except:
-        pass
+            requests.post(
+                url,
+                data={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": mensaje
+                },
+                timeout=10
+            )
+    except Exception as e:
+        print("Error enviando a Telegram:", e)
 
 # ==========================================
 # BASE DE DATOS
@@ -79,24 +86,13 @@ def obtener_servicios_existentes():
 def guardar_servicio(servicio):
     conn = get_connection()
     cur = conn.cursor()
-    try:
-        cur.execute(
-            "INSERT INTO servicios (data) VALUES (%s) ON CONFLICT (data) DO NOTHING",
-            (servicio,)
-        )
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
-
-def contar_servicios():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM servicios")
-    total = cur.fetchone()[0]
+    cur.execute(
+        "INSERT INTO servicios (data) VALUES (%s) ON CONFLICT (data) DO NOTHING",
+        (servicio,)
+    )
+    conn.commit()
     cur.close()
     conn.close()
-    return total
 
 # ==========================================
 # LOGIN Y SCRAPING
@@ -104,15 +100,13 @@ def contar_servicios():
 
 def login(session):
     payload = {
-        "usuario": os.environ.get("HOMESERVE_USER"),
-        "password": os.environ.get("HOMESERVE_PASS")
+        "usuario": HOMESERVE_USER,
+        "password": HOMESERVE_PASS
     }
     session.post(LOGIN_URL, data=payload, timeout=15)
 
 def es_servicio_valido(texto):
-    # Ajusta esta expresión según el formato real
-    # Detecta códigos tipo: 123456 o HS-123456
-    patron = r"\b\d{5,}\b"
+    patron = r"\b\d{6,}\b"  # detecta códigos numéricos largos
     return re.search(patron, texto)
 
 def obtener_servicios_web(session):
@@ -127,20 +121,19 @@ def obtener_servicios_web(session):
 
     for fila in soup.select("tr"):
         texto = fila.get_text(" ", strip=True)
-
         if texto and es_servicio_valido(texto):
             servicios.add(texto)
 
     return servicios
 
 # ==========================================
-# MONITOR PROFESIONAL
+# MONITOR
 # ==========================================
 
 def start_monitor():
     crear_tabla_si_no_existe()
 
-    enviar_telegram("🚀 Bot Profesional iniciado correctamente")
+    enviar_telegram("🚀 Bot iniciado correctamente")
 
     servicios_vistos = obtener_servicios_existentes()
     enviar_telegram(f"📊 Servicios almacenados en BD: {len(servicios_vistos)}")
@@ -148,34 +141,17 @@ def start_monitor():
     session = requests.Session()
     login(session)
 
-    ultima_fecha_resumen = None
-
     while True:
         try:
-            ahora = datetime.now()
-
-            # Revisar servicios nuevos
             servicios_actuales = obtener_servicios_web(session)
             nuevos = servicios_actuales - servicios_vistos
 
             if nuevos:
                 for servicio in nuevos:
                     guardar_servicio(servicio)
-                    enviar_telegram(f"🆕 Nuevo servicio detectado:\n{servicio}")
+                    enviar_telegram(f"🆕 Nuevo servicio:\n{servicio}")
 
                 servicios_vistos.update(nuevos)
-
-            # Resumen diario automático
-            if ahora.hour == RESUMEN_HORA:
-                fecha_hoy = ahora.date()
-                if ultima_fecha_resumen != fecha_hoy:
-                    total = contar_servicios()
-                    enviar_telegram(
-                        f"📈 Resumen diario:\n"
-                        f"Total servicios almacenados: {total}\n"
-                        f"Nuevos hoy: {len(nuevos)}"
-                    )
-                    ultima_fecha_resumen = fecha_hoy
 
         except Exception as e:
             enviar_telegram(f"⚠ Error detectado: {str(e)}")
@@ -185,8 +161,9 @@ def start_monitor():
         time.sleep(CHECK_INTERVAL)
 
 # ==========================================
-# ARRANQUE
+# ARRANQUE AUTOMÁTICO DEL MONITOR
 # ==========================================
 
-if __name__ == "__main__":
-    start_monitor()
+monitor_thread = threading.Thread(target=start_monitor)
+monitor_thread.daemon = True
+monitor_thread.start()
