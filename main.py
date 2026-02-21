@@ -1,122 +1,192 @@
 import os
-import psycopg2
+import time
+import re
 import requests
+import psycopg2
 from bs4 import BeautifulSoup
-from time import sleep
+from flask import Flask
+from datetime import datetime
 
-# -----------------------
-# Configuración de Telegram
-# -----------------------
+# ==========================================
+# CONFIGURACIÓN
+# ==========================================
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-def send_telegram_message(message):
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
-    else:
-        print("[WARN] Telegram no configurado correctamente.")
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-# -----------------------
-# Conexión a la base de datos
-# -----------------------
-DATABASE_URL = os.environ.get("DATABASE_URL")
+CHECK_INTERVAL = 60  # segundos
+RESUMEN_HORA = 20    # 20 = 8PM
+
+# ==========================================
+# FLASK APP (Render necesita puerto abierto)
+# ==========================================
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot HomeServe Profesional Activo ✅"
+
+# ==========================================
+# TELEGRAM
+# ==========================================
+
+def enviar_telegram(mensaje):
+    try:
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            requests.post(url, data={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": mensaje
+            }, timeout=10)
+    except:
+        pass
+
+# ==========================================
+# BASE DE DATOS
+# ==========================================
 
 def get_connection():
-    if not DATABASE_URL:
-        raise Exception("No se ha configurado DATABASE_URL")
     return psycopg2.connect(DATABASE_URL)
 
-def setup_db():
+def crear_tabla_si_no_existe():
     conn = get_connection()
     cur = conn.cursor()
-    # Crear tabla si no existe (ajusta columnas según tu DB)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS servicios (
             id SERIAL PRIMARY KEY,
-            detalle TEXT,
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            data TEXT UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
     cur.close()
     conn.close()
 
-# -----------------------
-# Obtener servicios existentes
-# -----------------------
 def obtener_servicios_existentes():
     conn = get_connection()
     cur = conn.cursor()
-    # Asegúrate de usar la columna correcta
-    cur.execute("SELECT detalle FROM servicios")
-    servicios_vistos = [row[0] for row in cur.fetchall()]
+    cur.execute("SELECT data FROM servicios")
+    filas = cur.fetchall()
     cur.close()
     conn.close()
-    return servicios_vistos
+    return {fila[0] for fila in filas}
 
-# -----------------------
-# Monitor principal
-# -----------------------
+def guardar_servicio(servicio):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO servicios (data) VALUES (%s) ON CONFLICT (data) DO NOTHING",
+            (servicio,)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+def contar_servicios():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM servicios")
+    total = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return total
+
+# ==========================================
+# LOGIN Y SCRAPING
+# ==========================================
+
+def login(session):
+    payload = {
+        "CODIGO": os.environ.get("HOMESERVE_USER"),
+        "PASSW": os.environ.get("HOMESERVE_PASS")
+    }
+    session.post(LOGIN_URL, data=payload, timeout=15)
+
+def es_servicio_valido(texto):
+    # Ajusta esta expresión según el formato real
+    # Detecta códigos tipo: 123456 o HS-123456
+    patron = r"\b\d{5,}\b"
+    return re.search(patron, texto)
+
+def obtener_servicios_web(session):
+    response = session.get(ASIGNACION_URL, timeout=20)
+
+    if "login" in response.url.lower():
+        raise Exception("Sesión expirada")
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    servicios = set()
+
+    for fila in soup.select("tr"):
+        texto = fila.get_text(" ", strip=True)
+
+        if texto and es_servicio_valido(texto):
+            servicios.add(texto)
+
+    return servicios
+
+# ==========================================
+# MONITOR PROFESIONAL
+# ==========================================
+
 def start_monitor():
-    setup_db()
+    crear_tabla_si_no_existe()
+
+    enviar_telegram("🚀 Bot Profesional iniciado correctamente")
+
     servicios_vistos = obtener_servicios_existentes()
-    # Mensaje inicial al arrancar el bot
-    mensaje_inicial = f"Bot arrancado ✅\nServicios existentes en DB: {len(servicios_vistos)}"
-    print(mensaje_inicial)
-    send_telegram_message(mensaje_inicial)
+    enviar_telegram(f"📊 Servicios almacenados en BD: {len(servicios_vistos)}")
+
+    session = requests.Session()
+    login(session)
+
+    ultima_fecha_resumen = None
 
     while True:
         try:
-            # -----------------------
-            # Login y obtención de servicios
-            # -----------------------
-            session = requests.Session()
-            login_url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-            asignacion_url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+            ahora = datetime.now()
 
-            # Ajusta tus credenciales aquí
-            payload = {
-                "CODIGO": os.environ.get("HOMESERVE_USER"),
-                "PASSW": os.environ.get("HOMESERVE_PASS")
-            }
-            session.post(login_url, data=payload)
-
-            response = session.get(asignacion_url)
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            # Ejemplo: extraer servicios
-            servicios_actuales = []
-            for servicio in soup.select(".servicio"):
-                detalle = servicio.get_text(strip=True)
-                servicios_actuales.append(detalle)
-
-            # -----------------------
-            # Comparar con DB
-            # -----------------------
-            nuevos = [s for s in servicios_actuales if s not in servicios_vistos]
+            # Revisar servicios nuevos
+            servicios_actuales = obtener_servicios_web(session)
+            nuevos = servicios_actuales - servicios_vistos
 
             if nuevos:
-                mensaje = f"🔔 Nuevos servicios detectados:\n" + "\n".join(nuevos)
-                send_telegram_message(mensaje)
-                # Guardar nuevos en DB
-                conn = get_connection()
-                cur = conn.cursor()
-                for s in nuevos:
-                    cur.execute("INSERT INTO servicios (detalle) VALUES (%s)", (s,))
-                conn.commit()
-                cur.close()
-                conn.close()
-                servicios_vistos.extend(nuevos)
+                for servicio in nuevos:
+                    guardar_servicio(servicio)
+                    enviar_telegram(f"🆕 Nuevo servicio detectado:\n{servicio}")
+
+                servicios_vistos.update(nuevos)
+
+            # Resumen diario automático
+            if ahora.hour == RESUMEN_HORA:
+                fecha_hoy = ahora.date()
+                if ultima_fecha_resumen != fecha_hoy:
+                    total = contar_servicios()
+                    enviar_telegram(
+                        f"📈 Resumen diario:\n"
+                        f"Total servicios almacenados: {total}\n"
+                        f"Nuevos hoy: {len(nuevos)}"
+                    )
+                    ultima_fecha_resumen = fecha_hoy
 
         except Exception as e:
-            print(f"[ERROR] {e}")
-            send_telegram_message(f"[ERROR] {e}")
+            enviar_telegram(f"⚠ Error detectado: {str(e)}")
+            session = requests.Session()
+            login(session)
 
-        sleep(60)  # Revisa cada 1 minuto
+        time.sleep(CHECK_INTERVAL)
 
-# -----------------------
-# Ejecutar el bot
-# -----------------------
+# ==========================================
+# ARRANQUE
+# ==========================================
+
 if __name__ == "__main__":
     start_monitor()
