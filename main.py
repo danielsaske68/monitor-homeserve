@@ -1,42 +1,37 @@
-import os
-import time
 import threading
+import time
 import logging
 import psycopg2
-import requests
-from flask import Flask
+from flask import Flask, jsonify
 
-# --------------------------
-# CONFIGURACIÓN
-# --------------------------
-DATABASE_URL = os.environ.get("DATABASE_URL")  # tu URL de PostgreSQL
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")  # token bot
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")  # chat_id
-
-CHECK_INTERVAL = 120  # segundos entre chequeos
-
-# --------------------------
-# LOGGING
-# --------------------------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# ---------------------
+# Configuración Logging
+# ---------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --------------------------
-# FLASK
-# --------------------------
+# ---------------------
+# Configuración Flask
+# ---------------------
 app = Flask(__name__)
 
-@app.route("/")
-def index():
-    return "Bot activo ✅"
+# ---------------------
+# Conexión a PostgreSQL
+# ---------------------
+DB_CONFIG = {
+    "host": "dpg-d6cd3hntn9qs73d8g5hg-a",
+    "database": "servicios_db_md79",
+    "user": "servicios_db_md79_user",
+    "password": "8WzYZdOPdI4XdTclppihkPjgHtLbtzb4",
+    "port": 5432
+}
 
-# --------------------------
-# FUNCIONES DE DB
-# --------------------------
 def get_db_connection():
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
+    return psycopg2.connect(**DB_CONFIG)
 
+# ---------------------
+# Crear tabla si no existe
+# ---------------------
 def setup_db():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -54,62 +49,55 @@ def setup_db():
     conn.close()
     logger.info("Tabla servicios_vistos lista ✅")
 
+# ---------------------
+# Función para insertar servicio
+# ---------------------
 def servicio_nuevo(servicio_id, nombre, estado):
-    conn = get_db_connection()
-    cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO servicios_vistos (servicio_id, nombre, estado) VALUES (%s, %s, %s)", 
-                    (servicio_id, nombre, estado))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO servicios_vistos (servicio_id, nombre, estado) VALUES (%s, %s, %s) ON CONFLICT (servicio_id) DO NOTHING",
+            (servicio_id, nombre, estado)
+        )
         conn.commit()
-        return True
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        return False
-    finally:
         cur.close()
         conn.close()
-
-# --------------------------
-# TELEGRAM
-# --------------------------
-def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}
-    try:
-        r = requests.post(url, data=data)
-        if r.status_code == 200:
-            logger.info(f"Alerta enviada a Telegram ✅: {mensaje}")
-        else:
-            logger.error(f"Error Telegram: {r.text}")
+        return True
     except Exception as e:
-        logger.error(f"Error enviando Telegram: {e}")
+        logger.error(f"Error al insertar servicio: {e}")
+        return False
 
-# --------------------------
-# MONITOR PRINCIPAL
-# --------------------------
+# ---------------------
+# Monitor de servicios (simulado)
+# ---------------------
 def monitor_loop():
+    while True:
+        # Aquí iría tu lógica de scraping o monitor real
+        servicios = [
+            ("TEST123", "Prueba", "Pendiente"),
+        ]
+        for servicio_id, nombre, estado in servicios:
+            if servicio_nuevo(servicio_id, nombre, estado):
+                logger.info(f"Servicio insertado: {servicio_id} | {nombre} | {estado}")
+        time.sleep(10)  # espera 10 segundos antes de la siguiente iteración
+
+# ---------------------
+# Rutas Flask
+# ---------------------
+@app.route("/")
+def home():
+    return jsonify({"status": "Monitor activo ⚡"})
+
+# ---------------------
+# Función principal
+# ---------------------
+if __name__ == "__main__":
     logger.info("Monitor iniciado ⚡")
     setup_db()
-    while True:
-        # Aquí tu lógica para revisar servicios
-        # EJEMPLO DE PRUEBA
-        servicio_id = "TEST123"
-        nombre = "Prueba"
-        estado = "Pendiente"
-
-        if servicio_nuevo(servicio_id, nombre, estado):
-            enviar_telegram(f"{servicio_id} | {nombre} | {estado}")
-
-        time.sleep(CHECK_INTERVAL)
-
-# --------------------------
-# EJECUTAR HILO
-# --------------------------
-threading.Thread(target=monitor_loop, daemon=True).start()
-
-# --------------------------
-# INICIAR FLASK
-# --------------------------
-if __name__ == "__main__":
+    thread = threading.Thread(target=monitor_loop, daemon=True)
+    thread.start()
+    # Corre Flask en el puerto que Render asigna con la variable $PORT
+    import os
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
