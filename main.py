@@ -74,8 +74,8 @@ def enviar_telegram(mensaje):
 # -------------------
 def login(session):
     payload = {
-        "usuario": os.environ.get("HOMESERVE_USER"),
-        "clave": os.environ.get("HOMESERVE_PASS")
+        "CODIGO": os.environ.get("HOMESERVE_USER"),
+        "PASSW": os.environ.get("HOMESERVE_PASS")
     }
     session.post(LOGIN_URL, data=payload)
 
