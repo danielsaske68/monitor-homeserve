@@ -1,93 +1,149 @@
-import os
-import threading
-import time
 import requests
 import psycopg2
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify
+import time
+import os
 
 # -------------------------
-# Configuración
+# Configuración de Telegram
 # -------------------------
-DATABASE_URL = os.environ.get("DATABASE_URL")  # tu URL de Render PostgreSQL
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-MONITOR_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+        if resp.status_code != 200:
+            print("Error enviando Telegram:", resp.text)
+    except Exception as e:
+        print("Excepción enviando Telegram:", e)
 
 # -------------------------
-# Flask App
+# Configuración de Postgres
 # -------------------------
-app = Flask(__name__)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({"status": "alive"}), 200
-
-# -------------------------
-# Base de datos
-# -------------------------
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
 def setup_db():
     conn = get_connection()
     cur = conn.cursor()
-    # Ejemplo: crear tabla si no existe
     cur.execute("""
         CREATE TABLE IF NOT EXISTS servicios (
             id SERIAL PRIMARY KEY,
-            data TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
+            codigo TEXT,
+            descripcion TEXT,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
     cur.close()
     conn.close()
 
 # -------------------------
-# Telegram
+# Login y sesión
 # -------------------------
-def send_telegram(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram no configurado")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        requests.post(url, data=payload)
-    except Exception as e:
-        print("Error enviando Telegram:", e)
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+
+USERNAME = os.getenv("HOMESERVE_USER")
+PASSWORD = os.getenv("HOMESERVE_PASS")
+
+def get_session():
+    session = requests.Session()
+    # Ajusta los nombres de los campos según el formulario real
+    payload = {
+        "username": USERNAME,
+        "password": PASSWORD
+    }
+    resp = session.post(LOGIN_URL, data=payload)
+    if resp.status_code != 200 or "error" in resp.text.lower():
+        send_telegram("⚠️ Error logueando en HomeServe.")
+        raise Exception("Login failed")
+    return session
 
 # -------------------------
-# Monitor
+# Función de monitor
 # -------------------------
-def check_website():
+def check_website(session):
     try:
-        r = requests.get(MONITOR_URL)
-        soup = BeautifulSoup(r.text, "html.parser")
-        # Aquí deberías parsear tu contenido y decidir si hay algo nuevo
-        servicios = soup.find_all("tr")  # ejemplo simple
-        return len(servicios) > 0
+        resp = session.get(SERVICIOS_URL)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        rows = soup.find_all("tr")[1:]  # saltando cabecera
+
+        if not rows:
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        nuevos = 0
+        for row in rows:
+            cols = row.find_all("td")
+            if len(cols) < 2:
+                continue
+            codigo = cols[0].text.strip()
+            descripcion = cols[1].text.strip()
+
+            # Evitar duplicados
+            cur.execute("SELECT 1 FROM servicios WHERE codigo=%s", (codigo,))
+            if cur.fetchone():
+                continue
+
+            cur.execute(
+                "INSERT INTO servicios (codigo, descripcion) VALUES (%s, %s)",
+                (codigo, descripcion)
+            )
+            conn.commit()
+
+            # Enviar cada registro nuevo a Telegram
+            send_telegram(f"📌 Nuevo servicio:\nCódigo: {codigo}\nDescripción: {descripcion}")
+            nuevos += 1
+
+        cur.close()
+        conn.close()
+        return nuevos > 0
+
     except Exception as e:
-        print("Error al revisar sitio:", e)
+        print("Error revisando la web:", e)
         return False
 
-def monitor_loop():
+# -------------------------
+# Loop principal
+# -------------------------
+def start_monitor():
     setup_db()
-    send_telegram("✅ Bot HomeServe iniciado correctamente")
+
+    # Enviar mensaje inicial con conteo de servicios
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM servicios")
+        count = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        send_telegram(f"✅ Bot HomeServe iniciado correctamente. Actualmente hay {count} servicios en la base de datos.")
+    except Exception as e:
+        print("Error leyendo la DB al iniciar:", e)
+        send_telegram("⚠️ Bot arrancó, pero no se pudo leer la DB.")
+
     print("🚀 Monitor iniciado")
 
+    # Iniciar sesión
+    session = get_session()
+
+    # Loop de monitor
     while True:
-        has_data = check_website()
+        has_data = check_website(session)
         if has_data:
-            send_telegram("📢 Hay datos en la tabla!")
-        time.sleep(60)  # espera 1 minuto entre checks
+            print("📢 Se detectaron nuevos servicios y fueron enviados a Telegram.")
+        time.sleep(60)  # cada 60 segundos
 
 # -------------------------
-# Iniciar monitor (Gunicorn compatible)
+# Arranque del bot
 # -------------------------
-def start_background_monitor():
-    t = threading.Thread(target=monitor_loop, daemon=True)
-    t.start()
-
-start_background_monitor()
+if __name__ == "__main__":
+    start_monitor()
