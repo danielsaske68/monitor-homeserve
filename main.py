@@ -19,10 +19,10 @@ app = Flask(__name__)
 # Conexión a PostgreSQL
 # ---------------------
 DB_CONFIG = {
-    "host": "dpg-d6cd3hntn9qs73d8g5hg-a",
-    "database": "servicios_db_md79",
-    "user": "servicios_db_md79_user",
-    "password": "8WzYZdOPdI4XdTclppihkPjgHtLbtzb4",
+    "host": "dpg-d6cglop5pdvs73d4mm1g-a",
+    "database": "servicios_db_6q8c",
+    "user": "servicios_db_6q8c_user",
+    "password": "Gz4r2HbAI40vuLxvCCOpZn5XCXElAPHA",
     "port": 5432
 }
 
