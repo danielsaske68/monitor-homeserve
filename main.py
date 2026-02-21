@@ -5,8 +5,8 @@ import threading
 import requests
 import psycopg2
 from bs4 import BeautifulSoup
-from flask import Flask
-from datetime import datetime
+from flask import Flask, request
+from datetime import datetime, date
 
 # ==========================================
 # CONFIGURACIÓN
@@ -19,13 +19,13 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 HOMESERVE_USER = os.environ.get("HOMESERVE_USER")
 HOMESERVE_PASS = os.environ.get("HOMESERVE_PASS")
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=login"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-CHECK_INTERVAL = 60  # segundos
+CHECK_INTERVAL = 60
 
 # ==========================================
-# FLASK APP (Gunicorn lo usa)
+# FLASK APP
 # ==========================================
 
 app = Flask(__name__)
@@ -40,18 +40,50 @@ def home():
 
 def enviar_telegram(mensaje):
     try:
-        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            requests.post(
-                url,
-                data={
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "text": mensaje
-                },
-                timeout=10
-            )
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": mensaje
+        }, timeout=10)
     except Exception as e:
-        print("Error enviando a Telegram:", e)
+        print("Error Telegram:", e)
+
+# Webhook para recibir mensajes
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def recibir_comando():
+    data = request.get_json()
+
+    if "message" in data:
+        texto = data["message"].get("text", "")
+        chat_id = data["message"]["chat"]["id"]
+
+        if texto == "/start":
+            responder(chat_id, "🤖 Bot activo y funcionando correctamente.")
+
+        elif texto == "/total":
+            total = contar_servicios()
+            responder(chat_id, f"📊 Total servicios almacenados: {total}")
+
+        elif texto == "/hoy":
+            hoy = contar_servicios_hoy()
+            responder(chat_id, f"📅 Servicios guardados hoy: {hoy}")
+
+        elif texto == "/ultimos":
+            ultimos = obtener_ultimos_servicios()
+            if ultimos:
+                mensaje = "🆕 Últimos servicios:\n\n" + "\n\n".join(ultimos)
+            else:
+                mensaje = "No hay servicios aún."
+            responder(chat_id, mensaje)
+
+    return "ok"
+
+def responder(chat_id, mensaje):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, data={
+        "chat_id": chat_id,
+        "text": mensaje
+    })
 
 # ==========================================
 # BASE DE DATOS
@@ -74,15 +106,6 @@ def crear_tabla_si_no_existe():
     cur.close()
     conn.close()
 
-def obtener_servicios_existentes():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT data FROM servicios")
-    filas = cur.fetchall()
-    cur.close()
-    conn.close()
-    return {fila[0] for fila in filas}
-
 def guardar_servicio(servicio):
     conn = get_connection()
     cur = conn.cursor()
@@ -94,8 +117,51 @@ def guardar_servicio(servicio):
     cur.close()
     conn.close()
 
+def contar_servicios():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM servicios")
+    total = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return total
+
+def contar_servicios_hoy():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM servicios
+        WHERE DATE(created_at) = CURRENT_DATE
+    """)
+    total = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return total
+
+def obtener_ultimos_servicios():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT data FROM servicios
+        ORDER BY created_at DESC
+        LIMIT 5
+    """)
+    filas = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [fila[0] for fila in filas]
+
+def obtener_servicios_existentes():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT data FROM servicios")
+    filas = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {fila[0] for fila in filas}
+
 # ==========================================
-# LOGIN Y SCRAPING
+# SCRAPING
 # ==========================================
 
 def login(session):
@@ -106,7 +172,7 @@ def login(session):
     session.post(LOGIN_URL, data=payload, timeout=15)
 
 def es_servicio_valido(texto):
-    patron = r"\b\d{6,}\b"  # detecta códigos numéricos largos
+    patron = r"\b\d{6,}\b"
     return re.search(patron, texto)
 
 def obtener_servicios_web(session):
@@ -132,11 +198,9 @@ def obtener_servicios_web(session):
 
 def start_monitor():
     crear_tabla_si_no_existe()
-
     enviar_telegram("🚀 Bot iniciado correctamente")
 
     servicios_vistos = obtener_servicios_existentes()
-    enviar_telegram(f"📊 Servicios almacenados en BD: {len(servicios_vistos)}")
 
     session = requests.Session()
     login(session)
@@ -161,7 +225,7 @@ def start_monitor():
         time.sleep(CHECK_INTERVAL)
 
 # ==========================================
-# ARRANQUE AUTOMÁTICO DEL MONITOR
+# ARRANQUE
 # ==========================================
 
 monitor_thread = threading.Thread(target=start_monitor)
