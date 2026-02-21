@@ -104,8 +104,8 @@ def contar_servicios():
 
 def login(session):
     payload = {
-        "CODIGO": os.environ.get("HOMESERVE_USER"),
-        "PASSW": os.environ.get("HOMESERVE_PASS")
+        "usuario": os.environ.get("HOMESERVE_USER"),
+        "password": os.environ.get("HOMESERVE_PASS")
     }
     session.post(LOGIN_URL, data=payload, timeout=15)
 
