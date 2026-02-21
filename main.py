@@ -77,8 +77,8 @@ def start_monitor():
 
             # Ajusta tus credenciales aquí
             payload = {
-                "usuario": os.environ.get("HOMESERVE_USER"),
-                "password": os.environ.get("HOMESERVE_PASS")
+                "CODIGO": os.environ.get("HOMESERVE_USER"),
+                "PASSW": os.environ.get("HOMESERVE_PASS")
             }
             session.post(login_url, data=payload)
 
