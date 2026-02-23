@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
+# ================= CONFIG =================
 USERNAME = os.getenv("USERNAME")
 PASSWORD = os.getenv("PASSWORD")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -17,12 +18,17 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-def get_db():
-    return psycopg2.connect(DATABASE_URL)
-
+# ================= TELEGRAM =================
 def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": mensaje})
+    try:
+        requests.post(url, data={"chat_id": CHAT_ID, "text": mensaje})
+    except Exception as e:
+        print("Error enviando Telegram:", e)
+
+# ================= BASE DE DATOS =================
+def get_db():
+    return psycopg2.connect(DATABASE_URL)
 
 def servicio_existe(descripcion):
     conn = get_db()
@@ -41,6 +47,7 @@ def guardar_servicio(descripcion):
     cur.close()
     conn.close()
 
+# ================= LOGIC DE HOMESERVE =================
 def login(session):
     payload = {
         "usuario": USERNAME,
@@ -51,9 +58,10 @@ def login(session):
 def obtener_servicios(session):
     response = session.get(SERVICIOS_URL)
     soup = BeautifulSoup(response.text, "html.parser")
-    filas = soup.find_all("tr")
+    filas = soup.find_all("tr")  # Ajusta según estructura real
     return [fila.text.strip() for fila in filas if fila.text.strip()]
 
+# ================= WORKER BACKGROUND =================
 def worker():
     while True:
         try:
@@ -70,14 +78,28 @@ def worker():
             print("Revisión completada")
 
         except Exception as e:
-            print("Error:", e)
+            print("Error en worker:", e)
 
-        time.sleep(300)
+        time.sleep(300)  # cada 5 minutos
 
+# ================= FLASK ENDPOINTS =================
 @app.route("/")
 def home():
-    return "Bot funcionando"
+    return "Bot funcionando correctamente 🚀"
 
+@app.route("/ver-servicios")
+def ver_servicios():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM servicios ORDER BY fecha DESC LIMIT 50")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return str(rows)
+
+# ================= MAIN =================
 if __name__ == "__main__":
-    threading.Thread(target=worker).start()
+    # Inicia worker en segundo plano
+    threading.Thread(target=worker, daemon=True).start()
+    # Flask listo para Gunicorn
     app.run(host="0.0.0.0", port=10000)
