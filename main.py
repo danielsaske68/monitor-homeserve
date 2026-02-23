@@ -1,87 +1,109 @@
 import requests
 from bs4 import BeautifulSoup
-import re
+from flask import Flask, request
 import logging
-from flask import Flask, request, jsonify
 
 # Configuración básica
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# URL y credenciales HomeServe
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-USUARIO = "16205"
-PASSW = "Aventura60,"
+# Datos de HomeServe
+HOMESERVE_LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+HOMESERVE_ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+CODIGO = "16205"   # reemplaza con tu usuario
+PASSW = "Aventura60,"     # reemplaza con tu contraseña
 
-# Token del bot
-TELEGRAM_BOT_TOKEN = "7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU"
+# Datos de Telegram
+BOT_TOKEN = "7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU"  # reemplaza con tu token
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
+# Función para login y mantener sesión
 def login_homeserve():
-    session = requests.Session()
     logging.info("Intentando loguearse en HomeServe...")
-
-    # HomeServe necesita POST con campos exactos
+    session = requests.Session()
     payload = {
-        'usuario': USUARIO,
-        'passw': PASSW
+        "usuario": CODIGO,
+        "clave": PASSW
     }
-
-    resp = session.post(LOGIN_URL, data=payload)
-    if "Logout" in resp.text or resp.status_code == 200:
+    response = session.post(HOMESERVE_LOGIN_URL, data=payload)
+    if "Perfil" in response.text or response.status_code == 200:
         logging.info("Login exitoso ✅")
         return session
-    logging.error("Error de login ❌")
-    return None
+    else:
+        logging.error("Error de login ❌")
+        return None
 
+# Función para obtener servicios
 def obtener_servicios(session):
-    resp = session.get(ASIGNACION_URL)
-    html = resp.text
+    response = session.get(HOMESERVE_ASIGNACION_URL)
+    soup = BeautifulSoup(response.text, "html.parser")
+    servicios = []
 
-    # Buscar todos los números de 8 dígitos
-    servicios = re.findall(r'\b\d{8}\b', html)
+    for a in soup.find_all("a", href=True):
+        if "prof_asignacion&servicio=" in a['href']:
+            servicio_id = a.text.strip()
+            servicios.append(servicio_id)
+
     logging.info(f"Servicios encontrados: {len(servicios)}")
     return servicios
 
-@app.route("/test_servicios")
-def test_servicios():
-    session = login_homeserve()
-    if not session:
-        return jsonify({"error": "No se pudo loguear"}), 500
+# Función para enviar mensajes a Telegram
+def enviar_telegram(chat_id, texto):
+    requests.post(TELEGRAM_API, json={
+        "chat_id": chat_id,
+        "text": texto
+    })
 
-    servicios = obtener_servicios(session)
-    return jsonify({"servicios": servicios, "cantidad": len(servicios)})
-
+# Endpoint webhook de Telegram
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     update = request.get_json()
     logging.info(f"Llegó actualización de Telegram: {update}")
 
-    # Ejemplo simple: responder /servicios
-    try:
+    chat_id = None
+    comando = None
+
+    # Manejar callback_query o mensaje normal
+    if "callback_query" in update:
+        comando = update['callback_query']['data']
+        chat_id = update['callback_query']['message']['chat']['id']
+    elif "message" in update:
+        comando = update['message'].get('text')
         chat_id = update['message']['chat']['id']
-        text = update['message']['text']
+    else:
+        logging.error("Webhook recibido sin 'message' ni 'callback_query'")
+        return "OK", 200
 
-        if text == "/servicios":
-            session = login_homeserve()
-            if not session:
-                mensaje = "No se pudo loguear en HomeServe ❌"
-            else:
-                servicios = obtener_servicios(session)
-                if servicios:
-                    mensaje = "Servicios activos:\n" + "\n".join(servicios)
-                else:
-                    mensaje = "No se encontraron servicios activos."
-            
-            requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                data={"chat_id": chat_id, "text": mensaje}
-            )
+    session = login_homeserve()
+    if not session:
+        enviar_telegram(chat_id, "❌ Error al loguearse en HomeServe")
+        return "OK", 200
 
-    except Exception as e:
-        logging.error(f"Error en webhook: {e}")
+    servicios = obtener_servicios(session)
 
-    return jsonify({"ok": True})
+    # Comandos del bot
+    if comando == "ultimo":
+        if servicios:
+            enviar_telegram(chat_id, f"📌 Último servicio: {servicios[0]}")
+        else:
+            enviar_telegram(chat_id, "No se encontraron servicios.")
+    elif comando == "total":
+        enviar_telegram(chat_id, f"📊 Número de servicios: {len(servicios)}")
+    else:
+        enviar_telegram(chat_id, "Comando no reconocido.")
 
+    return "OK", 200
+
+# Endpoint de prueba
+@app.route("/test_servicios", methods=["GET"])
+def test_servicios():
+    session = login_homeserve()
+    if not session:
+        return "Error al loguearse en HomeServe ❌", 500
+
+    servicios = obtener_servicios(session)
+    return {"servicios": servicios}, 200
+
+# Inicio de la app
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
