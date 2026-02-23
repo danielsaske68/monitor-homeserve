@@ -1,114 +1,152 @@
 import os
-import time
-import threading
 import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
+import json
+import logging
+from flask import Flask, jsonify
 import psycopg2
-from flask import Flask
-import re
 
+# ---------------- VARIABLES ----------------
+USUARIO = os.getenv('USUARIO')
+CONTRASEÑA = os.getenv('CONTRASEÑA')
+TOKEN_TELEGRAM = os.getenv('TOKEN_TELEGRAM')
+CHAT_ID = os.getenv('CHAT_ID')
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+URL_LOGIN = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS"
+URL_SERVICIOS = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+
+ARCHIVO_SERVICIOS = "servicios_alertados.json"
+
+# ---------------- LOGGING ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("monitor_homeserve.log", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ---------------- FLASK ----------------
 app = Flask(__name__)
 
-# ================= CONFIG =================
-USERNAME = os.getenv("USERNAME")
-PASSWORD = os.getenv("PASSWORD")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-DATABASE_URL = os.getenv("DATABASE_URL")
+# ---------------- FUNCIONES ----------------
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
 
-# ================= TELEGRAM =================
-def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": mensaje})
-    except Exception as e:
-        print("Error enviando Telegram:", e)
-
-# ================= BASE DE DATOS =================
-def get_db():
-    return psycopg2.connect(DATABASE_URL)
-
-def servicio_existe(descripcion):
-    conn = get_db()
+def init_db():
+    """Crea tabla si no existe"""
+    conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT 1 FROM servicios WHERE descripcion=%s", (descripcion,))
-    existe = cur.fetchone()
-    cur.close()
-    conn.close()
-    return existe is not None
-
-def guardar_servicio(descripcion):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO servicios (descripcion) VALUES (%s) ON CONFLICT DO NOTHING",
-        (descripcion,)
-    )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS servicios (
+            numero VARCHAR PRIMARY KEY,
+            tipo VARCHAR,
+            estado VARCHAR,
+            fecha_detectado TIMESTAMP
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
 
-# ================= LOGIC DE HOMESERVE =================
+def enviar_alerta_telegram(numero, tipo, estado):
+    """Envía alerta por Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
+        mensaje = f"""NUEVO SERVICIO DISPONIBLE
+
+Numero: {numero}
+Tipo: {tipo}
+Estado: {estado}
+Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"""
+        payload = {'chat_id': CHAT_ID, 'text': mensaje}
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            logger.info(f"[TELEGRAM] Alerta enviada para {numero}")
+        else:
+            logger.error(f"[TELEGRAM] Error HTTP {response.status_code}: {response.text}")
+    except Exception as e:
+        logger.error(f"[TELEGRAM] Excepcion: {e}")
+
 def login(session):
-    payload = {
-        "usuario": USERNAME,
-        "password": PASSWORD
-    }
-    session.post(LOGIN_URL, data=payload)
+    """Login HomeServe"""
+    try:
+        response = session.get(URL_LOGIN, timeout=10)
+        payload = {'CODIGO': USUARIO, 'PASSW': CONTRASEÑA, 'ACEPT': 'Aceptar'}
+        response = session.post(URL_LOGIN, data=payload, timeout=10)
+        return 'prof_asignacion' in response.text.lower()
+    except Exception as e:
+        logger.error(f"[LOGIN] Error: {e}")
+        return False
 
 def obtener_servicios(session):
-    """
-    Extrae servicios con regex: Reparación: <num>, Profesión: <texto>
-    """
-    response = session.get(SERVICIOS_URL)
-    html = response.text
-
-    pattern = r"reparacion:\s*(\d+).*?profesion:\s*([\w\s]+)"
-    matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
-
-    servicios = []
-    for numero, profesion in matches:
-        servicios.append(f"🚨 Reparación: {numero} | Profesión: {profesion}")
-
+    """Obtiene servicios desde la web"""
+    servicios = {}
+    try:
+        response = session.get(URL_SERVICIOS, timeout=10)
+        if response.status_code != 200:
+            return servicios
+        soup = BeautifulSoup(response.text, 'html.parser')
+        filas = soup.find_all('tr')
+        for fila in filas:
+            celdas = fila.find_all('td')
+            if len(celdas) >= 3:
+                numero = celdas[0].get_text(strip=True)
+                tipo = celdas[1].get_text(strip=True)
+                estado = celdas[2].get_text(strip=True)
+                if numero.replace('.', '').replace(',', '').isdigit() and len(numero) >= 6:
+                    servicios[numero] = {'tipo': tipo, 'estado': estado}
+    except Exception as e:
+        logger.error(f"[SERVICIOS] Error: {e}")
     return servicios
 
-# ================= WORKER =================
-def worker():
-    while True:
-        try:
-            session = requests.Session()
-            login(session)
-
-            servicios = obtener_servicios(session)
-            for servicio in servicios:
-                if not servicio_existe(servicio):
-                    guardar_servicio(servicio)
-                    enviar_telegram(servicio)
-
-            print("Revisión completada")
-        except Exception as e:
-            print("Error en worker:", e)
-
-        time.sleep(300)  # revisar cada 5 minutos
-
-# ================= FLASK ENDPOINTS =================
-@app.route("/")
-def home():
-    return "Bot funcionando correctamente 🚀"
-
-@app.route("/ver-servicios")
-def ver_servicios():
-    conn = get_db()
+def guardar_servicio_db(numero, tipo, estado):
+    conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM servicios ORDER BY fecha DESC LIMIT 50")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return str(rows)
+    try:
+        cur.execute("""
+            INSERT INTO servicios (numero, tipo, estado, fecha_detectado)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (numero) DO NOTHING
+        """, (numero, tipo, estado, datetime.now()))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"[DB] Error insertando {numero}: {e}")
+    finally:
+        cur.close()
+        conn.close()
 
-# ================= MAIN =================
-if __name__ == "__main__":
-    threading.Thread(target=worker, daemon=True).start()
-    app.run(host="0.0.0.0", port=10000)
+@app.route('/check', methods=['GET'])
+def check_servicios():
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': '*/*',
+    })
+    if not login(session):
+        return jsonify({"error": "Login fallido"}), 500
+
+    servicios = obtener_servicios(session)
+    nuevos = 0
+    for numero, datos in servicios.items():
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM servicios WHERE numero=%s", (numero,))
+        if cur.fetchone() is None:
+            enviar_alerta_telegram(numero, datos['tipo'], datos['estado'])
+            guardar_servicio_db(numero, datos['tipo'], datos['estado'])
+            nuevos += 1
+        cur.close()
+        conn.close()
+    return jsonify({"nuevos_servicios": nuevos})
+
+# ---------------- MAIN ----------------
+if __name__ == '__main__':
+    init_db()
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
