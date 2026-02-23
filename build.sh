@@ -1,10 +1,9 @@
 #!/bin/bash
-
-# Activar el entorno virtual
+# Activar virtualenv de Railway
 source /app/.venv/bin/activate
 
 # Instalar navegadores de Playwright
 python -m playwright install
 
-# Ejecutar Gunicorn para iniciar la app
-gunicorn main:app --bind 0.0.0.0:$PORT
+# Arrancar servidor
+exec gunicorn main:app --bind 0.0.0.0:$PORT
