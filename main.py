@@ -1,89 +1,51 @@
-# main.py
 import os
-import requests
-from flask import Flask, request, jsonify
+import asyncio
+from flask import Flask, jsonify
+from playwright.async_api import async_playwright
 
 app = Flask(__name__)
 
-# =========================
-# CONFIGURACIÓN DEL BOT
-# =========================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-# =========================
-# MOCK DE SERVICIOS
-# =========================
-def obtener_servicios_mock():
-    """Devuelve los servicios actuales sin login (solo prueba)."""
-    return [
-        {"id": "15313040", "url": "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion&servicio=15313040"},
-        {"id": "15425931", "url": "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion&servicio=15425931"}
-    ]
+USERNAME = os.getenv("USERNAME")
+PASSWORD = os.getenv("PASSWORD")
 
-# =========================
-# FUNCIONES DE TELEGRAM
-# =========================
-def send_message(chat_id, text):
-    """Envía mensaje a Telegram."""
-    url = f"{TELEGRAM_API_URL}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print("Error enviando mensaje:", e)
+async def run_bot():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox"]
+        )
+        page = await browser.new_page()
 
-# =========================
-# WEBHOOK DE TELEGRAM
-# =========================
-@app.route("/telegram_webhook", methods=["POST"])
-def telegram_webhook():
-    data = request.json
-    if not data:
-        return jsonify({"ok": False, "error": "No JSON"}), 400
+        # Ir a login
+        await page.goto(LOGIN_URL)
 
-    chat_id = None
-    text_to_send = ""
+        # ⚠️ CAMBIAR SELECTORES SEGÚN HTML REAL
+        await page.fill('#usuario', USERNAME)
+        await page.fill('#password', PASSWORD)
 
-    # Manejar callback_query
-    if "callback_query" in data:
-        query = data["callback_query"]
-        chat_id = query["from"]["id"]
-        data_callback = query["data"]
-        if data_callback == "ultimo":
-            servicios = obtener_servicios_mock()
-            if servicios:
-                ultimo = servicios[-1]
-                text_to_send = f"Último servicio:\n{ultimo['id']}: {ultimo['url']}"
-            else:
-                text_to_send = "No hay servicios disponibles."
-        elif data_callback == "total":
-            servicios = obtener_servicios_mock()
-            text_to_send = f"Número de servicios actuales: {len(servicios)}"
-    # Manejar mensajes normales
-    elif "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text_to_send = "Hola 👷‍♂️\nSelecciona una opción en el menú."
+        await page.click('button[type="submit"]')
+        await page.wait_for_load_state("networkidle")
 
-    if chat_id and text_to_send:
-        send_message(chat_id, text_to_send)
+        # Ir a servicios
+        await page.goto(SERVICIOS_URL)
+        await page.wait_for_load_state("networkidle")
 
-    return jsonify({"ok": True})
+        content = await page.content()
 
-# =========================
-# RUTA PRINCIPAL (solo prueba)
-# =========================
-@app.route("/", methods=["GET"])
-def index():
-    return "Monitor HomeServe Bot activo ✅", 200
+        await browser.close()
+        return "Login y acceso correcto"
 
-# =========================
-# INICIO DE LA APP
-# =========================
+@app.route("/")
+def home():
+    return "Bot activo"
+
+@app.route("/run")
+def run():
+    result = asyncio.run(run_bot())
+    return jsonify({"status": result})
+
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
