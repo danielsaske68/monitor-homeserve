@@ -34,33 +34,43 @@ async def run_bot():
             headless=True,
             args=["--no-sandbox"]
         )
-
         page = await browser.new_page()
 
-        # Login
+        # --- Login ---
         await page.goto(LOGIN_URL)
         await page.fill('input[name="CODIGO"]', USERNAME)
         await page.fill('input[name="PASSW"]', PASSWORD)
         await page.click('input[type="submit"], button[type="submit"]')
         await page.wait_for_load_state("networkidle")
 
-        # Ir a servicios
+        # --- Ir a servicios ---
         await page.goto(SERVICIOS_URL)
         await page.wait_for_load_state("networkidle")
 
-        content = await page.content()
+        # --- Extraer servicios desde <td> ---
+        tds = await page.query_selector_all("td")
+        services_found = []
 
-        await browser.close()
+        for td in tds:
+            text = (await td.inner_text()).strip()
+            # Solo números de 7 a 9 dígitos
+            if re.match(r"^\d{7,9}$", text):
+                services_found.append(text)
 
-        # Buscar números de 7-9 dígitos (IDs de servicio)
-        services_found = list(set(re.findall(r"\b\d{7,9}\b", content)))
+        services_found = list(set(services_found))  # eliminar duplicados
 
+        # --- Detectar nuevos servicios ---
         old_services = load_old_services()
-
         new_services = [s for s in services_found if s not in old_services]
 
-        # Guardar lista actual
+        # --- Guardar lista actual ---
         save_services(services_found)
+
+        # Debug en consola
+        print("Servicios detectados:", services_found)
+        print("Nuevos servicios:", new_services)
+
+        await browser.close()
 
         return {
             "total_detectados": len(services_found),
@@ -73,10 +83,15 @@ async def run_bot():
 def home():
     return "Bot activo"
 
+
 @app.route("/run")
 def run():
-    result = asyncio.run(run_bot())
-    return jsonify(result)
+    try:
+        result = asyncio.run(run_bot())
+        return jsonify(result)
+    except Exception as e:
+        print("Error:", e)
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
