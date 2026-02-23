@@ -1,4 +1,6 @@
 import os
+import json
+import re
 import asyncio
 from flask import Flask, jsonify
 from playwright.async_api import async_playwright
@@ -11,6 +13,21 @@ SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof
 USERNAME = os.getenv("USERNAME")
 PASSWORD = os.getenv("PASSWORD")
 
+DATA_FILE = "services.json"
+
+
+def load_old_services():
+    if not os.path.exists(DATA_FILE):
+        return []
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+
+def save_services(services):
+    with open(DATA_FILE, "w") as f:
+        json.dump(services, f)
+
+
 async def run_bot():
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -20,28 +37,37 @@ async def run_bot():
 
         page = await browser.new_page()
 
-        # Ir al login
+        # Login
         await page.goto(LOGIN_URL)
-        await page.wait_for_load_state("networkidle")
-
-        # Rellenar formulario usando NAME
         await page.fill('input[name="CODIGO"]', USERNAME)
         await page.fill('input[name="PASSW"]', PASSWORD)
-
-        # Enviar formulario
         await page.click('input[type="submit"], button[type="submit"]')
         await page.wait_for_load_state("networkidle")
 
-        # Ir a pestaña servicios
+        # Ir a servicios
         await page.goto(SERVICIOS_URL)
         await page.wait_for_load_state("networkidle")
 
-        # Verificar que cargó algo
-        title = await page.title()
+        content = await page.content()
 
         await browser.close()
 
-        return f"Login correcto. Página cargada: {title}"
+        # Buscar números de 7-9 dígitos (IDs de servicio)
+        services_found = list(set(re.findall(r"\b\d{7,9}\b", content)))
+
+        old_services = load_old_services()
+
+        new_services = [s for s in services_found if s not in old_services]
+
+        # Guardar lista actual
+        save_services(services_found)
+
+        return {
+            "total_detectados": len(services_found),
+            "servicios_actuales": services_found,
+            "nuevos_servicios": new_services
+        }
+
 
 @app.route("/")
 def home():
@@ -50,7 +76,8 @@ def home():
 @app.route("/run")
 def run():
     result = asyncio.run(run_bot())
-    return jsonify({"status": result})
+    return jsonify(result)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
