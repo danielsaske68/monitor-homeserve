@@ -27,7 +27,7 @@ async def obtener_servicios():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
-        await page.goto("https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS")
+        await page.goto("https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales")
         
         await page.fill('input[name="CODIGO"]', USERNAME)
         await page.fill('input[name="PASSW"]', PASSWORD)
