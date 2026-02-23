@@ -3,6 +3,12 @@ from bs4 import BeautifulSoup
 import re
 import logging
 
+# -----------------------------
+# Tus credenciales (asegúrate de definirlas en variables de entorno)
+# -----------------------------
+HS_USER = "TU_CODIGO"     
+HS_PASS = "TU_PASSW"    
+
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
@@ -16,12 +22,12 @@ def obtener_servicios():
             "Referer": LOGIN_URL,
         }
 
-        # =========================
+        # -----------------------------
         # 1️⃣ LOGIN
-        # =========================
+        # -----------------------------
         login_payload = {
             "usuario": HS_USER,
-            "password": HS_PASS
+            "contraseña": HS_PASS
         }
 
         login_response = session.post(LOGIN_URL, data=login_payload, headers=headers)
@@ -30,9 +36,9 @@ def obtener_servicios():
             logging.error("Error en login HomeServe")
             return []
 
-        # =========================
+        # -----------------------------
         # 2️⃣ IR A ASIGNACIÓN
-        # =========================
+        # -----------------------------
         response = session.get(ASIGNACION_URL, headers=headers)
 
         if response.status_code != 200:
@@ -40,21 +46,17 @@ def obtener_servicios():
             return []
 
         html = response.text
+        logging.info("Página de asignación cargada correctamente")
 
-        # DEBUG (puedes mirar logs si algo falla)
-        logging.info("Página asignación cargada correctamente")
-
-        # =========================
-        # 3️⃣ EXTRAER SERVICIOS 8 DÍGITOS
-        # =========================
+        # -----------------------------
+        # 3️⃣ EXTRAER TODOS LOS SERVICIOS (8 dígitos)
+        # -----------------------------
         servicios = list(set(re.findall(r"\b\d{8}\b", html)))
-
         servicios.sort()
 
         logging.info(f"Servicios encontrados: {servicios}")
-
         return servicios
 
     except Exception as e:
-        logging.error(f"Error general obteniendo servicios: {e}")
+        logging.error(f"Error obteniendo servicios: {e}")
         return []
