@@ -4,7 +4,7 @@ import threading
 import requests
 import psycopg2
 from flask import Flask
-from bs4 import BeautifulSoup
+import re
 
 app = Flask(__name__)
 
@@ -42,7 +42,10 @@ def servicio_existe(descripcion):
 def guardar_servicio(descripcion):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("INSERT INTO servicios (descripcion) VALUES (%s) ON CONFLICT DO NOTHING", (descripcion,))
+    cur.execute(
+        "INSERT INTO servicios (descripcion) VALUES (%s) ON CONFLICT DO NOTHING",
+        (descripcion,)
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -56,12 +59,22 @@ def login(session):
     session.post(LOGIN_URL, data=payload)
 
 def obtener_servicios(session):
+    """
+    Extrae servicios con regex: Reparación: <num>, Profesión: <texto>
+    """
     response = session.get(SERVICIOS_URL)
-    soup = BeautifulSoup(response.text, "html.parser")
-    filas = soup.find_all("tr")  # Ajusta según estructura real
-    return [fila.text.strip() for fila in filas if fila.text.strip()]
+    html = response.text
 
-# ================= WORKER BACKGROUND =================
+    pattern = r"reparacion:\s*(\d+).*?profesion:\s*([\w\s]+)"
+    matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
+
+    servicios = []
+    for numero, profesion in matches:
+        servicios.append(f"🚨 Reparación: {numero} | Profesión: {profesion}")
+
+    return servicios
+
+# ================= WORKER =================
 def worker():
     while True:
         try:
@@ -69,18 +82,16 @@ def worker():
             login(session)
 
             servicios = obtener_servicios(session)
-
             for servicio in servicios:
                 if not servicio_existe(servicio):
                     guardar_servicio(servicio)
-                    enviar_telegram(f"🚨 Nuevo servicio:\n{servicio}")
+                    enviar_telegram(servicio)
 
             print("Revisión completada")
-
         except Exception as e:
             print("Error en worker:", e)
 
-        time.sleep(300)  # cada 5 minutos
+        time.sleep(300)  # revisar cada 5 minutos
 
 # ================= FLASK ENDPOINTS =================
 @app.route("/")
@@ -99,7 +110,5 @@ def ver_servicios():
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    # Inicia worker en segundo plano
     threading.Thread(target=worker, daemon=True).start()
-    # Flask listo para Gunicorn
     app.run(host="0.0.0.0", port=10000)
