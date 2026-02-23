@@ -1,3 +1,4 @@
 flask
 playwright
+python-telegram-bot==20.5
 gunicorn
