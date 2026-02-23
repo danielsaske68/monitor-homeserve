@@ -17,26 +17,31 @@ async def run_bot():
             headless=True,
             args=["--no-sandbox"]
         )
+
         page = await browser.new_page()
 
-        # Ir a login
+        # Ir al login
         await page.goto(LOGIN_URL)
-
-        # ⚠️ CAMBIAR SELECTORES SEGÚN HTML REAL
-        await page.fill('#usuario', USERNAME)
-        await page.fill('#password', PASSWORD)
-
-        await page.click('button[type="submit"]')
         await page.wait_for_load_state("networkidle")
 
-        # Ir a servicios
+        # Rellenar formulario usando NAME
+        await page.fill('input[name="CODIGO"]', USERNAME)
+        await page.fill('input[name="PASSW"]', PASSWORD)
+
+        # Enviar formulario
+        await page.click('input[type="submit"], button[type="submit"]')
+        await page.wait_for_load_state("networkidle")
+
+        # Ir a pestaña servicios
         await page.goto(SERVICIOS_URL)
         await page.wait_for_load_state("networkidle")
 
-        content = await page.content()
+        # Verificar que cargó algo
+        title = await page.title()
 
         await browser.close()
-        return "Login y acceso correcto"
+
+        return f"Login correcto. Página cargada: {title}"
 
 @app.route("/")
 def home():
