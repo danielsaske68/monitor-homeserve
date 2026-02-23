@@ -1,128 +1,83 @@
 import os
 import time
+import threading
 import requests
-from bs4 import BeautifulSoup
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import psycopg2
 from flask import Flask
-from threading import Thread
+from bs4 import BeautifulSoup
 
-# =========================
-# Configuración (AHORA DESDE ENV)
-# =========================
+app = Flask(__name__)
+
+USERNAME = os.getenv("USERNAME")
+PASSWORD = os.getenv("PASSWORD")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-USUARIO = os.environ.get("USUARIO")
-PASSWORD = os.environ.get("PASSWORD")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+def get_db():
+    return psycopg2.connect(DATABASE_URL)
 
-REVISAR_CADA = 60
+def enviar_telegram(mensaje):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": mensaje})
 
-# =========================
-# Inicialización
-# =========================
-app = Flask(__name__)
-session = requests.Session()
-ultimos_servicios = set()
-historial_servicios = []
+def servicio_existe(descripcion):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM servicios WHERE descripcion=%s", (descripcion,))
+    existe = cur.fetchone()
+    cur.close()
+    conn.close()
+    return existe is not None
 
-# =========================
-# Funciones Web
-# =========================
-def login():
-    payload = {"username": USUARIO, "password": PASSWORD}
-    r = session.post(LOGIN_URL, data=payload)
-    return r.status_code == 200
+def guardar_servicio(descripcion):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO servicios (descripcion) VALUES (%s) ON CONFLICT DO NOTHING", (descripcion,))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-def obtener_servicios():
-    r = session.get(SERVICIOS_URL)
-    if r.status_code != 200:
-        return []
-    soup = BeautifulSoup(r.text, "html.parser")
-    elementos = soup.find_all("div", class_="servicio")
-    return [e.text.strip() for e in elementos]
+def login(session):
+    payload = {
+        "usuario": USERNAME,
+        "password": PASSWORD
+    }
+    session.post(LOGIN_URL, data=payload)
 
-def revisar_nuevos_servicios(bot):
-    global ultimos_servicios, historial_servicios
-    servicios_actuales = set(obtener_servicios())
-    nuevos = servicios_actuales - ultimos_servicios
+def obtener_servicios(session):
+    response = session.get(SERVICIOS_URL)
+    soup = BeautifulSoup(response.text, "html.parser")
+    filas = soup.find_all("tr")
+    return [fila.text.strip() for fila in filas if fila.text.strip()]
 
-    if nuevos:
-        mensaje = "🚨 Nuevos servicios:\n\n" + "\n\n".join(nuevos)
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=mensaje)
-        historial_servicios.extend(nuevos)
-        print(mensaje)
+def worker():
+    while True:
+        try:
+            session = requests.Session()
+            login(session)
 
-    ultimos_servicios = servicios_actuales
+            servicios = obtener_servicios(session)
 
-# =========================
-# Comandos Telegram
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Últimos servicios", callback_data="ultimos")],
-        [InlineKeyboardButton("Historial", callback_data="historial")],
-        [InlineKeyboardButton("Asignación", url=SERVICIOS_URL)]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("🤖 Monitor activo", reply_markup=reply_markup)
+            for servicio in servicios:
+                if not servicio_existe(servicio):
+                    guardar_servicio(servicio)
+                    enviar_telegram(f"🚨 Nuevo servicio:\n{servicio}")
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+            print("Revisión completada")
 
-    if query.data == "ultimos":
-        mensaje = "📝 Últimos servicios:\n\n" + "\n\n".join(ultimos_servicios) if ultimos_servicios else "No hay servicios aún."
-        await query.edit_message_text(text=mensaje)
+        except Exception as e:
+            print("Error:", e)
 
-    elif query.data == "historial":
-        mensaje = "📜 Historial (últimos 50):\n\n" + "\n\n".join(historial_servicios[-50:]) if historial_servicios else "No hay historial aún."
-        await query.edit_message_text(text=mensaje)
+        time.sleep(300)
 
-# =========================
-# Flask endpoint (OBLIGATORIO PARA RENDER)
-# =========================
 @app.route("/")
 def home():
-    return "🤖 Monitor activo", 200
+    return "Bot funcionando"
 
-# =========================
-# Monitor Loop
-# =========================
-def iniciar_monitor(bot):
-    if not login():
-        print("❌ No se pudo iniciar sesión.")
-        return
-
-    global ultimos_servicios
-    ultimos_servicios = set(obtener_servicios())
-    print("✅ Estado inicial cargado")
-
-    while True:
-        revisar_nuevos_servicios(bot)
-        time.sleep(REVISAR_CADA)
-
-# =========================
-# Bot Telegram
-# =========================
-def iniciar_bot():
-    app_telegram = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app_telegram.add_handler(CommandHandler("start", start))
-    app_telegram.add_handler(CallbackQueryHandler(button))
-
-    bot_instance = app_telegram.bot
-
-    Thread(target=iniciar_monitor, args=(bot_instance,), daemon=True).start()
-
-    print("🤖 Bot iniciado")
-    app_telegram.run_polling()
-
-# =========================
-# Ejecución principal (VERSIÓN RENDER)
-# =========================
 if __name__ == "__main__":
-    Thread(target=iniciar_bot, daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    threading.Thread(target=worker).start()
+    app.run(host="0.0.0.0", port=10000)
