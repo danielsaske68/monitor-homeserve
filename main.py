@@ -1,110 +1,123 @@
-import json
-import requests
-import logging
 from flask import Flask, request
-
-# Configuración básica
-TOKEN_TELEGRAM = "TU_TOKEN_TELEGRAM"
-CHAT_ID = "TU_CHAT_ID"
-URL_LOGIN = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-URL_SERVICIOS = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("MonitorHomeServe")
+import requests
+from bs4 import BeautifulSoup
+import os
+import re
+import logging
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-class MonitorHomeServe:
-    def __init__(self):
-        self.servicios_alertados = {}
+# =========================
+# VARIABLES DE ENTORNO
+# =========================
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+HS_USER = os.environ.get("HS_USER")
+HS_PASS = os.environ.get("HS_PASS")
 
-    def cargar_servicios(self):
-        try:
-            with open("servicios_alertados.json", "r") as f:
-                self.servicios_alertados = json.load(f)
-        except FileNotFoundError:
-            self.servicios_alertados = {}
-        except Exception as e:
-            logger.error(f"Error cargando servicios: {e}")
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-    def enviar_menu_telegram(self):
-        """Envía el menú principal con botones al usuario"""
-        try:
-            url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-            mensaje = "👋 ¡Bot HomeServe activo!\nSelecciona una opción:"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
+# =========================
+# TELEGRAM
+# =========================
+def send_message(chat_id, text, reply_markup=None):
+    url = f"{TELEGRAM_API}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    requests.post(url, json=payload)
+
+
+# =========================
+# SCRAPING HOMESERVE
+# =========================
+def obtener_servicios():
+    try:
+        session = requests.Session()
+
+        # LOGIN
+        login_payload = {
+            "usuario": HS_USER,
+            "password": HS_PASS
+        }
+
+        session.post(LOGIN_URL, data=login_payload)
+
+        # IR A ASIGNACIÓN
+        response = session.get(ASIGNACION_URL)
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Buscar números de 8 dígitos
+        servicios = set()
+        textos = soup.get_text()
+
+        matches = re.findall(r"\b\d{8}\b", textos)
+
+        for m in matches:
+            servicios.add(m)
+
+        servicios = sorted(list(servicios))
+
+        return servicios
+
+    except Exception as e:
+        logging.error(f"Error obteniendo servicios: {e}")
+        return []
+
+
+# =========================
+# WEBHOOK
+# =========================
+@app.route("/telegram_webhook", methods=["POST"])
+def telegram_webhook():
+    data = request.get_json()
+
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+
+        if text == "/start":
             keyboard = {
                 "inline_keyboard": [
-                    [
-                        {"text": "Último servicio", "callback_data": "ultimo_servicio"},
-                        {"text": "Total servicios", "callback_data": "total_servicios"}
-                    ],
-                    [
-                        {"text": "Login HomeServe", "url": URL_LOGIN},
-                        {"text": "Asignación de servicios", "url": URL_SERVICIOS}
-                    ]
+                    [{"text": "📌 Último servicio", "callback_data": "ultimo"}],
+                    [{"text": "📊 Número de servicios", "callback_data": "total"}],
+                    [{"text": "🔐 Login HomeServe", "url": LOGIN_URL}],
+                    [{"text": "📂 Ir a Asignación", "url": ASIGNACION_URL}]
                 ]
             }
 
-            payload = {
-                'chat_id': CHAT_ID,
-                'text': mensaje,
-                'reply_markup': keyboard
-            }
+            send_message(chat_id, "Bienvenido 👷‍♂️\nSelecciona una opción:", keyboard)
 
-            response = requests.post(url, json=payload, timeout=10)
-            if response.status_code == 200:
-                logger.info("[TELEGRAM] Menú enviado correctamente")
-                return True
+    elif "callback_query" in data:
+        chat_id = data["callback_query"]["message"]["chat"]["id"]
+        accion = data["callback_query"]["data"]
+
+        servicios = obtener_servicios()
+
+        if accion == "ultimo":
+            if servicios:
+                send_message(chat_id, f"📌 Último servicio:\n{servicios[-1]}")
             else:
-                logger.error(f"[TELEGRAM] Error enviando menú: {response.status_code} {response.text}")
-                return False
+                send_message(chat_id, "No se encontraron servicios.")
 
-        except Exception as e:
-            logger.error(f"[TELEGRAM] Excepción al enviar menú: {e}")
-            return False
+        elif accion == "total":
+            send_message(chat_id, f"📊 Total servicios disponibles:\n{len(servicios)}")
 
-    def manejar_callbacks(self, update):
-        """Maneja los botones pulsados por el usuario"""
-        if 'callback_query' in update:
-            data = update['callback_query']['data']
-            chat_id = update['callback_query']['message']['chat']['id']
+    return {"ok": True}
 
-            if data == "ultimo_servicio":
-                if self.servicios_alertados:
-                    ultimo_numero = list(self.servicios_alertados.keys())[-1]
-                    datos = self.servicios_alertados[ultimo_numero]
-                    texto = f"Último servicio:\nNumero: {ultimo_numero}\nTipo: {datos.get('tipo','')} \nEstado: {datos.get('estado','')}"
-                else:
-                    texto = "No hay servicios registrados aún."
-                requests.post(f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage", json={
-                    'chat_id': chat_id,
-                    'text': texto
-                })
 
-            elif data == "total_servicios":
-                total = len(self.servicios_alertados)
-                texto = f"Actualmente hay {total} servicios en la nube."
-                requests.post(f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage", json={
-                    'chat_id': chat_id,
-                    'text': texto
-                })
-
-monitor = MonitorHomeServe()
-monitor.cargar_servicios()
-monitor.enviar_menu_telegram()
-
-# Endpoint para recibir updates de Telegram (webhook)
-@app.route("/telegram_webhook", methods=["POST"])
-def telegram_webhook():
-    update = request.get_json()
-    monitor.manejar_callbacks(update)
-    return "OK"
-
-# Ruta mínima para Render
 @app.route("/")
 def home():
-    return "Bot HomeServe activo ✅"
+    return "Bot HomeServe funcionando ✅"
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
