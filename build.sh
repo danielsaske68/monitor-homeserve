@@ -1,11 +1,16 @@
 #!/bin/bash
-# build.sh para Render usando Python 3.11 y Playwright
 
-# Activar virtualenv
-source .venv/bin/activate
+# ===============================
+# Build script para Render
+# ===============================
 
-# Instalar navegadores de Playwright (sin root)
-python -m playwright install
+echo "🔹 Actualizando pip..."
+python3.11 -m pip install --upgrade pip
 
-# Iniciar la app con Gunicorn
-gunicorn main:app --bind 0.0.0.0:$PORT
+echo "🔹 Instalando dependencias..."
+python3.11 -m pip install -r requirements.txt
+
+echo "🔹 Instalando navegadores para Playwright..."
+python3.11 -m playwright install
+
+echo "✅ Build finalizado."
