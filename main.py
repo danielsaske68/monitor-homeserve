@@ -1,115 +1,82 @@
 import os
-import asyncio
+import json
+import threading
+import time
+import requests
 from flask import Flask, jsonify
-from playwright.async_api import async_playwright
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ====================
-# Configuración
-# ====================
+# --- CONFIG ---
 USERNAME = os.environ.get("USERNAME")
 PASSWORD = os.environ.get("PASSWORD")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
+bot = Bot(token=TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Estado global para servicios detectados
-SERVICIOS_DETECTADOS = set()
+# Almacenamiento temporal de servicios detectados
+servicios_detectados = set()
 
-bot = Bot(token=TELEGRAM_TOKEN)
+# --- FUNCIONES ---
+def obtener_servicios():
+    # Aquí pones tu scraping o API real
+    # Este ejemplo simula la respuesta
+    response = {
+        "nuevos_servicios": ["955855521","15425931","15313040"],
+        "servicios_actuales": ["955855521","15425931","15313040"]
+    }
+    return response
 
-# ====================
-# Funciones Playwright
-# ====================
-async def obtener_servicios():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto("https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales")
-        
-        await page.fill('input[name="CODIGO"]', USERNAME)
-        await page.fill('input[name="PASSW"]', PASSWORD)
-        await page.click('input[type="submit"]')
-        await page.wait_for_load_state("networkidle")
-        
-        # Ir a la pestaña de servicios
-        await page.goto("https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion")
-        await page.wait_for_load_state("networkidle")
-        
-        # Extraer números de servicios
-        rows = await page.query_selector_all("td")
-        servicios = set()
-        for td in rows:
-            text = await td.inner_text()
-            if text.isdigit():
-                servicios.add(text)
-        
-        await browser.close()
-        return servicios
+def check_servicios():
+    global servicios_detectados
+    while True:
+        data = obtener_servicios()
+        actuales = set(data.get("servicios_actuales", []))
+        nuevos = actuales - servicios_detectados
+        if nuevos:
+            for s in nuevos:
+                bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"Nuevo servicio detectado: {s}")
+        servicios_detectados = actuales
+        time.sleep(60)  # Revisa cada 60s
 
-# ====================
-# Funciones Telegram
-# ====================
-async def enviar_nuevos(servicios_nuevos):
-    for s in servicios_nuevos:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"Nuevo servicio detectado: {s}")
+# --- FLASK ROUTES ---
+@app.route('/')
+def home():
+    return "Bot de servicios corriendo ✅"
 
-async def check_nuevos_servicios():
-    global SERVICIOS_DETECTADOS
-    servicios_actuales = await obtener_servicios()
-    nuevos = servicios_actuales - SERVICIOS_DETECTADOS
-    if nuevos:
-        await enviar_nuevos(nuevos)
-    SERVICIOS_DETECTADOS = servicios_actuales
+@app.route('/servicios')
+def listar_servicios():
+    return jsonify(list(servicios_detectados))
 
-# ====================
-# Rutas Flask
-# ====================
-@app.route("/")
-def index():
-    return "Monitor Homeserve en marcha 🚀"
-
-@app.route("/run")
-def run():
-    asyncio.run(check_nuevos_servicios())
-    return jsonify({"servicios_actuales": list(SERVICIOS_DETECTADOS)})
-
-# ====================
-# Comandos Telegram
-# ====================
-async def start(update, context):
-    keyboard = [
-        [InlineKeyboardButton("Ver servicios", callback_data="ver_servicios")]
-    ]
+# --- TELEGRAM HANDLERS ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton("Ver servicios", callback_data="ver")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Monitor Homeserve activo ✅", reply_markup=reply_markup)
+    await update.message.reply_text("Bot iniciado ✅", reply_markup=reply_markup)
 
-async def button(update, context):
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "ver_servicios":
-        servicios = "\n".join(SERVICIOS_DETECTADOS) if SERVICIOS_DETECTADOS else "No hay servicios."
-        await query.edit_message_text(text=f"Servicios actuales:\n{servicios}")
+    if query.data == "ver":
+        await query.edit_message_text(text="Servicios actuales:\n" + "\n".join(servicios_detectados))
 
-# ====================
-# Inicialización Telegram
-# ====================
-def iniciar_bot_telegram():
-    app_telegram = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app_telegram.add_handler(CommandHandler("start", start))
-    app_telegram.add_handler(CallbackQueryHandler(button))
-    return app_telegram
+def run_telegram():
+    app_bot = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CallbackQueryHandler(button))
+    app_bot.run_polling()
 
-# ====================
-# Main
-# ====================
+# --- MAIN ---
 if __name__ == "__main__":
-    # Lanzar bot Telegram en segundo plano
-    app_telegram = iniciar_bot_telegram()
-    loop = asyncio.get_event_loop()
-    loop.create_task(app_telegram.start())
-    
-    # Lanzar Flask
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    # Correr chequeo en background
+    t1 = threading.Thread(target=check_servicios, daemon=True)
+    t1.start()
+
+    # Correr bot de telegram en otro thread
+    t2 = threading.Thread(target=run_telegram, daemon=True)
+    t2.start()
+
+    # Correr Flask
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
