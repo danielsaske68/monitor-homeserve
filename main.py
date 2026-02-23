@@ -1,110 +1,89 @@
 # main.py
 import os
-import logging
 import requests
-from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 
-# Configuración básica
-logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# Config Telegram
-BOT_TOKEN = os.getenv("7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU")  # Pon tu token aquí en Render Environment
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+# =========================
+# CONFIGURACIÓN DEL BOT
+# =========================
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU")
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-# Config HomeServe
-HOMESERVE_USER = os.getenv("HOMESERVE_USER")
-HOMESERVE_PASS = os.getenv("HOMESERVE_PASS")
-HOMESERVE_LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-HOMESERVE_ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+# =========================
+# MOCK DE SERVICIOS
+# =========================
+def obtener_servicios_mock():
+    """Devuelve los servicios actuales sin login (solo prueba)."""
+    return [
+        {"id": "15313040", "url": "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion&servicio=15313040"},
+        {"id": "15425931", "url": "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion&servicio=15425931"}
+    ]
 
-session = requests.Session()
-
-
-def login_homeserve():
-    """Login a HomeServe y mantener la sesión."""
-    logging.info("Intentando loguearse en HomeServe...")
-    data = {
-        'usuario': HOMESERVE_USER,
-        'pass': HOMESERVE_PASS
-    }
-    r = session.post(HOMESERVE_LOGIN_URL, data=data)
-    if "Bienvenido" in r.text or r.status_code == 200:
-        logging.info("Login exitoso ✅")
-        return True
-    logging.error("Login fallido ❌")
-    return False
-
-
-def obtener_servicios():
-    """Extraer los servicios actuales de HomeServe."""
-    r = session.get(HOMESERVE_ASIGNACION_URL)
-    soup = BeautifulSoup(r.text, 'html.parser')
-    servicios = []
-
-    # Buscar todos los enlaces dentro de <tr> que contienen los números de servicio
-    for tr in soup.find_all("tr"):
-        a = tr.find("a", href=True)
-        if a and a.text.strip().isdigit():
-            servicios.append({
-                "id": a.text.strip(),
-                "url": a['href']
-            })
-    logging.info(f"Servicios encontrados: {len(servicios)}")
-    return servicios
-
-
+# =========================
+# FUNCIONES DE TELEGRAM
+# =========================
 def send_message(chat_id, text):
-    """Enviar mensaje a Telegram."""
-    url = f"{TELEGRAM_API}/sendMessage"
-    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    requests.post(url, data=data)
+    """Envía mensaje a Telegram."""
+    url = f"{TELEGRAM_API_URL}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print("Error enviando mensaje:", e)
 
-
+# =========================
+# WEBHOOK DE TELEGRAM
+# =========================
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
-    update = request.get_json()
-    logging.info(f"Llegó actualización de Telegram: {update}")
+    data = request.json
+    if not data:
+        return jsonify({"ok": False, "error": "No JSON"}), 400
 
     chat_id = None
-    callback_data = None
+    text_to_send = ""
 
-    # Manejar mensaje normal
-    if 'message' in update:
-        chat_id = update['message']['chat']['id']
-        text = update['message']['text']
-    # Manejar botón (callback_query)
-    elif 'callback_query' in update:
-        chat_id = update['callback_query']['message']['chat']['id']
-        callback_data = update['callback_query']['data']
+    # Manejar callback_query
+    if "callback_query" in data:
+        query = data["callback_query"]
+        chat_id = query["from"]["id"]
+        data_callback = query["data"]
+        if data_callback == "ultimo":
+            servicios = obtener_servicios_mock()
+            if servicios:
+                ultimo = servicios[-1]
+                text_to_send = f"Último servicio:\n{ultimo['id']}: {ultimo['url']}"
+            else:
+                text_to_send = "No hay servicios disponibles."
+        elif data_callback == "total":
+            servicios = obtener_servicios_mock()
+            text_to_send = f"Número de servicios actuales: {len(servicios)}"
+    # Manejar mensajes normales
+    elif "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text_to_send = "Hola 👷‍♂️\nSelecciona una opción en el menú."
 
-    if chat_id is None:
-        return jsonify({"ok": True})
-
-    # Comandos
-    if callback_data == "ultimo":
-        servicios = obtener_servicios()
-        if servicios:
-            s = servicios[-1]
-            send_message(chat_id, f"Último servicio: {s['id']}\nURL: {s['url']}")
-        else:
-            send_message(chat_id, "No se encontraron servicios 😢")
-    elif callback_data == "total":
-        servicios = obtener_servicios()
-        send_message(chat_id, f"Número de servicios: {len(servicios)}")
-    else:
-        # Mensaje normal
-        send_message(chat_id, "Hola 👷‍♂️\nUsa los botones para consultar tus servicios.")
+    if chat_id and text_to_send:
+        send_message(chat_id, text_to_send)
 
     return jsonify({"ok": True})
 
-
+# =========================
+# RUTA PRINCIPAL (solo prueba)
+# =========================
 @app.route("/", methods=["GET"])
 def index():
-    return "Monitor HomeServe funcionando ✅"
+    return "Monitor HomeServe Bot activo ✅", 200
 
-
+# =========================
+# INICIO DE LA APP
+# =========================
 if __name__ == "__main__":
-    if login_homeserve():
-        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
