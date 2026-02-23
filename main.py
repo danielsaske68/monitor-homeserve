@@ -1,109 +1,110 @@
+# main.py
+import os
+import logging
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, request
-import logging
+from flask import Flask, request, jsonify
 
 # Configuración básica
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# Datos de HomeServe
+# Config Telegram
+BOT_TOKEN = os.getenv("7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU")  # Pon tu token aquí en Render Environment
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+# Config HomeServe
+HOMESERVE_USER = os.getenv("HOMESERVE_USER")
+HOMESERVE_PASS = os.getenv("HOMESERVE_PASS")
 HOMESERVE_LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 HOMESERVE_ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-CODIGO = "16205"   # reemplaza con tu usuario
-PASSW = "Aventura60,"     # reemplaza con tu contraseña
 
-# Datos de Telegram
-BOT_TOKEN = "7827444792:AAF0rtSLFQl4pRUATbSqGl0U9imZQdfCRAU"  # reemplaza con tu token
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+session = requests.Session()
 
-# Función para login y mantener sesión
+
 def login_homeserve():
+    """Login a HomeServe y mantener la sesión."""
     logging.info("Intentando loguearse en HomeServe...")
-    session = requests.Session()
-    payload = {
-        "usuario": CODIGO,
-        "clave": PASSW
+    data = {
+        'usuario': HOMESERVE_USER,
+        'pass': HOMESERVE_PASS
     }
-    response = session.post(HOMESERVE_LOGIN_URL, data=payload)
-    if "Perfil" in response.text or response.status_code == 200:
+    r = session.post(HOMESERVE_LOGIN_URL, data=data)
+    if "Bienvenido" in r.text or r.status_code == 200:
         logging.info("Login exitoso ✅")
-        return session
-    else:
-        logging.error("Error de login ❌")
-        return None
+        return True
+    logging.error("Login fallido ❌")
+    return False
 
-# Función para obtener servicios
-def obtener_servicios(session):
-    response = session.get(HOMESERVE_ASIGNACION_URL)
-    soup = BeautifulSoup(response.text, "html.parser")
+
+def obtener_servicios():
+    """Extraer los servicios actuales de HomeServe."""
+    r = session.get(HOMESERVE_ASIGNACION_URL)
+    soup = BeautifulSoup(r.text, 'html.parser')
     servicios = []
 
-    for a in soup.find_all("a", href=True):
-        if "prof_asignacion&servicio=" in a['href']:
-            servicio_id = a.text.strip()
-            servicios.append(servicio_id)
-
+    # Buscar todos los enlaces dentro de <tr> que contienen los números de servicio
+    for tr in soup.find_all("tr"):
+        a = tr.find("a", href=True)
+        if a and a.text.strip().isdigit():
+            servicios.append({
+                "id": a.text.strip(),
+                "url": a['href']
+            })
     logging.info(f"Servicios encontrados: {len(servicios)}")
     return servicios
 
-# Función para enviar mensajes a Telegram
-def enviar_telegram(chat_id, texto):
-    requests.post(TELEGRAM_API, json={
-        "chat_id": chat_id,
-        "text": texto
-    })
 
-# Endpoint webhook de Telegram
+def send_message(chat_id, text):
+    """Enviar mensaje a Telegram."""
+    url = f"{TELEGRAM_API}/sendMessage"
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    requests.post(url, data=data)
+
+
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     update = request.get_json()
     logging.info(f"Llegó actualización de Telegram: {update}")
 
     chat_id = None
-    comando = None
+    callback_data = None
 
-    # Manejar callback_query o mensaje normal
-    if "callback_query" in update:
-        comando = update['callback_query']['data']
-        chat_id = update['callback_query']['message']['chat']['id']
-    elif "message" in update:
-        comando = update['message'].get('text')
+    # Manejar mensaje normal
+    if 'message' in update:
         chat_id = update['message']['chat']['id']
-    else:
-        logging.error("Webhook recibido sin 'message' ni 'callback_query'")
-        return "OK", 200
+        text = update['message']['text']
+    # Manejar botón (callback_query)
+    elif 'callback_query' in update:
+        chat_id = update['callback_query']['message']['chat']['id']
+        callback_data = update['callback_query']['data']
 
-    session = login_homeserve()
-    if not session:
-        enviar_telegram(chat_id, "❌ Error al loguearse en HomeServe")
-        return "OK", 200
+    if chat_id is None:
+        return jsonify({"ok": True})
 
-    servicios = obtener_servicios(session)
-
-    # Comandos del bot
-    if comando == "ultimo":
+    # Comandos
+    if callback_data == "ultimo":
+        servicios = obtener_servicios()
         if servicios:
-            enviar_telegram(chat_id, f"📌 Último servicio: {servicios[0]}")
+            s = servicios[-1]
+            send_message(chat_id, f"Último servicio: {s['id']}\nURL: {s['url']}")
         else:
-            enviar_telegram(chat_id, "No se encontraron servicios.")
-    elif comando == "total":
-        enviar_telegram(chat_id, f"📊 Número de servicios: {len(servicios)}")
+            send_message(chat_id, "No se encontraron servicios 😢")
+    elif callback_data == "total":
+        servicios = obtener_servicios()
+        send_message(chat_id, f"Número de servicios: {len(servicios)}")
     else:
-        enviar_telegram(chat_id, "Comando no reconocido.")
+        # Mensaje normal
+        send_message(chat_id, "Hola 👷‍♂️\nUsa los botones para consultar tus servicios.")
 
-    return "OK", 200
+    return jsonify({"ok": True})
 
-# Endpoint de prueba
-@app.route("/test_servicios", methods=["GET"])
-def test_servicios():
-    session = login_homeserve()
-    if not session:
-        return "Error al loguearse en HomeServe ❌", 500
 
-    servicios = obtener_servicios(session)
-    return {"servicios": servicios}, 200
+@app.route("/", methods=["GET"])
+def index():
+    return "Monitor HomeServe funcionando ✅"
 
-# Inicio de la app
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    if login_homeserve():
+        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
