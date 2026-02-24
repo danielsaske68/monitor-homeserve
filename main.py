@@ -3,6 +3,7 @@ import time
 import threading
 import logging
 import requests
+import re
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template_string
 from dotenv import load_dotenv
@@ -15,71 +16,91 @@ USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-INTERVALO_SEGUNDOS = int(os.getenv("INTERVALO_SEGUNDOS",120))
-WEB_URL = os.getenv("WEB_URL")  # https://monitor-homeserve.onrender.com
+
+INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS",60))
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
+TELEGRAM_API=f"https://api.telegram.org/bot{BOT_TOKEN}"
+
 # ---------------- LOG ----------------
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
+logger=logging.getLogger(__name__)
 
 # ---------------- VARIABLES ----------------
 
-SERVICIOS_ACTUALES=set()
-SERVICIOS_NUEVOS=set()
-ULTIMO_SERVICIO=None
+SERVICIOS_ACTUALES={}
+SERVICIOS_ANTERIORES={}
+
+ULTIMO=None
 
 # ---------------- TELEGRAM ----------------
 
-class TelegramClient:
+class Telegram:
 
-    def enviar(self,mensaje,botones=None):
+    def enviar(self,texto):
 
-        url=f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        botones=[
+            [
+                {"text":"🔐 Login","callback_data":"LOGIN"},
+                {"text":"🔄 Actualizar","callback_data":"REFRESH"}
+            ],
+            [
+                {"text":"📋 Ver servicios","callback_data":"SERVICIOS"}
+            ],
+            [
+                {
+                 "text":"🌐 Asignación",
+                 "url":ASIGNACION_URL
+                }
+            ]
+        ]
 
-        data={
-        "chat_id":CHAT_ID,
-        "text":mensaje,
-        "parse_mode":"HTML"
-        }
+        requests.post(
+            TELEGRAM_API+"/sendMessage",
+            json={
+                "chat_id":CHAT_ID,
+                "text":texto,
+                "parse_mode":"HTML",
+                "reply_markup":{
+                    "inline_keyboard":botones
+                }
+            },
+            timeout=10
+        )
 
-        if botones:
-            data["reply_markup"]={"inline_keyboard":botones}
-
-        requests.post(url,json=data)
-
+telegram=Telegram()
 
 # ---------------- SCRAPER ----------------
 
-class HomeServeScraper:
+class HomeServe:
 
     def __init__(self):
+
         self.session=requests.Session()
 
     def login(self):
 
         payload={
-        "CODIGO":USUARIO,
-        "PASSW":PASSWORD,
-        "BTN":"Aceptar"
+            "CODIGO":USUARIO,
+            "PASSW":PASSWORD,
+            "BTN":"Aceptar"
         }
 
-        headers={"User-Agent":"Mozilla/5.0"}
+        self.session.get(LOGIN_URL)
 
-        self.session.get(LOGIN_URL,headers=headers)
-
-        r=self.session.post(LOGIN_URL,data=payload,headers=headers)
+        r=self.session.post(LOGIN_URL,data=payload)
 
         if "error" in r.text.lower():
-            logger.error("Login fallido")
+
+            logger.info("Login fallo")
             return False
 
-        logger.info("Login correcto")
-        return True
+        logger.info("Login OK")
 
+        return True
 
     def obtener(self):
 
@@ -87,215 +108,198 @@ class HomeServeScraper:
 
         soup=BeautifulSoup(r.text,"html.parser")
 
-        servicios=set()
+        texto=soup.get_text("\n")
 
-        for fila in soup.find_all("tr"):
+        servicios={}
 
-            texto=fila.get_text(" ",strip=True)
+        lineas=texto.split("\n")
 
-            if len(texto)>25:
-                servicios.add(texto)
+        servicio_actual=[]
+        id_actual=None
 
-        logger.info(f"Servicios detectados {len(servicios)}")
+        for linea in lineas:
+
+            linea=linea.strip()
+
+            if not linea:
+                continue
+
+            # Detecta ID servicio (ej 15431174)
+            m=re.search(r"\b1\d{7}\b",linea)
+
+            if m:
+
+                if id_actual:
+
+                    servicios[id_actual]=" ".join(servicio_actual)
+
+                id_actual=m.group()
+
+                servicio_actual=[linea]
+
+            else:
+
+                if id_actual:
+
+                    servicio_actual.append(linea)
+
+        if id_actual:
+
+            servicios[id_actual]=" ".join(servicio_actual)
+
+        logger.info(f"Servicios detectados: {len(servicios)}")
 
         return servicios
 
 
+homeserve=HomeServe()
+
 # ---------------- BOT ----------------
 
-class Bot:
+def loop():
 
-    def __init__(self):
+    global SERVICIOS_ACTUALES
+    global SERVICIOS_ANTERIORES
+    global ULTIMO
 
-        self.scraper=HomeServeScraper()
-        self.tg=TelegramClient()
+    homeserve.login()
 
-        self.previos=None
+    while True:
 
+        try:
 
-    def botones(self):
+            SERVICIOS_ACTUALES=homeserve.obtener()
 
-        return [
+            if not SERVICIOS_ANTERIORES:
 
-        [
-        {"text":"🔑 Login","url":LOGIN_URL},
-        {"text":"📋 Asignación","url":ASIGNACION_URL}
-        ],
+                SERVICIOS_ANTERIORES=SERVICIOS_ACTUALES.copy()
 
-        [
-        {"text":"🆕 Ver nuevos","callback_data":"NEW"},
-        {"text":"📊 Ver actuales","callback_data":"ALL"}
-        ],
+                if SERVICIOS_ACTUALES:
 
-        [
-        {"text":"🌐 Abrir web","url":WEB_URL}
-        ]
+                    texto="📋 <b>Servicios actuales</b>\n\n"
 
-        ]
+                    for s in SERVICIOS_ACTUALES.values():
 
+                        texto+=s+"\n\n"
 
-    def iniciar(self):
+                    telegram.enviar(texto)
 
-        global SERVICIOS_ACTUALES
-        global SERVICIOS_NUEVOS
-        global ULTIMO_SERVICIO
-
-        self.scraper.login()
-
-        while True:
-
-            actuales=self.scraper.obtener()
-
-            if self.previos is None:
-
-                self.previos=actuales
-
-                SERVICIOS_ACTUALES=actuales
-
-                self.tg.enviar(
-
-                f"✅ Bot iniciado\nServicios actuales: {len(actuales)}",
-
-                self.botones()
-
-                )
-
-
-            nuevos=actuales-self.previos
+            nuevos=set(SERVICIOS_ACTUALES)-set(SERVICIOS_ANTERIORES)
 
             if nuevos:
 
-                SERVICIOS_NUEVOS=nuevos
+                for id in nuevos:
 
-                for s in nuevos:
+                    texto="🆕 <b>Nuevo servicio</b>\n\n"
 
-                    self.tg.enviar(
+                    texto+=SERVICIOS_ACTUALES[id]
 
-                    f"🆕 NUEVO SERVICIO\n\n{s}"
+                    telegram.enviar(texto)
 
-                    )
+                    ULTIMO=SERVICIOS_ACTUALES[id]
 
-                    ULTIMO_SERVICIO=s
+            SERVICIOS_ANTERIORES=SERVICIOS_ACTUALES.copy()
+
+            time.sleep(INTERVALO)
+
+        except Exception as e:
+
+            logger.error(e)
+
+            time.sleep(20)
 
 
-            SERVICIOS_ACTUALES=actuales
+threading.Thread(target=loop,daemon=True).start()
 
-            self.previos=actuales
-
-            time.sleep(INTERVALO_SEGUNDOS)
-
-
-bot=Bot()
-
-threading.Thread(target=bot.iniciar,daemon=True).start()
-
-# ---------------- WEB ----------------
+# ---------------- FLASK ----------------
 
 app=Flask(__name__)
 
 HTML="""
+<h1>HomeServe BOT</h1>
 
-<h1>Monitor HomeServe</h1>
+Servicios detectados: {{n}}
 
-<h2>Servicios actuales: {{cantidad}}</h2>
+<br><br>
 
-<h3>Último:</h3>
+Último servicio:
 
-{{ultimo}}
+<br><br>
 
-<hr>
+{{u}}
 
-<h3>Lista:</h3>
+<br><br>
 
-{% for s in servicios %}
+<form>
 
-<p>{{s}}</p>
+<button>Actualizar</button>
 
-{% endfor %}
-
+</form>
 """
 
-
 @app.route("/")
-
 def home():
 
     return render_template_string(
-
-    HTML,
-
-    cantidad=len(SERVICIOS_ACTUALES),
-
-    ultimo=ULTIMO_SERVICIO,
-
-    servicios=SERVICIOS_ACTUALES
-
+        HTML,
+        n=len(SERVICIOS_ACTUALES),
+        u=ULTIMO
     )
 
-
-# ---------------- TELEGRAM BOTONES ----------------
+# ---------------- TELEGRAM CALLBACK ----------------
 
 @app.route("/telegram_webhook",methods=["POST"])
-
 def telegram():
-
-    global SERVICIOS_ACTUALES
-    global SERVICIOS_NUEVOS
 
     data=request.json
 
     if "callback_query" in data:
 
-        chat=data["callback_query"]["message"]["chat"]["id"]
-
         accion=data["callback_query"]["data"]
 
-        if accion=="ALL":
+        chat=data["callback_query"]["message"]["chat"]["id"]
 
-            texto="\n\n".join(SERVICIOS_ACTUALES)
+        if accion=="LOGIN":
 
-            requests.post(
+            ok=homeserve.login()
 
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            txt="✅ Login correcto" if ok else "❌ Login fallo"
 
-            json={
+        elif accion=="REFRESH":
 
-            "chat_id":chat,
-            "text":f"📊 SERVICIOS ACTUALES\n\n{texto}",
-            "parse_mode":"HTML"
+            SERVICIOS_ACTUALES.update(homeserve.obtener())
 
-            })
+            txt="🔄 Actualizado"
 
-        if accion=="NEW":
+        elif accion=="SERVICIOS":
 
-            if SERVICIOS_NUEVOS:
+            if SERVICIOS_ACTUALES:
 
-                texto="\n\n".join(SERVICIOS_NUEVOS)
+                txt="📋 Servicios actuales\n\n"
+
+                for s in SERVICIOS_ACTUALES.values():
+
+                    txt+=s+"\n\n"
 
             else:
 
-                texto="No hay servicios nuevos"
+                txt="No hay servicios"
 
-            requests.post(
-
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-
+        requests.post(
+            TELEGRAM_API+"/sendMessage",
             json={
-
-            "chat_id":chat,
-            "text":f"🆕 SERVICIOS NUEVOS\n\n{texto}",
-            "parse_mode":"HTML"
-
-            })
-
+                "chat_id":chat,
+                "text":txt,
+                "parse_mode":"HTML"
+            }
+        )
 
     return jsonify(ok=True)
 
-
-# ---------------- START ----------------
+# ---------------- RUN ----------------
 
 if __name__=="__main__":
 
-    port=int(os.environ.get("PORT",10000))
+    port=int(os.getenv("PORT",10000))
 
     app.run(host="0.0.0.0",port=port)
