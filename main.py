@@ -140,6 +140,15 @@ def home():
 # TELEGRAM BUTTONS
 ###########################################################
 
+def format_servicios(servicios_dict, titulo):
+    """Formatea los servicios con separación visual"""
+    if not servicios_dict:
+        return "No hay servicios"
+    texto = f"{titulo}\n\n"
+    for s in servicios_dict.values():
+        texto += f"📌 {s}\n" + "──────────────\n"
+    return texto
+
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
@@ -158,22 +167,12 @@ def telegram_webhook():
 
         elif accion == "SERVICIOS_NUEVOS":
             nuevos = {k:v for k,v in homeserve.obtener().items() if k not in SERVICIOS_ACTUALES}
-            if nuevos:
-                txt = "🆕 <b>Servicios nuevos</b>\n\n"
-                for s in nuevos.values():
-                    txt += s + "\n\n"
-            else:
-                txt = "No hay servicios nuevos"
+            txt = format_servicios(nuevos, "🆕 Servicios nuevos")
             SERVICIOS_ACTUALES.update(nuevos)
 
         elif accion == "TODOS_SERVICIOS":
             todos = homeserve.obtener()
-            if todos:
-                txt = "📋 <b>Todos los servicios activos</b>\n\n"
-                for s in todos.values():
-                    txt += s + "\n\n"
-            else:
-                txt = "No hay servicios activos"
+            txt = format_servicios(todos, "📋 Todos los servicios activos")
 
         requests.post(
             TELEGRAM_API + "/sendMessage",
