@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # ------------------------------
-# Variables compartidas para web
+# Variables compartidas
 # ------------------------------
 SERVICIOS_ACTUALES = set()
 ULTIMO_SERVICIO = None
@@ -62,7 +62,7 @@ class TelegramClient:
             return False
 
 # ------------------------------
-# HomeServe Scraper
+# HomeServe Scraper mejorado
 # ------------------------------
 class HomeServeScraper:
     def __init__(self, usuario, password):
@@ -90,18 +90,32 @@ class HomeServeScraper:
             r = self.session.get(ASIGNACION_URL, timeout=10)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "html.parser")
+
             servicios = set()
+
+            # Intentar detectar servicios en cualquier <tr> con contenido relevante
             for fila in soup.find_all("tr"):
-                t = fila.get_text(strip=True)
-                if t and len(t) > 30:
-                    servicios.add(t)
+                tds = fila.find_all("td")
+                for td in tds:
+                    texto = td.get_text(strip=True)
+                    if texto and len(texto) > 20:  # Ajusta el número si la info es más corta
+                        servicios.add(texto)
+
+            # Si no se encuentra nada, intentar extraer de divs (por si la página cambió)
+            if not servicios:
+                for div in soup.find_all("div"):
+                    texto = div.get_text(strip=True)
+                    if texto and len(texto) > 20:
+                        servicios.add(texto)
+
+            logger.info(f"Servicios encontrados: {servicios}")
             return servicios
         except Exception as e:
             logger.error(f"Error obteniendo servicios: {e}")
             return set()
 
 # ------------------------------
-# HomeServe Bot
+# Bot
 # ------------------------------
 class HomeServeBot:
     def __init__(self, scraper, telegram, intervalo):
@@ -119,8 +133,8 @@ class HomeServeBot:
         try:
             while True:
                 actuales = self.scraper.obtener_servicios()
-                
-                # Enviar todos los servicios actuales al inicio
+
+                # Enviar todos los servicios al inicio
                 if self.servicios_previos is None:
                     self.servicios_previos = actuales
                     if actuales:
@@ -152,7 +166,7 @@ class HomeServeBot:
             time.sleep(30)
 
 # ------------------------------
-# Flask server
+# Flask
 # ------------------------------
 app = Flask(__name__)
 
@@ -181,7 +195,7 @@ def home():
         ultimo=ULTIMO_SERVICIO
     )
 
-# Endpoint para Telegram buttons
+# Webhook Telegram para botones
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.get_json()
