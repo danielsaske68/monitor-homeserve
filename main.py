@@ -103,33 +103,44 @@ class HomeServe:
 
     def obtener(self):
 
-        r=self.session.get(ASIGNACION_URL,timeout=15)
+    r=self.session.get(ASIGNACION_URL,timeout=15)
 
-        soup=BeautifulSoup(r.text,"html.parser")
+    soup=BeautifulSoup(r.text,"html.parser")
 
-        texto=soup.get_text("\n")
+    texto=soup.get_text("\n")
 
-        # separar por ID real
-        bloques=re.split(r"\n(?=\d{7,8}\s)",texto)
+    bloques=re.split(r"\n(?=\d{7,8}\s)",texto)
 
-        servicios={}
+    servicios={}
 
-        for b in bloques:
+    for b in bloques:
 
-            m=re.search(r"\b\d{7,8}\b",b)
+        idmatch=re.search(r"\b\d{7,8}\b",b)
 
-            if m:
+        if not idmatch:
+            continue
 
-                idserv=m.group(0)
+        idserv=idmatch.group(0)
 
-                limpio=" ".join(b.split())
+        tipo=re.search(r"\d{7,8}\s+(.*?)\s+Para",b)
+        fecha=re.search(r"Para el\s+(\d+/\d+/\d+)",b)
+        horas=re.search(r"De\s+(\d+:\d+)\s+a\s+(\d+:\d+)",b)
+        ciudad=re.search(r"\)\s*(.*?)\s*C/",b)
 
-                servicios[idserv]=limpio
+        texto_limpio=b.strip()
+
+        servicio=f"""
+ID: {idserv}
+
+{texto_limpio}
+"""
+
+        servicios[idserv]=servicio.strip()
 
 
-        logger.info(f"Servicios detectados: {len(servicios)}")
+    logger.info(f"Servicios detectados: {len(servicios)}")
 
-        return servicios
+    return servicios
 
 
 homeserve=HomeServe()
