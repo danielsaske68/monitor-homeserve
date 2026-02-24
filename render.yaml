@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: homeserve-bot
+    env: docker
+    plan: free
+    autoDeploy: true
