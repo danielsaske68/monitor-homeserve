@@ -1,101 +1,206 @@
+import os
+import time
+import threading
+import logging
 import requests
 from bs4 import BeautifulSoup
-import time
+from flask import Flask, request, jsonify, render_template_string
+from dotenv import load_dotenv
 
-# -----------------------------
-# CONFIGURACIÓN
-# -----------------------------
-TELEGRAM_TOKEN = "TU_BOT_TOKEN"
-CHAT_ID = "TU_CHAT_ID"
-URL_LOGIN = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-URL_SERVICIOS = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-USERNAME = "TU_USUARIO"
-PASSWORD = "TU_PASSWORD"
-CHECK_INTERVAL = 30  # segundos
-# -----------------------------
+# ------------------------------
+# Configuración
+# ------------------------------
+load_dotenv()
 
-session = requests.Session()
+USUARIO = os.getenv("USUARIO")
+PASSWORD = os.getenv("PASSWORD")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+INTERVALO_SEGUNDOS = int(os.getenv("INTERVALO_SEGUNDOS", 120))
 
-def login():
-    """
-    Realiza login en la web y mantiene la sesión.
-    """
-    try:
-        # Obtenemos la página de login para cookies hidden si las hay
-        r = session.get(URL_LOGIN)
-        r.raise_for_status()
-        
-        # Parseamos campos ocultos (csrf, token, etc.) si aplica
-        soup = BeautifulSoup(r.text, "html.parser")
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+# ------------------------------
+# Logging
+# ------------------------------
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# ------------------------------
+# Variables compartidas para web
+# ------------------------------
+SERVICIOS_ACTUALES = set()
+ULTIMO_SERVICIO = None
+
+# ------------------------------
+# Telegram Client
+# ------------------------------
+class TelegramClient:
+    def __init__(self, bot_token, chat_id):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+
+    def enviar_mensaje(self, mensaje, buttons=None):
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         data = {
-            "username": USERNAME,
-            "password": PASSWORD
+            "chat_id": self.chat_id,
+            "text": mensaje,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
         }
-        # Si hay token hidden, agregarlo:
-        token = soup.find("input", {"name": "csrf_token"})
-        if token:
-            data["csrf_token"] = token["value"]
-
-        r2 = session.post(URL_LOGIN, data=data)
-        r2.raise_for_status()
-        if "logout" in r2.text.lower():
-            print("Login OK")
+        if buttons:
+            data["reply_markup"] = {"inline_keyboard": buttons}
+        try:
+            r = requests.post(url, json=data, timeout=10)
+            r.raise_for_status()
+            logger.info("Mensaje enviado a Telegram")
             return True
-        else:
-            print("Login fallido")
+        except Exception as e:
+            logger.error(f"Error enviando Telegram: {e}")
             return False
-    except Exception as e:
-        print(f"Error en login: {e}")
-        return False
 
-def obtener_servicios_actuales():
-    """
-    Obtiene servicios desde la página de asignación después de login.
-    Devuelve lista de nombres o IDs.
-    """
-    try:
-        r = session.get(URL_SERVICIOS)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        
-        # Dependiendo de cómo esté la página, por ejemplo lista en <li class="servicio">
-        servicios = [li.text.strip() for li in soup.find_all("li", class_="servicio")]
-        return servicios
-    except Exception as e:
-        print(f"Error al obtener servicios: {e}")
-        return []
+# ------------------------------
+# HomeServe Scraper
+# ------------------------------
+class HomeServeScraper:
+    def __init__(self, usuario, password):
+        self.usuario = usuario
+        self.password = password
+        self.session = requests.Session()
 
-def enviar_telegram(mensaje):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
-    try:
-        r = requests.post(url, json=payload)
-        r.raise_for_status()
-        print("Mensaje telegram enviado")
-    except Exception as e:
-        print(f"Error al enviar Telegram: {e}")
+    def login(self):
+        payload = {"CODIGO": self.usuario, "PASSW": self.password, "BTN": "Aceptar"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            self.session.get(LOGIN_URL, headers=headers)
+            r = self.session.post(LOGIN_URL, data=payload, headers=headers, timeout=10)
+            if "error" in r.text.lower():
+                logger.error("Login fallido")
+                return False
+            logger.info("Login exitoso")
+            return True
+        except Exception as e:
+            logger.error(f"Error login: {e}")
+            return False
 
-def formatear_mensaje(servicios):
-    if not servicios:
-        return "*No hay servicios activos*"
-    mensaje = f"*Servicios detectados:* {len(servicios)}\n\n"
-    for i, s in enumerate(servicios, 1):
-        mensaje += f"{i}. {s}\n"
-    return mensaje
+    def obtener_servicios(self):
+        try:
+            r = self.session.get(ASIGNACION_URL, timeout=10)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            servicios = set()
+            for fila in soup.find_all("tr"):
+                t = fila.get_text(strip=True)
+                if t and len(t) > 30:
+                    servicios.add(t)
+            return servicios
+        except Exception as e:
+            logger.error(f"Error obteniendo servicios: {e}")
+            return set()
 
-def main():
-    if not login():
-        return
+# ------------------------------
+# HomeServe Bot
+# ------------------------------
+class HomeServeBot:
+    def __init__(self, scraper, telegram, intervalo):
+        self.scraper = scraper
+        self.telegram = telegram
+        self.intervalo = intervalo
+        self.servicios_previos = None
 
-    servicios_previos = []
+    def iniciar(self):
+        global SERVICIOS_ACTUALES, ULTIMO_SERVICIO
+        if not self.scraper.login():
+            logger.error("No se pudo conectar a HomeServe")
+            return
 
-    while True:
-        servicios_actuales = obtener_servicios_actuales()
-        if servicios_actuales != servicios_previos:
-            mensaje = formatear_mensaje(servicios_actuales)
-            enviar_telegram(mensaje)
-            servicios_previos = servicios_actuales
-        time.sleep(CHECK_INTERVAL)
+        try:
+            while True:
+                actuales = self.scraper.obtener_servicios()
+                
+                # Enviar todos los servicios actuales al inicio
+                if self.servicios_previos is None:
+                    self.servicios_previos = actuales
+                    if actuales:
+                        todos = "\n\n".join(actuales)
+                        buttons = [[{"text": "Actualizar servicios", "callback_data": "REFRESH"}]]
+                        self.telegram.enviar_mensaje(f"📋 <b>Servicios actuales:</b>\n\n{todos}", buttons=buttons)
+
+                # Detectar nuevos servicios
+                nuevos = actuales - self.servicios_previos if self.servicios_previos else set()
+                if nuevos:
+                    for s in nuevos:
+                        self.telegram.enviar_mensaje(f"🆕 <b>Nuevo servicio asignado:</b>\n\n{s}")
+                        ULTIMO_SERVICIO = s
+
+                SERVICIOS_ACTUALES = actuales
+                self.servicios_previos = actuales
+                time.sleep(self.intervalo)
+
+        except Exception as e:
+            logger.error(f"Error en loop principal: {e}")
+            time.sleep(30)
+
+# ------------------------------
+# Flask server
+# ------------------------------
+app = Flask(__name__)
+
+HTML_TEMPLATE = """
+<!doctype html>
+<html>
+<head>
+    <title>HomeServe Bot</title>
+</head>
+<body>
+    <h1>HomeServe Bot</h1>
+    <p>Servicios actuales: {{ cantidad }}</p>
+    <p>Último servicio detectado: {{ ultimo or 'Ninguno aún' }}</p>
+    <form method="get">
+        <button type="submit">Actualizar</button>
+    </form>
+</body>
+</html>
+"""
+
+@app.route("/")
+def home():
+    return render_template_string(
+        HTML_TEMPLATE,
+        cantidad=len(SERVICIOS_ACTUALES),
+        ultimo=ULTIMO_SERVICIO
+    )
+
+# Endpoint para Telegram buttons
+@app.route("/telegram_webhook", methods=["POST"])
+def telegram_webhook():
+    data = request.get_json()
+    if "callback_query" in data:
+        cb = data["callback_query"]
+        if cb["data"] == "REFRESH":
+            servicios = "\n\n".join(SERVICIOS_ACTUALES) or "Ninguno"
+            chat_id = cb["message"]["chat"]["id"]
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            requests.post(url, json={
+                "chat_id": chat_id,
+                "text": f"🔄 <b>Servicios actuales:</b>\n\n{servicios}",
+                "parse_mode": "HTML"
+            })
+    return jsonify({"ok": True})
+
+# ------------------------------
+# Iniciar bot en segundo plano
+# ------------------------------
+def iniciar_bot_thread():
+    scraper = HomeServeScraper(USUARIO, PASSWORD)
+    telegram = TelegramClient(BOT_TOKEN, CHAT_ID)
+    bot = HomeServeBot(scraper, telegram, INTERVALO_SEGUNDOS)
+    bot.iniciar()
+
+threading.Thread(target=iniciar_bot_thread, daemon=True).start()
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
