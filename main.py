@@ -6,6 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask
 
+# VARIABLES RENDER
 USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -24,9 +25,9 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
 
-# -------------------
+# ----------------
 # TELEGRAM
-# -------------------
+# ----------------
 
 def enviar_telegram(texto):
 
@@ -44,9 +45,9 @@ def enviar_telegram(texto):
         print("Error telegram:", e)
 
 
-# -------------------
-# SCRAPER
-# -------------------
+# ----------------
+# LOGIN
+# ----------------
 
 def login(session):
 
@@ -61,13 +62,17 @@ def login(session):
     r = session.post(LOGIN_URL, data=payload)
 
     if "error" in r.text.lower():
+
         print("Login fallo")
         return False
 
     print("Login OK")
-
     return True
 
+
+# ----------------
+# SERVICIOS
+# ----------------
 
 def obtener_servicios(session):
 
@@ -75,21 +80,32 @@ def obtener_servicios(session):
 
     soup = BeautifulSoup(r.text, "html.parser")
 
+    texto = soup.get_text().lower()
+
+    # Detectar cuando no hay servicios
+    if "no hay servicios" in texto:
+
+        print("No hay servicios")
+        return []
+
     lista = []
 
     for tr in soup.find_all("tr"):
 
-        texto = tr.get_text(strip=True)
+        fila = tr.get_text(strip=True)
 
-        if len(texto) > 40:
-            lista.append(texto)
+        if len(fila) > 40:
+
+            if "servicios para ud" not in fila.lower():
+
+                lista.append(fila)
 
     return lista
 
 
-# -------------------
+# ----------------
 # BOT LOOP
-# -------------------
+# ----------------
 
 def bot():
 
@@ -118,7 +134,9 @@ def bot():
                 if nuevos:
                     ULTIMO = nuevos[0]
 
-                enviar_telegram(f"Servicios actuales: {len(nuevos)}")
+                enviar_telegram(
+                    f"Servicios actuales: {len(nuevos)}"
+                )
 
             else:
 
@@ -126,7 +144,9 @@ def bot():
 
                     if s not in SERVICIOS:
 
-                        enviar_telegram("Nuevo servicio:\n\n" + s)
+                        enviar_telegram(
+                            "Nuevo servicio:\n\n" + s
+                        )
 
                         ULTIMO = s
 
@@ -134,14 +154,14 @@ def bot():
 
         except Exception as e:
 
-            print("Error loop:", e)
+            print("Error:", e)
 
         time.sleep(INTERVALO)
 
 
-# -------------------
+# ----------------
 # WEB
-# -------------------
+# ----------------
 
 @app.route("/")
 def home():
@@ -161,8 +181,8 @@ def home():
     """
 
 
-# -------------------
-# START THREAD
-# -------------------
+# ----------------
+# START BOT
+# ----------------
 
 threading.Thread(target=bot, daemon=True).start()
