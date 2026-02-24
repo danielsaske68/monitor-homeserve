@@ -125,7 +125,15 @@ class HomeServeBot:
                     self.servicios_previos = actuales
                     if actuales:
                         todos = "\n\n".join(actuales)
-                        buttons = [[{"text": "Actualizar servicios", "callback_data": "REFRESH"}]]
+                        buttons = [
+                            [
+                                {"text": "🔑 Login", "url": LOGIN_URL},
+                                {"text": "📋 Asignación", "url": ASIGNACION_URL}
+                            ],
+                            [
+                                {"text": "🔄 Actualizar servicios", "callback_data": "REFRESH"}
+                            ]
+                        ]
                         self.telegram.enviar_mensaje(f"📋 <b>Servicios actuales:</b>\n\n{todos}", buttons=buttons)
 
                 # Detectar nuevos servicios
