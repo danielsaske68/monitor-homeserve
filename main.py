@@ -4,11 +4,11 @@ import threading
 import logging
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask
+from flask import Flask, render_template_string
 from dotenv import load_dotenv
 
 # ------------------------------
-# Configuracion desde .env o Environment
+# Configuracion
 # ------------------------------
 load_dotenv()
 
@@ -27,6 +27,12 @@ TELEGRAM_API_URL = "https://api.telegram.org"
 # ------------------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ------------------------------
+# Variables compartidas para web
+# ------------------------------
+SERVICIOS_ACTUALES = set()
+ULTIMO_SERVICIO = None
 
 # ------------------------------
 # Telegram
@@ -98,44 +104,66 @@ class HomeServeBot:
         self.servicios_previos = None
 
     def iniciar(self):
+        global SERVICIOS_ACTUALES, ULTIMO_SERVICIO
         if not self.scraper.login():
             logger.error("No se pudo conectar a HomeServe")
             return
         try:
             while True:
-                self.revisar_servicios()
+                actuales = self.scraper.obtener_servicios()
+                if self.servicios_previos is None:
+                    self.servicios_previos = actuales
+                nuevos = actuales - self.servicios_previos if self.servicios_previos else set()
+                for s in nuevos:
+                    self.telegram.enviar_mensaje(f"NUEVO SERVICIO ASIGNADO:\n\n{s}")
+                    logger.info("Nuevo servicio detectado")
+                    ULTIMO_SERVICIO = s
+                SERVICIOS_ACTUALES = actuales
+                self.servicios_previos = actuales
                 time.sleep(self.intervalo)
         except Exception as e:
             logger.error(f"Error en loop principal: {e}")
             time.sleep(30)
 
-    def revisar_servicios(self):
-        actuales = self.scraper.obtener_servicios()
-        if self.servicios_previos is None:
-            self.servicios_previos = actuales
-            return
-        nuevos = actuales - self.servicios_previos
-        for s in nuevos:
-            self.telegram.enviar_mensaje(f"NUEVO SERVICIO ASIGNADO:\n\n{s}")
-            logger.info("Nuevo servicio detectado")
-        self.servicios_previos = actuales
-
 # ------------------------------
-# Flask server para Render
+# Flask server
 # ------------------------------
 app = Flask(__name__)
 
+HTML_TEMPLATE = """
+<!doctype html>
+<html>
+<head>
+    <title>HomeServe Bot</title>
+</head>
+<body>
+    <h1>HomeServe Bot</h1>
+    <p>Servicios actuales: {{ cantidad }}</p>
+    <p>Último servicio detectado: {{ ultimo or 'Ninguno aún' }}</p>
+    <form method="get">
+        <button type="submit">Actualizar</button>
+    </form>
+</body>
+</html>
+"""
+
 @app.route("/")
 def home():
-    return "HomeServe Bot funcionando"
+    return render_template_string(
+        HTML_TEMPLATE,
+        cantidad=len(SERVICIOS_ACTUALES),
+        ultimo=ULTIMO_SERVICIO
+    )
 
+# ------------------------------
+# Iniciar bot en segundo plano
+# ------------------------------
 def iniciar_bot_thread():
     scraper = HomeServeScraper(USUARIO, PASSWORD)
     telegram = TelegramClient(BOT_TOKEN, CHAT_ID)
     bot = HomeServeBot(scraper, telegram, INTERVALO_SEGUNDOS)
     bot.iniciar()
 
-# Ejecutar bot en segundo plano
 threading.Thread(target=iniciar_bot_thread, daemon=True).start()
 
 if __name__ == "__main__":
