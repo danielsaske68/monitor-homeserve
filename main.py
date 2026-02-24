@@ -117,7 +117,7 @@ def bot():
     if not login(session):
         return
 
-    enviar_telegram("BOT HOMESERVE INICIADO")
+    enviar_telegram("QUE SE DICE PAMPARA")
 
     while True:
 
