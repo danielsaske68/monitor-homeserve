@@ -1,7 +1,9 @@
 import os
 import time
+import threading
 import requests
 from bs4 import BeautifulSoup
+from flask import Flask
 import logging
 
 
@@ -21,7 +23,7 @@ LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PAS
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
 
-# ---------- LOGGING ----------
+# ---------- LOGS ----------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,42 +35,42 @@ logger = logging.getLogger()
 
 # ---------- TELEGRAM ----------
 
-def enviar_telegram(mensaje):
+def enviar_telegram(texto):
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url=f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    data = {
-        "chat_id": CHAT_ID,
-        "text": mensaje
+    data={
+        "chat_id":CHAT_ID,
+        "text":texto
     }
 
     try:
 
-        requests.post(url, data=data, timeout=10)
+        requests.post(url,data=data,timeout=10)
 
-        logger.info("Mensaje enviado a Telegram")
+        logger.info("Telegram enviado")
 
     except Exception as e:
 
-        logger.error("Error Telegram: " + str(e))
+        logger.error("Telegram error "+str(e))
 
 
 # ---------- LOGIN ----------
 
 def login(session):
 
-    payload = {
-        "CODIGO": USUARIO,
-        "PASSW": PASSWORD
+    payload={
+        "CODIGO":USUARIO,
+        "PASSW":PASSWORD
     }
 
     try:
 
         session.get(LOGIN_URL)
 
-        r = session.post(LOGIN_URL, data=payload, timeout=15)
+        r=session.post(LOGIN_URL,data=payload,timeout=15)
 
-        if r.status_code == 200:
+        if r.status_code==200:
 
             logger.info("Login correcto")
 
@@ -76,7 +78,7 @@ def login(session):
 
     except Exception as e:
 
-        logger.error("Error login " + str(e))
+        logger.error("Error login "+str(e))
 
     return False
 
@@ -85,47 +87,47 @@ def login(session):
 
 def obtener_servicios(session):
 
-    servicios = set()
+    servicios=set()
 
     try:
 
-        r = session.get(ASIGNACION_URL, timeout=15)
+        r=session.get(ASIGNACION_URL,timeout=15)
 
-        soup = BeautifulSoup(r.text, "lxml")
+        soup=BeautifulSoup(r.text,"lxml")
 
-        filas = soup.find_all("tr")
+        filas=soup.find_all("tr")
 
         for fila in filas:
 
-            texto = fila.get_text(" ", strip=True)
+            texto=fila.get_text(" ",strip=True)
 
-            if len(texto) > 40:
+            if len(texto)>40:
 
                 servicios.add(texto)
 
-        logger.info(f"Servicios encontrados: {len(servicios)}")
+        logger.info("Servicios encontrados "+str(len(servicios)))
 
     except Exception as e:
 
-        logger.error("Error scraping " + str(e))
+        logger.error("Error scraping "+str(e))
 
     return servicios
 
 
 # ---------- BOT ----------
 
-def iniciar_bot():
+def bot_loop():
 
-    session = requests.Session()
+    session=requests.Session()
 
     if not login(session):
 
-        logger.error("No se pudo loguear")
+        logger.error("No login")
 
         return
 
 
-    servicios_previos = obtener_servicios(session)
+    servicios_previos=obtener_servicios(session)
 
     logger.info("Estado inicial guardado")
 
@@ -134,22 +136,21 @@ def iniciar_bot():
 
         try:
 
-            servicios_actuales = obtener_servicios(session)
+            actuales=obtener_servicios(session)
 
-            nuevos = servicios_actuales - servicios_previos
+            nuevos=actuales-servicios_previos
+
 
             if nuevos:
 
-                for servicio in nuevos:
+                for s in nuevos:
 
-                    mensaje = "🚨 NUEVO SERVICIO 🚨\n\n" + servicio
+                    enviar_telegram("🚨 NUEVO SERVICIO 🚨\n\n"+s)
 
-                    enviar_telegram(mensaje)
-
-                    logger.info("Nuevo servicio detectado")
+                    logger.info("Nuevo servicio")
 
 
-                servicios_previos = servicios_actuales
+                servicios_previos=actuales
 
 
             time.sleep(INTERVALO)
@@ -157,15 +158,36 @@ def iniciar_bot():
 
         except Exception as e:
 
-            logger.error("Error loop " + str(e))
+            logger.error("Loop error "+str(e))
 
             time.sleep(30)
 
 
+# ---------- WEB SERVER ----------
+
+app=Flask(__name__)
+
+
+@app.route("/")
+def home():
+
+    return "HomeServe Bot activo"
+
+
 # ---------- START ----------
 
-if __name__ == "__main__":
+if __name__=="__main__":
 
-    logger.info("Bot HomeServe iniciado")
+    logger.info("Iniciando bot HomeServe")
 
-    iniciar_bot()
+
+    hilo=threading.Thread(target=bot_loop)
+
+    hilo.daemon=True
+
+    hilo.start()
+
+
+    port=int(os.environ.get("PORT",10000))
+
+    app.run(host="0.0.0.0",port=port)
