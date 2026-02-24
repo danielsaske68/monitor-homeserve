@@ -7,222 +7,295 @@ from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template_string
 from dotenv import load_dotenv
 
-# ------------------------------
-# Configuración
-# ------------------------------
+# ---------------- CONFIG ----------------
+
 load_dotenv()
 
 USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-INTERVALO_SEGUNDOS = int(os.getenv("INTERVALO_SEGUNDOS", 120))
+INTERVALO_SEGUNDOS = int(os.getenv("INTERVALO_SEGUNDOS",120))
+WEB_URL = os.getenv("WEB_URL")  # https://monitor-homeserve.onrender.com
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ------------------------------
-# Logging
-# ------------------------------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# ---------------- LOG ----------------
 
-# ------------------------------
-# Variables compartidas
-# ------------------------------
-SERVICIOS_ACTUALES = set()
-ULTIMO_SERVICIO = None
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
 
-# ------------------------------
-# Telegram Client
-# ------------------------------
+# ---------------- VARIABLES ----------------
+
+SERVICIOS_ACTUALES=set()
+SERVICIOS_NUEVOS=set()
+ULTIMO_SERVICIO=None
+
+# ---------------- TELEGRAM ----------------
+
 class TelegramClient:
-    def __init__(self, bot_token, chat_id):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
 
-    def enviar_mensaje(self, mensaje, buttons=None):
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        data = {
-            "chat_id": self.chat_id,
-            "text": mensaje,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True
+    def enviar(self,mensaje,botones=None):
+
+        url=f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+        data={
+        "chat_id":CHAT_ID,
+        "text":mensaje,
+        "parse_mode":"HTML"
         }
-        if buttons:
-            data["reply_markup"] = {"inline_keyboard": buttons}
-        try:
-            r = requests.post(url, json=data, timeout=10)
-            r.raise_for_status()
-            logger.info("Mensaje enviado a Telegram")
-            return True
-        except Exception as e:
-            logger.error(f"Error enviando Telegram: {e}")
-            return False
 
-# ------------------------------
-# HomeServe Scraper mejorado
-# ------------------------------
+        if botones:
+            data["reply_markup"]={"inline_keyboard":botones}
+
+        requests.post(url,json=data)
+
+
+# ---------------- SCRAPER ----------------
+
 class HomeServeScraper:
-    def __init__(self, usuario, password):
-        self.usuario = usuario
-        self.password = password
-        self.session = requests.Session()
+
+    def __init__(self):
+        self.session=requests.Session()
 
     def login(self):
-        payload = {"CODIGO": self.usuario, "PASSW": self.password, "BTN": "Aceptar"}
-        headers = {"User-Agent": "Mozilla/5.0"}
-        try:
-            self.session.get(LOGIN_URL, headers=headers)
-            r = self.session.post(LOGIN_URL, data=payload, headers=headers, timeout=10)
-            if "error" in r.text.lower():
-                logger.error("Login fallido")
-                return False
-            logger.info("Login exitoso")
-            return True
-        except Exception as e:
-            logger.error(f"Error login: {e}")
+
+        payload={
+        "CODIGO":USUARIO,
+        "PASSW":PASSWORD,
+        "BTN":"Aceptar"
+        }
+
+        headers={"User-Agent":"Mozilla/5.0"}
+
+        self.session.get(LOGIN_URL,headers=headers)
+
+        r=self.session.post(LOGIN_URL,data=payload,headers=headers)
+
+        if "error" in r.text.lower():
+            logger.error("Login fallido")
             return False
 
-    def obtener_servicios(self):
-        try:
-            r = self.session.get(ASIGNACION_URL, timeout=10)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
+        logger.info("Login correcto")
+        return True
 
-            servicios = set()
 
-            # Intentar detectar servicios en cualquier <tr> con contenido relevante
-            for fila in soup.find_all("tr"):
-                tds = fila.find_all("td")
-                for td in tds:
-                    texto = td.get_text(strip=True)
-                    if texto and len(texto) > 20:  # Ajusta el número si la info es más corta
-                        servicios.add(texto)
+    def obtener(self):
 
-            # Si no se encuentra nada, intentar extraer de divs (por si la página cambió)
-            if not servicios:
-                for div in soup.find_all("div"):
-                    texto = div.get_text(strip=True)
-                    if texto and len(texto) > 20:
-                        servicios.add(texto)
+        r=self.session.get(ASIGNACION_URL)
 
-            logger.info(f"Servicios encontrados: {servicios}")
-            return servicios
-        except Exception as e:
-            logger.error(f"Error obteniendo servicios: {e}")
-            return set()
+        soup=BeautifulSoup(r.text,"html.parser")
 
-# ------------------------------
-# Bot
-# ------------------------------
-class HomeServeBot:
-    def __init__(self, scraper, telegram, intervalo):
-        self.scraper = scraper
-        self.telegram = telegram
-        self.intervalo = intervalo
-        self.servicios_previos = None
+        servicios=set()
+
+        for fila in soup.find_all("tr"):
+
+            texto=fila.get_text(" ",strip=True)
+
+            if len(texto)>25:
+                servicios.add(texto)
+
+        logger.info(f"Servicios detectados {len(servicios)}")
+
+        return servicios
+
+
+# ---------------- BOT ----------------
+
+class Bot:
+
+    def __init__(self):
+
+        self.scraper=HomeServeScraper()
+        self.tg=TelegramClient()
+
+        self.previos=None
+
+
+    def botones(self):
+
+        return [
+
+        [
+        {"text":"🔑 Login","url":LOGIN_URL},
+        {"text":"📋 Asignación","url":ASIGNACION_URL}
+        ],
+
+        [
+        {"text":"🆕 Ver nuevos","callback_data":"NEW"},
+        {"text":"📊 Ver actuales","callback_data":"ALL"}
+        ],
+
+        [
+        {"text":"🌐 Abrir web","url":WEB_URL}
+        ]
+
+        ]
+
 
     def iniciar(self):
-        global SERVICIOS_ACTUALES, ULTIMO_SERVICIO
-        if not self.scraper.login():
-            logger.error("No se pudo conectar a HomeServe")
-            return
 
-        try:
-            while True:
-                actuales = self.scraper.obtener_servicios()
+        global SERVICIOS_ACTUALES
+        global SERVICIOS_NUEVOS
+        global ULTIMO_SERVICIO
 
-                # Enviar todos los servicios al inicio
-                if self.servicios_previos is None:
-                    self.servicios_previos = actuales
-                    if actuales:
-                        todos = "\n\n".join(actuales)
-                        buttons = [
-                            [
-                                {"text": "🔑 Login", "url": LOGIN_URL},
-                                {"text": "📋 Asignación", "url": ASIGNACION_URL}
-                            ],
-                            [
-                                {"text": "🔄 Actualizar servicios", "callback_data": "REFRESH"}
-                            ]
-                        ]
-                        self.telegram.enviar_mensaje(f"📋 <b>Servicios actuales:</b>\n\n{todos}", buttons=buttons)
+        self.scraper.login()
 
-                # Detectar nuevos servicios
-                nuevos = actuales - self.servicios_previos if self.servicios_previos else set()
-                if nuevos:
-                    for s in nuevos:
-                        self.telegram.enviar_mensaje(f"🆕 <b>Nuevo servicio asignado:</b>\n\n{s}")
-                        ULTIMO_SERVICIO = s
+        while True:
 
-                SERVICIOS_ACTUALES = actuales
-                self.servicios_previos = actuales
-                time.sleep(self.intervalo)
+            actuales=self.scraper.obtener()
 
-        except Exception as e:
-            logger.error(f"Error en loop principal: {e}")
-            time.sleep(30)
+            if self.previos is None:
 
-# ------------------------------
-# Flask
-# ------------------------------
-app = Flask(__name__)
+                self.previos=actuales
 
-HTML_TEMPLATE = """
-<!doctype html>
-<html>
-<head>
-    <title>HomeServe Bot</title>
-</head>
-<body>
-    <h1>HomeServe Bot</h1>
-    <p>Servicios actuales: {{ cantidad }}</p>
-    <p>Último servicio detectado: {{ ultimo or 'Ninguno aún' }}</p>
-    <form method="get">
-        <button type="submit">Actualizar</button>
-    </form>
-</body>
-</html>
+                SERVICIOS_ACTUALES=actuales
+
+                self.tg.enviar(
+
+                f"✅ Bot iniciado\nServicios actuales: {len(actuales)}",
+
+                self.botones()
+
+                )
+
+
+            nuevos=actuales-self.previos
+
+            if nuevos:
+
+                SERVICIOS_NUEVOS=nuevos
+
+                for s in nuevos:
+
+                    self.tg.enviar(
+
+                    f"🆕 NUEVO SERVICIO\n\n{s}"
+
+                    )
+
+                    ULTIMO_SERVICIO=s
+
+
+            SERVICIOS_ACTUALES=actuales
+
+            self.previos=actuales
+
+            time.sleep(INTERVALO_SEGUNDOS)
+
+
+bot=Bot()
+
+threading.Thread(target=bot.iniciar,daemon=True).start()
+
+# ---------------- WEB ----------------
+
+app=Flask(__name__)
+
+HTML="""
+
+<h1>Monitor HomeServe</h1>
+
+<h2>Servicios actuales: {{cantidad}}</h2>
+
+<h3>Último:</h3>
+
+{{ultimo}}
+
+<hr>
+
+<h3>Lista:</h3>
+
+{% for s in servicios %}
+
+<p>{{s}}</p>
+
+{% endfor %}
+
 """
 
+
 @app.route("/")
+
 def home():
+
     return render_template_string(
-        HTML_TEMPLATE,
-        cantidad=len(SERVICIOS_ACTUALES),
-        ultimo=ULTIMO_SERVICIO
+
+    HTML,
+
+    cantidad=len(SERVICIOS_ACTUALES),
+
+    ultimo=ULTIMO_SERVICIO,
+
+    servicios=SERVICIOS_ACTUALES
+
     )
 
-# Webhook Telegram para botones
-@app.route("/telegram_webhook", methods=["POST"])
-def telegram_webhook():
-    data = request.get_json()
+
+# ---------------- TELEGRAM BOTONES ----------------
+
+@app.route("/telegram_webhook",methods=["POST"])
+
+def telegram():
+
+    global SERVICIOS_ACTUALES
+    global SERVICIOS_NUEVOS
+
+    data=request.json
+
     if "callback_query" in data:
-        cb = data["callback_query"]
-        if cb["data"] == "REFRESH":
-            servicios = "\n\n".join(SERVICIOS_ACTUALES) or "Ninguno"
-            chat_id = cb["message"]["chat"]["id"]
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            requests.post(url, json={
-                "chat_id": chat_id,
-                "text": f"🔄 <b>Servicios actuales:</b>\n\n{servicios}",
-                "parse_mode": "HTML"
+
+        chat=data["callback_query"]["message"]["chat"]["id"]
+
+        accion=data["callback_query"]["data"]
+
+        if accion=="ALL":
+
+            texto="\n\n".join(SERVICIOS_ACTUALES)
+
+            requests.post(
+
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+
+            json={
+
+            "chat_id":chat,
+            "text":f"📊 SERVICIOS ACTUALES\n\n{texto}",
+            "parse_mode":"HTML"
+
             })
-    return jsonify({"ok": True})
 
-# ------------------------------
-# Iniciar bot en segundo plano
-# ------------------------------
-def iniciar_bot_thread():
-    scraper = HomeServeScraper(USUARIO, PASSWORD)
-    telegram = TelegramClient(BOT_TOKEN, CHAT_ID)
-    bot = HomeServeBot(scraper, telegram, INTERVALO_SEGUNDOS)
-    bot.iniciar()
+        if accion=="NEW":
 
-threading.Thread(target=iniciar_bot_thread, daemon=True).start()
+            if SERVICIOS_NUEVOS:
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+                texto="\n\n".join(SERVICIOS_NUEVOS)
+
+            else:
+
+                texto="No hay servicios nuevos"
+
+            requests.post(
+
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+
+            json={
+
+            "chat_id":chat,
+            "text":f"🆕 SERVICIOS NUEVOS\n\n{texto}",
+            "parse_mode":"HTML"
+
+            })
+
+
+    return jsonify(ok=True)
+
+
+# ---------------- START ----------------
+
+if __name__=="__main__":
+
+    port=int(os.environ.get("PORT",10000))
+
+    app.run(host="0.0.0.0",port=port)
