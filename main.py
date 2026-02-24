@@ -14,7 +14,7 @@ USUARIO=os.getenv("USUARIO")
 PASSWORD=os.getenv("PASSWORD")
 BOT_TOKEN=os.getenv("BOT_TOKEN")
 CHAT_ID=os.getenv("CHAT_ID")
-INTERVALO=int(os.getenv("INTERVALO_SEGUNDOS",60))
+INTERVALO=int(os.getenv("INTERVALO_SEGUNDOS",40))
 
 LOGIN_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
@@ -25,11 +25,10 @@ logging.basicConfig(level=logging.INFO)
 logger=logging.getLogger("main")
 
 SERVICIOS_ACTUALES={}
-SERVICIOS_ANTERIORES={}
 
-##########################################################
+###########################################################
 # TELEGRAM
-##########################################################
+###########################################################
 
 class Telegram:
 
@@ -39,21 +38,16 @@ class Telegram:
             "inline_keyboard":[
 
                 [
-                    {"text":"🔐 Login",
-                     "callback_data":"LOGIN"},
-
-                    {"text":"🔄 Actualizar",
-                     "callback_data":"REFRESH"}
+                    {"text":"🔐 Login","callback_data":"LOGIN"},
+                    {"text":"🔄 Actualizar","callback_data":"REFRESH"}
                 ],
 
                 [
-                    {"text":"📋 Ver servicios",
-                     "callback_data":"SERVICIOS"}
+                    {"text":"📋 Ver servicios","callback_data":"SERVICIOS"}
                 ],
 
                 [
-                    {"text":"🌐 Ir a asignación",
-                     "url":ASIGNACION_URL}
+                    {"text":"🌐 Ir asignación","url":ASIGNACION_URL}
                 ]
 
             ]
@@ -66,17 +60,15 @@ class Telegram:
                 "text":texto,
                 "parse_mode":"HTML",
                 "reply_markup":botones
-            }
+            },
+            timeout=10
         )
-
-        logger.info("Mensaje Telegram enviado")
-
 
 telegram=Telegram()
 
-##########################################################
+###########################################################
 # HOMESERVE
-##########################################################
+###########################################################
 
 class HomeServe:
 
@@ -86,87 +78,69 @@ class HomeServe:
 
     def login(self):
 
-        try:
+        payload={
+            "CODIGO":USUARIO,
+            "PASSW":PASSWORD,
+            "BTN":"Aceptar"
+        }
 
-            payload={
-                "CODIGO":USUARIO,
-                "PASSW":PASSWORD,
-                "BTN":"Aceptar"
-            }
+        self.session.get(LOGIN_URL)
 
-            self.session.get(LOGIN_URL)
+        r=self.session.post(LOGIN_URL,data=payload)
 
-            r=self.session.post(
-                LOGIN_URL,
-                data=payload,
-                timeout=15
-            )
+        if "error" in r.text.lower():
 
-            if "error" in r.text.lower():
-
-                logger.error("Login fallo")
-                return False
-
-            logger.info("Login OK")
-
-            return True
-
-        except Exception as e:
-
-            logger.error(e)
+            logger.error("Login fallo")
             return False
 
+        logger.info("Login OK")
+        return True
 
-    ##########################################################
-    # DETECTOR REAL POR ID
-    ##########################################################
+
+    ###########################################################
+    # PARSER PROFESIONAL POR ID
+    ###########################################################
 
     def obtener(self):
 
-        try:
+        r=self.session.get(ASIGNACION_URL,timeout=15)
 
-            r=self.session.get(ASIGNACION_URL,timeout=15)
+        soup=BeautifulSoup(r.text,"html.parser")
 
-            soup=BeautifulSoup(r.text,"html.parser")
+        texto=soup.get_text("\n")
 
-            texto=soup.get_text(" ",strip=True)
+        # separar por ID real
+        bloques=re.split(r"\n(?=\d{7,8}\s)",texto)
 
-            ids=re.findall(r"\b\d{6,9}\b",texto)
+        servicios={}
 
-            servicios={}
+        for b in bloques:
 
-            for idserv in ids:
+            m=re.search(r"\b\d{7,8}\b",b)
 
-                if idserv not in servicios:
+            if m:
 
-                    pos=texto.find(idserv)
+                idserv=m.group(0)
 
-                    bloque=texto[pos:pos+400]
+                limpio=" ".join(b.split())
 
-                    servicios[idserv]=bloque
+                servicios[idserv]=limpio
 
 
-            logger.info(f"Servicios detectados: {len(servicios)}")
+        logger.info(f"Servicios detectados: {len(servicios)}")
 
-            return servicios
-
-        except Exception as e:
-
-            logger.error(e)
-
-            return {}
+        return servicios
 
 
 homeserve=HomeServe()
 
-##########################################################
-# BOT LOOP
-##########################################################
+###########################################################
+# LOOP
+###########################################################
 
 def bot_loop():
 
     global SERVICIOS_ACTUALES
-    global SERVICIOS_ANTERIORES
 
     homeserve.login()
 
@@ -174,30 +148,17 @@ def bot_loop():
 
         try:
 
-            nuevos={}
-
             actuales=homeserve.obtener()
 
-            for k,v in actuales.items():
+            for idserv,servicio in actuales.items():
 
-                if k not in SERVICIOS_ACTUALES:
-
-                    nuevos[k]=v
-
-
-            if nuevos:
-
-                for s in nuevos.values():
+                if idserv not in SERVICIOS_ACTUALES:
 
                     telegram.enviar(
-                        "🆕 <b>Nuevo servicio detectado</b>\n\n"+s
+                        f"🆕 <b>Nuevo servicio</b>\n\n{servicio}"
                     )
 
-
-            SERVICIOS_ANTERIORES=SERVICIOS_ACTUALES.copy()
-
             SERVICIOS_ACTUALES=actuales
-
 
             time.sleep(INTERVALO)
 
@@ -205,12 +166,13 @@ def bot_loop():
 
             logger.error(e)
 
-            time.sleep(30)
+            homeserve.login()
 
+            time.sleep(20)
 
-##########################################################
+###########################################################
 # FLASK
-##########################################################
+###########################################################
 
 app=Flask(__name__)
 
@@ -223,9 +185,9 @@ HomeServe Monitor OK
 Servicios actuales: {len(SERVICIOS_ACTUALES)}
 """
 
-##########################################################
+###########################################################
 # TELEGRAM BUTTONS
-##########################################################
+###########################################################
 
 @app.route("/telegram_webhook",methods=["POST"])
 def telegram_webhook():
@@ -242,7 +204,7 @@ def telegram_webhook():
 
             ok=homeserve.login()
 
-            txt="✅ Login correcto" if ok else "❌ Login fallo"
+            txt="✅ Login OK" if ok else "❌ Login error"
 
 
         elif accion=="REFRESH":
@@ -278,24 +240,21 @@ def telegram_webhook():
 
     return jsonify(ok=True)
 
-##########################################################
-# START THREAD
-##########################################################
+###########################################################
+# THREAD
+###########################################################
 
 threading.Thread(
     target=bot_loop,
     daemon=True
 ).start()
 
-##########################################################
+###########################################################
 # RUN
-##########################################################
+###########################################################
 
 if __name__=="__main__":
 
     port=int(os.environ.get("PORT",10000))
 
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    app.run(host="0.0.0.0",port=port)
