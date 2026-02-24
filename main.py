@@ -2,61 +2,62 @@ import os
 import time
 import threading
 import logging
-import requests
 import re
+import requests
 from bs4 import BeautifulSoup
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask,request,jsonify
 from dotenv import load_dotenv
-
-# ---------------- CONFIG ----------------
 
 load_dotenv()
 
-USUARIO = os.getenv("USUARIO")
-PASSWORD = os.getenv("PASSWORD")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+USUARIO=os.getenv("USUARIO")
+PASSWORD=os.getenv("PASSWORD")
+BOT_TOKEN=os.getenv("BOT_TOKEN")
+CHAT_ID=os.getenv("CHAT_ID")
+INTERVALO=int(os.getenv("INTERVALO_SEGUNDOS",60))
 
-INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS",60))
-
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+LOGIN_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+ASIGNACION_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
 TELEGRAM_API=f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ---------------- LOG ----------------
-
 logging.basicConfig(level=logging.INFO)
-logger=logging.getLogger(__name__)
-
-# ---------------- VARIABLES ----------------
+logger=logging.getLogger("main")
 
 SERVICIOS_ACTUALES={}
 SERVICIOS_ANTERIORES={}
 
-ULTIMO=None
-
-# ---------------- TELEGRAM ----------------
+##########################################################
+# TELEGRAM
+##########################################################
 
 class Telegram:
 
     def enviar(self,texto):
 
-        botones=[
-            [
-                {"text":"🔐 Login","callback_data":"LOGIN"},
-                {"text":"🔄 Actualizar","callback_data":"REFRESH"}
-            ],
-            [
-                {"text":"📋 Ver servicios","callback_data":"SERVICIOS"}
-            ],
-            [
-                {
-                 "text":"🌐 Asignación",
-                 "url":ASIGNACION_URL
-                }
+        botones={
+            "inline_keyboard":[
+
+                [
+                    {"text":"🔐 Login",
+                     "callback_data":"LOGIN"},
+
+                    {"text":"🔄 Actualizar",
+                     "callback_data":"REFRESH"}
+                ],
+
+                [
+                    {"text":"📋 Ver servicios",
+                     "callback_data":"SERVICIOS"}
+                ],
+
+                [
+                    {"text":"🌐 Ir a asignación",
+                     "url":ASIGNACION_URL}
+                ]
+
             ]
-        ]
+        }
 
         requests.post(
             TELEGRAM_API+"/sendMessage",
@@ -64,16 +65,18 @@ class Telegram:
                 "chat_id":CHAT_ID,
                 "text":texto,
                 "parse_mode":"HTML",
-                "reply_markup":{
-                    "inline_keyboard":botones
-                }
-            },
-            timeout=10
+                "reply_markup":botones
+            }
         )
+
+        logger.info("Mensaje Telegram enviado")
+
 
 telegram=Telegram()
 
-# ---------------- SCRAPER ----------------
+##########################################################
+# HOMESERVE
+##########################################################
 
 class HomeServe:
 
@@ -83,84 +86,87 @@ class HomeServe:
 
     def login(self):
 
-        payload={
-            "CODIGO":USUARIO,
-            "PASSW":PASSWORD,
-            "BTN":"Aceptar"
-        }
+        try:
 
-        self.session.get(LOGIN_URL)
+            payload={
+                "CODIGO":USUARIO,
+                "PASSW":PASSWORD,
+                "BTN":"Aceptar"
+            }
 
-        r=self.session.post(LOGIN_URL,data=payload)
+            self.session.get(LOGIN_URL)
 
-        if "error" in r.text.lower():
+            r=self.session.post(
+                LOGIN_URL,
+                data=payload,
+                timeout=15
+            )
 
-            logger.info("Login fallo")
+            if "error" in r.text.lower():
+
+                logger.error("Login fallo")
+                return False
+
+            logger.info("Login OK")
+
+            return True
+
+        except Exception as e:
+
+            logger.error(e)
             return False
 
-        logger.info("Login OK")
 
-        return True
+    ##########################################################
+    # DETECTOR REAL POR ID
+    ##########################################################
 
     def obtener(self):
 
-        r=self.session.get(ASIGNACION_URL)
+        try:
 
-        soup=BeautifulSoup(r.text,"html.parser")
+            r=self.session.get(ASIGNACION_URL,timeout=15)
 
-        texto=soup.get_text("\n")
+            soup=BeautifulSoup(r.text,"html.parser")
 
-        servicios={}
+            texto=soup.get_text(" ",strip=True)
 
-        lineas=texto.split("\n")
+            ids=re.findall(r"\b\d{6,9}\b",texto)
 
-        servicio_actual=[]
-        id_actual=None
+            servicios={}
 
-        for linea in lineas:
+            for idserv in ids:
 
-            linea=linea.strip()
+                if idserv not in servicios:
 
-            if not linea:
-                continue
+                    pos=texto.find(idserv)
 
-            # Detecta ID servicio (ej 15431174)
-            m=re.search(r"\b1\d{7}\b",linea)
+                    bloque=texto[pos:pos+400]
 
-            if m:
+                    servicios[idserv]=bloque
 
-                if id_actual:
 
-                    servicios[id_actual]=" ".join(servicio_actual)
+            logger.info(f"Servicios detectados: {len(servicios)}")
 
-                id_actual=m.group()
+            return servicios
 
-                servicio_actual=[linea]
+        except Exception as e:
 
-            else:
+            logger.error(e)
 
-                if id_actual:
-
-                    servicio_actual.append(linea)
-
-        if id_actual:
-
-            servicios[id_actual]=" ".join(servicio_actual)
-
-        logger.info(f"Servicios detectados: {len(servicios)}")
-
-        return servicios
+            return {}
 
 
 homeserve=HomeServe()
 
-# ---------------- BOT ----------------
+##########################################################
+# BOT LOOP
+##########################################################
 
-def loop():
+def bot_loop():
 
     global SERVICIOS_ACTUALES
     global SERVICIOS_ANTERIORES
-    global ULTIMO
 
     homeserve.login()
 
@@ -168,37 +174,30 @@ def loop():
 
         try:
 
-            SERVICIOS_ACTUALES=homeserve.obtener()
+            nuevos={}
 
-            if not SERVICIOS_ANTERIORES:
+            actuales=homeserve.obtener()
 
-                SERVICIOS_ANTERIORES=SERVICIOS_ACTUALES.copy()
+            for k,v in actuales.items():
 
-                if SERVICIOS_ACTUALES:
+                if k not in SERVICIOS_ACTUALES:
 
-                    texto="📋 <b>Servicios actuales</b>\n\n"
+                    nuevos[k]=v
 
-                    for s in SERVICIOS_ACTUALES.values():
-
-                        texto+=s+"\n\n"
-
-                    telegram.enviar(texto)
-
-            nuevos=set(SERVICIOS_ACTUALES)-set(SERVICIOS_ANTERIORES)
 
             if nuevos:
 
-                for id in nuevos:
+                for s in nuevos.values():
 
-                    texto="🆕 <b>Nuevo servicio</b>\n\n"
+                    telegram.enviar(
+                        "🆕 <b>Nuevo servicio detectado</b>\n\n"+s
+                    )
 
-                    texto+=SERVICIOS_ACTUALES[id]
-
-                    telegram.enviar(texto)
-
-                    ULTIMO=SERVICIOS_ACTUALES[id]
 
             SERVICIOS_ANTERIORES=SERVICIOS_ACTUALES.copy()
+
+            SERVICIOS_ACTUALES=actuales
+
 
             time.sleep(INTERVALO)
 
@@ -206,50 +205,30 @@ def loop():
 
             logger.error(e)
 
-            time.sleep(20)
+            time.sleep(30)
 
 
-threading.Thread(target=loop,daemon=True).start()
-
-# ---------------- FLASK ----------------
+##########################################################
+# FLASK
+##########################################################
 
 app=Flask(__name__)
-
-HTML="""
-<h1>HomeServe BOT</h1>
-
-Servicios detectados: {{n}}
-
-<br><br>
-
-Último servicio:
-
-<br><br>
-
-{{u}}
-
-<br><br>
-
-<form>
-
-<button>Actualizar</button>
-
-</form>
-"""
 
 @app.route("/")
 def home():
 
-    return render_template_string(
-        HTML,
-        n=len(SERVICIOS_ACTUALES),
-        u=ULTIMO
-    )
+    return f"""
+HomeServe Monitor OK
 
-# ---------------- TELEGRAM CALLBACK ----------------
+Servicios actuales: {len(SERVICIOS_ACTUALES)}
+"""
+
+##########################################################
+# TELEGRAM BUTTONS
+##########################################################
 
 @app.route("/telegram_webhook",methods=["POST"])
-def telegram():
+def telegram_webhook():
 
     data=request.json
 
@@ -265,17 +244,19 @@ def telegram():
 
             txt="✅ Login correcto" if ok else "❌ Login fallo"
 
+
         elif accion=="REFRESH":
 
             SERVICIOS_ACTUALES.update(homeserve.obtener())
 
             txt="🔄 Actualizado"
 
+
         elif accion=="SERVICIOS":
 
             if SERVICIOS_ACTUALES:
 
-                txt="📋 Servicios actuales\n\n"
+                txt="📋 <b>Servicios actuales</b>\n\n"
 
                 for s in SERVICIOS_ACTUALES.values():
 
@@ -284,6 +265,7 @@ def telegram():
             else:
 
                 txt="No hay servicios"
+
 
         requests.post(
             TELEGRAM_API+"/sendMessage",
@@ -296,10 +278,24 @@ def telegram():
 
     return jsonify(ok=True)
 
-# ---------------- RUN ----------------
+##########################################################
+# START THREAD
+##########################################################
+
+threading.Thread(
+    target=bot_loop,
+    daemon=True
+).start()
+
+##########################################################
+# RUN
+##########################################################
 
 if __name__=="__main__":
 
-    port=int(os.getenv("PORT",10000))
+    port=int(os.environ.get("PORT",10000))
 
-    app.run(host="0.0.0.0",port=port)
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
