@@ -36,10 +36,11 @@ class Telegram:
             "inline_keyboard": [
                 [
                     {"text": "🔐 Login", "callback_data": "LOGIN"},
-                    {"text": "🔄 Actualizar", "callback_data": "REFRESH"}
+                    {"text": "🔄 Refrescar (solo memoria)", "callback_data": "REFRESH"}
                 ],
                 [
-                    {"text": "📋 Ver servicios", "callback_data": "SERVICIOS"}
+                    {"text": "🆕 Servicios nuevos", "callback_data": "SERVICIOS_NUEVOS"},
+                    {"text": "📋 Todos los servicios", "callback_data": "TODOS_SERVICIOS"}
                 ],
                 [
                     {"text": "🌐 Ir asignación", "url": ASIGNACION_URL}
@@ -152,19 +153,27 @@ def telegram_webhook():
             txt = "✅ Login OK" if ok else "❌ Login error"
 
         elif accion == "REFRESH":
-            # Solo refresca la lista interna, sin mostrar
             SERVICIOS_ACTUALES.update(homeserve.obtener())
-            txt = "🔄 Actualizado"
+            txt = "🔄 Memoria actualizada"
 
-        elif accion == "SERVICIOS":
-            # Ahora cada vez que se pulsa, consulta la web en vivo
-            servicios_web = homeserve.obtener()
-            if servicios_web:
-                txt = "📋 <b>Servicios actuales</b>\n\n"
-                for s in servicios_web.values():
+        elif accion == "SERVICIOS_NUEVOS":
+            nuevos = {k:v for k,v in homeserve.obtener().items() if k not in SERVICIOS_ACTUALES}
+            if nuevos:
+                txt = "🆕 <b>Servicios nuevos</b>\n\n"
+                for s in nuevos.values():
                     txt += s + "\n\n"
             else:
-                txt = "No hay servicios"
+                txt = "No hay servicios nuevos"
+            SERVICIOS_ACTUALES.update(nuevos)
+
+        elif accion == "TODOS_SERVICIOS":
+            todos = homeserve.obtener()
+            if todos:
+                txt = "📋 <b>Todos los servicios activos</b>\n\n"
+                for s in todos.values():
+                    txt += s + "\n\n"
+            else:
+                txt = "No hay servicios activos"
 
         requests.post(
             TELEGRAM_API + "/sendMessage",
