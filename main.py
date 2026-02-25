@@ -1,101 +1,104 @@
-# PARCHE PYTHON 3.14 (NO CAMBIA TU BOT)
+# ===== PARCHE PYTHON 3.14 (OBLIGATORIO PARA TELEGRAM) =====
 import sys
 import types
 
-if "imghdr" not in sys.modules:
-    imghdr = types.ModuleType("imghdr")
-    imghdr.what = lambda *args, **kwargs: None
-    sys.modules["imghdr"] = imghdr
+imghdr = types.ModuleType("imghdr")
+imghdr.what = lambda *args, **kwargs: None
+sys.modules["imghdr"] = imghdr
+# ===========================================================
 
-
-# TU SCRIPT ORIGINAL (SIN CAMBIOS)
 
 import requests
 from bs4 import BeautifulSoup
-import asyncio
-import logging
+import time
+import threading
 import os
+import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
-# CONFIG
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = int(os.getenv("CHAT_ID"))
+from flask import Flask
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+# ===== CONFIG =====
 
-CHECK_INTERVAL = 30
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+URL_LOGIN = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+URL_SERVICIOS = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+
+INTERVALO = 60
+
+# ===== LOGS =====
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(message)s"
+)
+
+# ===== VARIABLES =====
+
+bot_activo = False
+servicios_guardados = []
 
 session = requests.Session()
-servicios_guardados = []
-bot_arrancado = False
+
+
+# ===== LOGIN =====
+
+def login():
+
+    logging.info("Login...")
+
+    data = {
+        "email": os.environ.get("EMAIL"),
+        "password": os.environ.get("PASSWORD")
+    }
+
+    session.post(URL_LOGIN, data=data)
 
 
 # ===== SCRAPER =====
 
 def obtener_servicios():
 
-    try:
+    r = session.get(URL_SERVICIOS)
 
-        r = session.get(SERVICIOS_URL)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-        soup = BeautifulSoup(r.text, "html.parser")
+    servicios = []
 
-        bloques = soup.find_all("tr")
+    for s in soup.find_all("tr"):
 
-        servicios = []
+        texto = s.get_text(strip=True)
 
-        for b in bloques:
+        if len(texto) > 20:
+            servicios.append(texto)
 
-            texto = b.get_text("\n", strip=True)
-
-            if len(texto) > 30:
-                servicios.append(texto)
-
-        logger.info(f"Servicios detectados: {len(servicios)}")
-
-        return servicios
-
-    except Exception as e:
-
-        logger.error(e)
-        return []
+    return servicios
 
 
-# ===== MENU =====
+# ===== TELEGRAM BOTONES =====
 
 def menu():
 
     teclado = [
-
-        [InlineKeyboardButton("🔑 Login", callback_data="login")],
-
-        [InlineKeyboardButton("📋 Ir a asignación", callback_data="asignacion")],
-
-        [InlineKeyboardButton("🔄 Refrescar", callback_data="refrescar")],
-
-        [InlineKeyboardButton("📦 Servicios actuales", callback_data="actuales")]
-
+        [InlineKeyboardButton("▶️ Arrancar bot", callback_data="startbot")],
+        [InlineKeyboardButton("🔐 Login", callback_data="login")],
+        [InlineKeyboardButton("📋 Ver servicios", callback_data="servicios")],
+        [InlineKeyboardButton("🔄 Actualizar", callback_data="actualizar")]
     ]
 
     return InlineKeyboardMarkup(teclado)
 
 
-# ===== START =====
+# ===== START TELEGRAM =====
 
 def start(update, context):
 
-    global bot_arrancado
-
-    bot_arrancado = True
-
     update.message.reply_text(
-        "Monitor Homeserve ARRANCADO",
+        "Bot Homeserve listo",
         reply_markup=menu()
     )
 
@@ -104,101 +107,153 @@ def start(update, context):
 
 def botones(update, context):
 
+    global bot_activo
+    global servicios_guardados
+
     query = update.callback_query
     query.answer()
 
-    if query.data == "login":
+    if query.data == "startbot":
 
-        session.get(LOGIN_URL)
+        bot_activo = True
 
         query.edit_message_text(
-            "Login realizado",
+            "Bot arrancado",
+            reply_markup=menu()
+        )
+
+    elif query.data == "login":
+
+        login()
+
+        query.edit_message_text(
+            "Login hecho",
             reply_markup=menu()
         )
 
 
-    if query.data == "asignacion":
-
-        session.get(SERVICIOS_URL)
-
-        query.edit_message_text(
-            "Asignación abierta",
-            reply_markup=menu()
-        )
-
-
-    if query.data == "refrescar":
+    elif query.data == "servicios":
 
         servicios = obtener_servicios()
 
-        texto = "\n\n-----------\n\n".join(servicios[:10])
+        if not servicios:
+
+            texto = "No hay servicios"
+
+        else:
+
+            texto = ""
+
+            for s in servicios:
+                texto += "• " + s + "\n\n"
 
         query.edit_message_text(
-            f"Actualizado\n\n{texto}",
+            texto,
             reply_markup=menu()
         )
 
 
-    if query.data == "actuales":
+    elif query.data == "actualizar":
 
         servicios = obtener_servicios()
 
-        texto = "\n\n-----------\n\n".join(servicios)
+        servicios_guardados = servicios
+
+        texto = "Actualizado\n\n"
+
+        for s in servicios:
+            texto += "• " + s + "\n\n"
 
         query.edit_message_text(
-            f"Servicios actuales\n\n{texto}",
+            texto,
             reply_markup=menu()
         )
 
 
 # ===== MONITOR =====
 
-async def monitor(bot):
+def monitor():
 
     global servicios_guardados
-    global bot_arrancado
+    global bot_activo
 
     while True:
 
-        if bot_arrancado:
+        if bot_activo:
 
-            servicios = obtener_servicios()
+            try:
 
-            nuevos = [s for s in servicios if s not in servicios_guardados]
+                servicios = obtener_servicios()
 
-            if nuevos:
+                nuevos = []
 
-                for s in nuevos:
+                for s in servicios:
 
-                    bot.send_message(
+                    if s not in servicios_guardados:
+                        nuevos.append(s)
+
+                if nuevos:
+
+                    texto = "NUEVOS SERVICIOS\n\n"
+
+                    for n in nuevos:
+                        texto += "• " + n + "\n\n"
+
+                    updater.bot.send_message(
                         chat_id=CHAT_ID,
-                        text=f"🚨 NUEVO SERVICIO\n\n{s}"
+                        text=texto
                     )
 
-            servicios_guardados = servicios
+                    servicios_guardados = servicios
 
-        await asyncio.sleep(CHECK_INTERVAL)
+                    logging.info("Servicios nuevos detectados")
 
+            except Exception as e:
 
-# ===== MAIN =====
+                logging.info("Error monitor")
+                logging.info(e)
 
-def main():
-
-    updater = Updater(TOKEN, use_context=True)
-
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-
-    dp.add_handler(CallbackQueryHandler(botones))
-
-    updater.start_polling()
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(monitor(updater.bot))
-
-    updater.idle()
+        time.sleep(INTERVALO)
 
 
-if __name__ == "__main__":
-    main()
+# ===== TELEGRAM =====
+
+updater = Updater(TOKEN, use_context=True)
+
+dp = updater.dispatcher
+
+dp.add_handler(CommandHandler("start", start))
+
+dp.add_handler(CallbackQueryHandler(botones))
+
+
+# ===== FLASK PARA RENDER =====
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot activo"
+
+
+def web():
+
+    port = int(os.environ.get("PORT", 10000))
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
+
+
+# ===== ARRANQUE =====
+
+threading.Thread(target=web).start()
+
+threading.Thread(target=monitor).start()
+
+updater.start_polling()
+
+print("BOT ARRANCADO")
+
+updater.idle()
