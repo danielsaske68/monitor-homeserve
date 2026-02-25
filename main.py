@@ -1,307 +1,218 @@
-import os
-import time
-import threading
-import logging
-import re
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, request, jsonify
-from dotenv import load_dotenv
+import asyncio
+import logging
+import os
 
-load_dotenv()
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-USUARIO=os.getenv("USUARIO")
-PASSWORD=os.getenv("PASSWORD")
-BOT_TOKEN=os.getenv("BOT_TOKEN")
-CHAT_ID=os.getenv("CHAT_ID")
-INTERVALO=int(os.getenv("INTERVALO_SEGUNDOS",40))
+# CONFIG
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = int(os.getenv("CHAT_ID"))
 
-LOGIN_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-ASIGNACION_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+SERVICIOS_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-TELEGRAM_API=f"https://api.telegram.org/bot{BOT_TOKEN}"
+CHECK_INTERVAL = 30
 
 logging.basicConfig(level=logging.INFO)
-logger=logging.getLogger("main")
+logger = logging.getLogger(__name__)
 
-SERVICIOS_ACTUALES={}
+session = requests.Session()
 
-###########################################################
-# TELEGRAM
-###########################################################
-
-def botones():
-
-    return {
-        "inline_keyboard":[
-
-            [
-                {"text":"🔐 Login","callback_data":"LOGIN"},
-                {"text":"🔄 Actualizar","callback_data":"REFRESH"}
-            ],
-
-            [
-                {"text":"📋 Ver servicios guardados","callback_data":"GUARDADOS"}
-            ],
-
-            [
-                {"text":"🌐 Ver servicios WEB","callback_data":"WEB"}
-            ],
-
-            [
-                {"text":"🌐 Ir asignación","url":ASIGNACION_URL}
-            ]
-        ]
-    }
+servicios_guardados = []
+monitor_activo = False
 
 
-def enviar(chat,texto):
+###################################################
+# SCRAPER
+###################################################
 
-    requests.post(
-        TELEGRAM_API+"/sendMessage",
-        json={
-            "chat_id":chat,
-            "text":texto,
-            "parse_mode":"HTML",
-            "reply_markup":botones()
-        },
-        timeout=10
-    )
+def obtener_servicios():
 
+    try:
 
-###########################################################
-# HOMESERVE
-###########################################################
+        r = session.get(SERVICIOS_URL)
 
-class HomeServe:
+        soup = BeautifulSoup(r.text, "html.parser")
 
-    def __init__(self):
+        bloques = soup.find_all("tr")
 
-        self.session=requests.Session()
-
-
-    def login(self):
-
-        payload={
-            "CODIGO":USUARIO,
-            "PASSW":PASSWORD,
-            "BTN":"Aceptar"
-        }
-
-        self.session.get(LOGIN_URL)
-
-        r=self.session.post(LOGIN_URL,data=payload)
-
-        if "error" in r.text.lower():
-
-            logger.error("Login fallo")
-            return False
-
-        logger.info("Login OK")
-        return True
-
-
-    def obtener(self):
-
-        r=self.session.get(ASIGNACION_URL,timeout=15)
-
-        soup=BeautifulSoup(r.text,"html.parser")
-
-        texto=soup.get_text("\n")
-
-        bloques=re.split(r"\n(?=\d{7,8}\s)",texto)
-
-        servicios={}
+        servicios = []
 
         for b in bloques:
 
-            m=re.search(r"\b\d{7,8}\b",b)
+            texto = b.get_text("\n", strip=True)
 
-            if m:
+            if len(texto) > 30:
 
-                idserv=m.group(0)
-
-                limpio=" ".join(b.split())
-
-                servicios[idserv]=limpio
-
+                servicios.append(texto)
 
         logger.info(f"Servicios detectados: {len(servicios)}")
 
         return servicios
 
+    except Exception as e:
 
-homeserve=HomeServe()
+        logger.error(e)
+        return []
 
-###########################################################
-# LOOP AUTOMATICO
-###########################################################
 
-def bot_loop():
+###################################################
+# MENU TELEGRAM
+###################################################
 
-    global SERVICIOS_ACTUALES
+def menu():
 
-    homeserve.login()
+    teclado = [
+
+        [InlineKeyboardButton("🔑 Login", callback_data="login")],
+
+        [InlineKeyboardButton("📋 Ir a asignación", callback_data="asignacion")],
+
+        [InlineKeyboardButton("🔄 Refrescar", callback_data="refrescar")],
+
+        [InlineKeyboardButton("📦 Servicios actuales", callback_data="actuales")]
+
+    ]
+
+    return InlineKeyboardMarkup(teclado)
+
+
+###################################################
+# START
+###################################################
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    global monitor_activo
+
+    monitor_activo = True
+
+    await update.message.reply_text(
+
+        "✅ Monitor iniciado",
+
+        reply_markup=menu()
+
+    )
+
+
+###################################################
+# BOTONES
+###################################################
+
+async def botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer()
+
+
+    if query.data == "login":
+
+        session.get(LOGIN_URL)
+
+        await query.edit_message_text(
+
+            "Login abierto en sesión",
+
+            reply_markup=menu()
+
+        )
+
+
+    if query.data == "asignacion":
+
+        session.get(SERVICIOS_URL)
+
+        await query.edit_message_text(
+
+            "Página asignación abierta",
+
+            reply_markup=menu()
+
+        )
+
+
+    if query.data == "refrescar":
+
+        servicios = obtener_servicios()
+
+        texto = "\n\n-----------\n\n".join(servicios[:10])
+
+        await query.edit_message_text(
+
+            f"Refrescado\n\n{texto}",
+
+            reply_markup=menu()
+
+        )
+
+
+    if query.data == "actuales":
+
+        servicios = obtener_servicios()
+
+        texto = "\n\n-----------\n\n".join(servicios)
+
+        await query.edit_message_text(
+
+            f"Servicios actuales:\n\n{texto}",
+
+            reply_markup=menu()
+
+        )
+
+
+###################################################
+# MONITOR
+###################################################
+
+async def monitor(app):
+
+    global servicios_guardados
+    global monitor_activo
 
     while True:
 
-        try:
+        if monitor_activo:
 
-            actuales=homeserve.obtener()
+            servicios = obtener_servicios()
 
-            # detectar nuevos
-            for idserv,servicio in actuales.items():
+            nuevos = [s for s in servicios if s not in servicios_guardados]
 
-                if idserv not in SERVICIOS_ACTUALES:
+            if nuevos:
 
-                    enviar(
-                        CHAT_ID,
-                        f"🆕 <b>Nuevo servicio</b>\n\n{servicio}"
-                    )
+                for s in nuevos:
 
-            SERVICIOS_ACTUALES=actuales
+                    texto = f"🚨 NUEVO SERVICIO\n\n{s}"
 
-            time.sleep(INTERVALO)
+                    await app.bot.send_message(CHAT_ID, texto)
 
-        except Exception as e:
+            servicios_guardados = servicios
 
-            logger.error(e)
+        await asyncio.sleep(CHECK_INTERVAL)
 
-            homeserve.login()
 
-            time.sleep(20)
+###################################################
+# MAIN
+###################################################
 
+async def main():
 
-###########################################################
-# FLASK
-###########################################################
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app=Flask(__name__)
+    app.add_handler(CommandHandler("start", start))
 
+    app.add_handler(CallbackQueryHandler(botones))
 
-@app.route("/")
-def home():
+    asyncio.create_task(monitor(app))
 
-    return f"""
-HomeServe Monitor OK
+    await app.run_polling()
 
-Servicios guardados: {len(SERVICIOS_ACTUALES)}
-"""
 
+if __name__ == "__main__":
 
-###########################################################
-# TELEGRAM WEBHOOK
-###########################################################
-
-@app.route("/telegram_webhook",methods=["POST"])
-def telegram_webhook():
-
-    data=request.json
-
-    if "callback_query" in data:
-
-        accion=data["callback_query"]["data"]
-
-        chat=data["callback_query"]["message"]["chat"]["id"]
-
-        #####################################
-
-        if accion=="LOGIN":
-
-            ok=homeserve.login()
-
-            txt="✅ Login OK" if ok else "❌ Login error"
-
-            enviar(chat,txt)
-
-        #####################################
-
-        elif accion=="REFRESH":
-
-    actuales=homeserve.obtener()
-
-    SERVICIOS_ACTUALES.update(actuales)
-
-    if actuales:
-
-        txt="🔄 Servicios actualizados\n\n"
-
-        for s in actuales.values():
-
-            txt+=s+"\n\n"
-
-    else:
-
-        txt="No hay servicios"
-
-    enviar(chat,txt)
-
-        #####################################
-
-        elif accion=="GUARDADOS":
-
-            if SERVICIOS_ACTUALES:
-
-                txt="📋 <b>Servicios guardados</b>\n\n"
-
-                for s in SERVICIOS_ACTUALES.values():
-
-                    txt+=s+"\n\n"
-
-            else:
-
-                txt="No hay servicios guardados"
-
-            enviar(chat,txt)
-
-        #####################################
-
-        elif accion=="WEB":
-
-            actuales=homeserve.obtener()
-
-            if actuales:
-
-                txt="🌐 <b>Servicios en la WEB</b>\n\n"
-
-                for s in actuales.values():
-
-                    txt+=s+"\n\n"
-
-            else:
-
-                txt="No hay servicios en web"
-
-            enviar(chat,txt)
-
-
-    return jsonify(ok=True)
-
-
-###########################################################
-# THREAD
-###########################################################
-
-threading.Thread(
-    target=bot_loop,
-    daemon=True
-).start()
-
-
-###########################################################
-# RUN
-###########################################################
-
-###########################################################
-# RUN
-###########################################################
-
-if __name__=="__main__":
-
-    port=int(os.environ.get("PORT",10000))
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False
-    )
+    asyncio.run(main())
