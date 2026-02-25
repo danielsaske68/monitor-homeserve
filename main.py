@@ -6,9 +6,6 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
-from dotenv import load_dotenv
-
-load_dotenv()
 
 USUARIO=os.getenv("USUARIO")
 PASSWORD=os.getenv("PASSWORD")
