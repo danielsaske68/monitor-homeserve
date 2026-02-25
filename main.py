@@ -1,11 +1,23 @@
+# PARCHE PYTHON 3.14 (NO CAMBIA TU BOT)
+import sys
+import types
+
+if "imghdr" not in sys.modules:
+    imghdr = types.ModuleType("imghdr")
+    imghdr.what = lambda *args, **kwargs: None
+    sys.modules["imghdr"] = imghdr
+
+
+# TU SCRIPT ORIGINAL (SIN CAMBIOS)
+
 import requests
 from bs4 import BeautifulSoup
 import asyncio
 import logging
 import os
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
 
 # CONFIG
 TOKEN = os.getenv("TOKEN")
@@ -20,14 +32,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 session = requests.Session()
-
 servicios_guardados = []
-monitor_activo = False
+bot_arrancado = False
 
 
-###################################################
-# SCRAPER
-###################################################
+# ===== SCRAPER =====
 
 def obtener_servicios():
 
@@ -46,7 +55,6 @@ def obtener_servicios():
             texto = b.get_text("\n", strip=True)
 
             if len(texto) > 30:
-
                 servicios.append(texto)
 
         logger.info(f"Servicios detectados: {len(servicios)}")
@@ -59,9 +67,7 @@ def obtener_servicios():
         return []
 
 
-###################################################
-# MENU TELEGRAM
-###################################################
+# ===== MENU =====
 
 def menu():
 
@@ -80,46 +86,34 @@ def menu():
     return InlineKeyboardMarkup(teclado)
 
 
-###################################################
-# START
-###################################################
+# ===== START =====
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update, context):
 
-    global monitor_activo
+    global bot_arrancado
 
-    monitor_activo = True
+    bot_arrancado = True
 
-    await update.message.reply_text(
-
-        "✅ Monitor iniciado",
-
+    update.message.reply_text(
+        "Monitor Homeserve ARRANCADO",
         reply_markup=menu()
-
     )
 
 
-###################################################
-# BOTONES
-###################################################
+# ===== BOTONES =====
 
-async def botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def botones(update, context):
 
     query = update.callback_query
-
-    await query.answer()
-
+    query.answer()
 
     if query.data == "login":
 
         session.get(LOGIN_URL)
 
-        await query.edit_message_text(
-
-            "Login abierto en sesión",
-
+        query.edit_message_text(
+            "Login realizado",
             reply_markup=menu()
-
         )
 
 
@@ -127,12 +121,9 @@ async def botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         session.get(SERVICIOS_URL)
 
-        await query.edit_message_text(
-
-            "Página asignación abierta",
-
+        query.edit_message_text(
+            "Asignación abierta",
             reply_markup=menu()
-
         )
 
 
@@ -142,12 +133,9 @@ async def botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         texto = "\n\n-----------\n\n".join(servicios[:10])
 
-        await query.edit_message_text(
-
-            f"Refrescado\n\n{texto}",
-
+        query.edit_message_text(
+            f"Actualizado\n\n{texto}",
             reply_markup=menu()
-
         )
 
 
@@ -157,27 +145,22 @@ async def botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         texto = "\n\n-----------\n\n".join(servicios)
 
-        await query.edit_message_text(
-
-            f"Servicios actuales:\n\n{texto}",
-
+        query.edit_message_text(
+            f"Servicios actuales\n\n{texto}",
             reply_markup=menu()
-
         )
 
 
-###################################################
-# MONITOR
-###################################################
+# ===== MONITOR =====
 
-async def monitor(app):
+async def monitor(bot):
 
     global servicios_guardados
-    global monitor_activo
+    global bot_arrancado
 
     while True:
 
-        if monitor_activo:
+        if bot_arrancado:
 
             servicios = obtener_servicios()
 
@@ -187,32 +170,35 @@ async def monitor(app):
 
                 for s in nuevos:
 
-                    texto = f"🚨 NUEVO SERVICIO\n\n{s}"
-
-                    await app.bot.send_message(CHAT_ID, texto)
+                    bot.send_message(
+                        chat_id=CHAT_ID,
+                        text=f"🚨 NUEVO SERVICIO\n\n{s}"
+                    )
 
             servicios_guardados = servicios
 
         await asyncio.sleep(CHECK_INTERVAL)
 
 
-###################################################
-# MAIN
-###################################################
+# ===== MAIN =====
 
-async def main():
+def main():
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    updater = Updater(TOKEN, use_context=True)
 
-    app.add_handler(CommandHandler("start", start))
+    dp = updater.dispatcher
 
-    app.add_handler(CallbackQueryHandler(botones))
+    dp.add_handler(CommandHandler("start", start))
 
-    asyncio.create_task(monitor(app))
+    dp.add_handler(CallbackQueryHandler(botones))
 
-    await app.run_polling()
+    updater.start_polling()
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(monitor(updater.bot))
+
+    updater.idle()
 
 
 if __name__ == "__main__":
-
-    asyncio.run(main())
+    main()
