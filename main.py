@@ -218,9 +218,23 @@ def telegram_webhook():
 
         elif accion=="REFRESH":
 
-            SERVICIOS_ACTUALES.update(homeserve.obtener())
+    actuales=homeserve.obtener()
 
-            enviar(chat,"🔄 Actualizado")
+    SERVICIOS_ACTUALES.update(actuales)
+
+    if actuales:
+
+        txt="🔄 Servicios actualizados\n\n"
+
+        for s in actuales.values():
+
+            txt+=s+"\n\n"
+
+    else:
+
+        txt="No hay servicios"
+
+    enviar(chat,txt)
 
         #####################################
 
