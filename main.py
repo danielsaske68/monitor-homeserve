@@ -1,12 +1,22 @@
-# ===== PARCHE PYTHON 3.14 (OBLIGATORIO PARA TELEGRAM) =====
+# ===== PARCHE PYTHON 3.14 TELEGRAM =====
+
 import sys
 import types
 
+# imghdr eliminado en Python 3.14
 imghdr = types.ModuleType("imghdr")
 imghdr.what = lambda *args, **kwargs: None
 sys.modules["imghdr"] = imghdr
-# ===========================================================
 
+# parche urllib3 appengine eliminado
+appengine = types.ModuleType("urllib3.contrib.appengine")
+sys.modules["urllib3.contrib.appengine"] = appengine
+
+# parche telegram vendor urllib3
+vendor = types.ModuleType("telegram.vendor.ptb_urllib3")
+sys.modules["telegram.vendor.ptb_urllib3"] = vendor
+
+# ========================================
 
 import requests
 from bs4 import BeautifulSoup
