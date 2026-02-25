@@ -1,269 +1,285 @@
-# ===== PARCHE PYTHON 3.14 TELEGRAM =====
-
-import sys
-import types
-
-# imghdr eliminado en Python 3.14
-imghdr = types.ModuleType("imghdr")
-imghdr.what = lambda *args, **kwargs: None
-sys.modules["imghdr"] = imghdr
-
-# parche urllib3 appengine eliminado
-appengine = types.ModuleType("urllib3.contrib.appengine")
-sys.modules["urllib3.contrib.appengine"] = appengine
-
-# parche telegram vendor urllib3
-vendor = types.ModuleType("telegram.vendor.ptb_urllib3")
-sys.modules["telegram.vendor.ptb_urllib3"] = vendor
-
-# ========================================
-
-import requests
-from bs4 import BeautifulSoup
+import os
 import time
 import threading
-import os
 import logging
+import re
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
+load_dotenv()
 
-from flask import Flask
+USUARIO=os.getenv("USUARIO")
+PASSWORD=os.getenv("PASSWORD")
+BOT_TOKEN=os.getenv("BOT_TOKEN")
+CHAT_ID=os.getenv("CHAT_ID")
+INTERVALO=int(os.getenv("INTERVALO_SEGUNDOS",40))
 
-# ===== CONFIG =====
+LOGIN_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+ASIGNACION_URL="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
-TOKEN = os.environ.get("TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+TELEGRAM_API=f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-URL_LOGIN = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-URL_SERVICIOS = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+logging.basicConfig(level=logging.INFO)
+logger=logging.getLogger("main")
 
-INTERVALO = 60
+SERVICIOS_ACTUALES={}
 
-# ===== LOGS =====
+###########################################################
+# TELEGRAM
+###########################################################
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(message)s"
-)
+def botones():
 
-# ===== VARIABLES =====
+    return {
+        "inline_keyboard":[
 
-bot_activo = False
-servicios_guardados = []
+            [
+                {"text":"🔐 Login","callback_data":"LOGIN"},
+                {"text":"🔄 Actualizar","callback_data":"REFRESH"}
+            ],
 
-session = requests.Session()
+            [
+                {"text":"📋 Ver servicios guardados","callback_data":"GUARDADOS"}
+            ],
 
+            [
+                {"text":"🌐 Ver servicios WEB","callback_data":"WEB"}
+            ],
 
-# ===== LOGIN =====
-
-def login():
-
-    logging.info("Login...")
-
-    data = {
-        "email": os.environ.get("EMAIL"),
-        "password": os.environ.get("PASSWORD")
+            [
+                {"text":"🌐 Ir asignación","url":ASIGNACION_URL}
+            ]
+        ]
     }
 
-    session.post(URL_LOGIN, data=data)
 
+def enviar(chat,texto):
 
-# ===== SCRAPER =====
-
-def obtener_servicios():
-
-    r = session.get(URL_SERVICIOS)
-
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    servicios = []
-
-    for s in soup.find_all("tr"):
-
-        texto = s.get_text(strip=True)
-
-        if len(texto) > 20:
-            servicios.append(texto)
-
-    return servicios
-
-
-# ===== TELEGRAM BOTONES =====
-
-def menu():
-
-    teclado = [
-        [InlineKeyboardButton("▶️ Arrancar bot", callback_data="startbot")],
-        [InlineKeyboardButton("🔐 Login", callback_data="login")],
-        [InlineKeyboardButton("📋 Ver servicios", callback_data="servicios")],
-        [InlineKeyboardButton("🔄 Actualizar", callback_data="actualizar")]
-    ]
-
-    return InlineKeyboardMarkup(teclado)
-
-
-# ===== START TELEGRAM =====
-
-def start(update, context):
-
-    update.message.reply_text(
-        "Bot Homeserve listo",
-        reply_markup=menu()
+    requests.post(
+        TELEGRAM_API+"/sendMessage",
+        json={
+            "chat_id":chat,
+            "text":texto,
+            "parse_mode":"HTML",
+            "reply_markup":botones()
+        },
+        timeout=10
     )
 
 
-# ===== BOTONES =====
+###########################################################
+# HOMESERVE
+###########################################################
 
-def botones(update, context):
+class HomeServe:
 
-    global bot_activo
-    global servicios_guardados
+    def __init__(self):
 
-    query = update.callback_query
-    query.answer()
-
-    if query.data == "startbot":
-
-        bot_activo = True
-
-        query.edit_message_text(
-            "Bot arrancado",
-            reply_markup=menu()
-        )
-
-    elif query.data == "login":
-
-        login()
-
-        query.edit_message_text(
-            "Login hecho",
-            reply_markup=menu()
-        )
+        self.session=requests.Session()
 
 
-    elif query.data == "servicios":
+    def login(self):
 
-        servicios = obtener_servicios()
+        payload={
+            "CODIGO":USUARIO,
+            "PASSW":PASSWORD,
+            "BTN":"Aceptar"
+        }
 
-        if not servicios:
+        self.session.get(LOGIN_URL)
 
-            texto = "No hay servicios"
+        r=self.session.post(LOGIN_URL,data=payload)
 
-        else:
+        if "error" in r.text.lower():
 
-            texto = ""
+            logger.error("Login fallo")
+            return False
 
-            for s in servicios:
-                texto += "• " + s + "\n\n"
-
-        query.edit_message_text(
-            texto,
-            reply_markup=menu()
-        )
-
-
-    elif query.data == "actualizar":
-
-        servicios = obtener_servicios()
-
-        servicios_guardados = servicios
-
-        texto = "Actualizado\n\n"
-
-        for s in servicios:
-            texto += "• " + s + "\n\n"
-
-        query.edit_message_text(
-            texto,
-            reply_markup=menu()
-        )
+        logger.info("Login OK")
+        return True
 
 
-# ===== MONITOR =====
+    def obtener(self):
 
-def monitor():
+        r=self.session.get(ASIGNACION_URL,timeout=15)
 
-    global servicios_guardados
-    global bot_activo
+        soup=BeautifulSoup(r.text,"html.parser")
+
+        texto=soup.get_text("\n")
+
+        bloques=re.split(r"\n(?=\d{7,8}\s)",texto)
+
+        servicios={}
+
+        for b in bloques:
+
+            m=re.search(r"\b\d{7,8}\b",b)
+
+            if m:
+
+                idserv=m.group(0)
+
+                limpio=" ".join(b.split())
+
+                servicios[idserv]=limpio
+
+
+        logger.info(f"Servicios detectados: {len(servicios)}")
+
+        return servicios
+
+
+homeserve=HomeServe()
+
+###########################################################
+# LOOP AUTOMATICO
+###########################################################
+
+def bot_loop():
+
+    global SERVICIOS_ACTUALES
+
+    homeserve.login()
 
     while True:
 
-        if bot_activo:
+        try:
 
-            try:
+            actuales=homeserve.obtener()
 
-                servicios = obtener_servicios()
+            # detectar nuevos
+            for idserv,servicio in actuales.items():
 
-                nuevos = []
+                if idserv not in SERVICIOS_ACTUALES:
 
-                for s in servicios:
-
-                    if s not in servicios_guardados:
-                        nuevos.append(s)
-
-                if nuevos:
-
-                    texto = "NUEVOS SERVICIOS\n\n"
-
-                    for n in nuevos:
-                        texto += "• " + n + "\n\n"
-
-                    updater.bot.send_message(
-                        chat_id=CHAT_ID,
-                        text=texto
+                    enviar(
+                        CHAT_ID,
+                        f"🆕 <b>Nuevo servicio</b>\n\n{servicio}"
                     )
 
-                    servicios_guardados = servicios
+            SERVICIOS_ACTUALES=actuales
 
-                    logging.info("Servicios nuevos detectados")
+            time.sleep(INTERVALO)
 
-            except Exception as e:
+        except Exception as e:
 
-                logging.info("Error monitor")
-                logging.info(e)
+            logger.error(e)
 
-        time.sleep(INTERVALO)
+            homeserve.login()
 
-
-# ===== TELEGRAM =====
-
-updater = Updater(TOKEN, use_context=True)
-
-dp = updater.dispatcher
-
-dp.add_handler(CommandHandler("start", start))
-
-dp.add_handler(CallbackQueryHandler(botones))
+            time.sleep(20)
 
 
-# ===== FLASK PARA RENDER =====
+###########################################################
+# FLASK
+###########################################################
 
-app = Flask(__name__)
+app=Flask(__name__)
+
 
 @app.route("/")
 def home():
-    return "Bot activo"
+
+    return f"""
+HomeServe Monitor OK
+
+Servicios guardados: {len(SERVICIOS_ACTUALES)}
+"""
 
 
-def web():
+###########################################################
+# TELEGRAM WEBHOOK
+###########################################################
 
-    port = int(os.environ.get("PORT", 10000))
+@app.route("/telegram_webhook",methods=["POST"])
+def telegram_webhook():
 
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    data=request.json
+
+    if "callback_query" in data:
+
+        accion=data["callback_query"]["data"]
+
+        chat=data["callback_query"]["message"]["chat"]["id"]
+
+        #####################################
+
+        if accion=="LOGIN":
+
+            ok=homeserve.login()
+
+            txt="✅ Login OK" if ok else "❌ Login error"
+
+            enviar(chat,txt)
+
+        #####################################
+
+        elif accion=="REFRESH":
+
+            SERVICIOS_ACTUALES.update(homeserve.obtener())
+
+            enviar(chat,"🔄 Actualizado")
+
+        #####################################
+
+        elif accion=="GUARDADOS":
+
+            if SERVICIOS_ACTUALES:
+
+                txt="📋 <b>Servicios guardados</b>\n\n"
+
+                for s in SERVICIOS_ACTUALES.values():
+
+                    txt+=s+"\n\n"
+
+            else:
+
+                txt="No hay servicios guardados"
+
+            enviar(chat,txt)
+
+        #####################################
+
+        elif accion=="WEB":
+
+            actuales=homeserve.obtener()
+
+            if actuales:
+
+                txt="🌐 <b>Servicios en la WEB</b>\n\n"
+
+                for s in actuales.values():
+
+                    txt+=s+"\n\n"
+
+            else:
+
+                txt="No hay servicios en web"
+
+            enviar(chat,txt)
 
 
-# ===== ARRANQUE =====
+    return jsonify(ok=True)
 
-threading.Thread(target=web).start()
 
-threading.Thread(target=monitor).start()
+###########################################################
+# THREAD
+###########################################################
 
-updater.start_polling()
+threading.Thread(
+    target=bot_loop,
+    daemon=True
+).start()
 
-print("BOT ARRANCADO")
 
-updater.idle()
+###########################################################
+# RUN
+###########################################################
+
+if __name__=="__main__":
+
+    port=int(os.environ.get("PORT",10000))
+
+    app.run(host="0.0.0.0",port=port)
