@@ -53,8 +53,8 @@ def login():
     try:
 
         payload = {
-            "email": os.getenv("USER_EMAIL"),
-            "password": os.getenv("USER_PASSWORD")
+            "CODIGO": os.getenv("USUARIO"),
+            "PASSW": os.getenv("PASSWORD")
         }
 
         session.post(LOGIN_URL, data=payload)
