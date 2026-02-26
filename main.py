@@ -65,16 +65,12 @@ def enviar(chat, texto):
         logger.error(f"Error enviando mensaje: {e}")
 
 def set_webhook():
-    """Registra automáticamente el webhook en Telegram."""
     webhook_url = f"{BASE_URL}/telegram_webhook"
-    try:
-        r = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url}, timeout=10)
-        if r.status_code == 200 and r.json().get("ok"):
-            logger.info(f"Webhook registrado en Telegram: {webhook_url}")
-        else:
-            logger.error(f"Error registrando webhook: {r.text}")
-    except Exception as e:
-        logger.error(f"Excepción registrando webhook: {e}")
+    r = requests.post(f"{TELEGRAM_API}/setWebhook", data={"url": webhook_url})
+    if r.status_code == 200 and r.json().get("ok"):
+        logger.info(f"Webhook registrado en Telegram: {webhook_url}")
+    else:
+        logger.error(f"Error registrando webhook: {r.text}")
 
 ###########################################################
 # HOMESERVE
