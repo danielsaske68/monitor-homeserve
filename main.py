@@ -10,26 +10,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# -------------------------------
+# CONFIG
+# -------------------------------
 USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
-BASE_URL = os.getenv("BASE_URL")  # Tu URL pública de Render, ej: https://monitor-homeserve.onrender.com
+BASE_URL = os.getenv("BASE_URL")  # ej: https://monitor-homeserve.onrender.com
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
 SERVICIOS_ACTUALES = {}
+CHAT_IDS = set()  # Guardamos los usuarios que usan /start
 
-###########################################################
+# -------------------------------
 # TELEGRAM
-###########################################################
-
+# -------------------------------
 def botones():
     return {
         "inline_keyboard": [
@@ -50,19 +53,16 @@ def botones():
     }
 
 def enviar(chat, texto):
-    try:
-        requests.post(
-            TELEGRAM_API + "/sendMessage",
-            json={
-                "chat_id": chat,
-                "text": texto,
-                "parse_mode": "HTML",
-                "reply_markup": botones()
-            },
-            timeout=10
-        )
-    except Exception as e:
-        logger.error(f"Error enviando mensaje: {e}")
+    requests.post(
+        TELEGRAM_API + "/sendMessage",
+        json={
+            "chat_id": chat,
+            "text": texto,
+            "parse_mode": "HTML",
+            "reply_markup": botones()
+        },
+        timeout=10
+    )
 
 def set_webhook():
     webhook_url = f"{BASE_URL}/telegram_webhook"
@@ -72,20 +72,15 @@ def set_webhook():
     else:
         logger.error(f"Error registrando webhook: {r.text}")
 
-###########################################################
+# -------------------------------
 # HOMESERVE
-###########################################################
-
+# -------------------------------
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
 
     def login(self):
-        payload = {
-            "CODIGO": USUARIO,
-            "PASSW": PASSWORD,
-            "BTN": "Aceptar"
-        }
+        payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
         self.session.get(LOGIN_URL)
         r = self.session.post(LOGIN_URL, data=payload)
         if "error" in r.text.lower():
@@ -111,19 +106,20 @@ class HomeServe:
 
 homeserve = HomeServe()
 
-###########################################################
+# -------------------------------
 # LOOP AUTOMATICO
-###########################################################
-
+# -------------------------------
 def bot_loop():
     global SERVICIOS_ACTUALES
     homeserve.login()
     while True:
         try:
             actuales = homeserve.obtener()
+            # detectar nuevos
             for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_ACTUALES:
-                    enviar(CHAT_ID, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}")
+                    for chat in CHAT_IDS:
+                        enviar(chat, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}")
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -131,61 +127,75 @@ def bot_loop():
             homeserve.login()
             time.sleep(20)
 
-###########################################################
+# -------------------------------
 # FLASK
-###########################################################
-
+# -------------------------------
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return f"HomeServe Monitor OK\nServicios guardados: {len(SERVICIOS_ACTUALES)}"
 
-###########################################################
+# -------------------------------
 # TELEGRAM WEBHOOK
-###########################################################
-
+# -------------------------------
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
-    if "message" in data:
+
+    # Comando /start
+    if "message" in data and "text" in data["message"]:
         chat = data["message"]["chat"]["id"]
-        texto = data["message"].get("text", "")
-        if texto.startswith("/start"):
-            enviar(chat, "👋 Bienvenido al Monitor HomeServe!")
+        text = data["message"]["text"]
+        if text == "/start":
+            CHAT_IDS.add(chat)
+            enviar(chat, "¡Bot activo! Aquí tienes tus opciones:")
+
+    # Botones
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
+        CHAT_IDS.add(chat)  # guardamos chat
+
         if accion == "LOGIN":
             ok = homeserve.login()
-            enviar(chat, "✅ Login OK" if ok else "❌ Login error")
+            txt = "✅ Login OK" if ok else "❌ Login error"
+            enviar(chat, txt)
+
         elif accion == "REFRESH":
             SERVICIOS_ACTUALES.update(homeserve.obtener())
             enviar(chat, "🔄 Actualizado")
+
         elif accion == "GUARDADOS":
             if SERVICIOS_ACTUALES:
-                txt = "📋 <b>Servicios guardados</b>\n\n" + "\n\n".join(SERVICIOS_ACTUALES.values())
+                txt = "📋 <b>Servicios guardados</b>\n\n"
+                for s in SERVICIOS_ACTUALES.values():
+                    txt += s + "\n\n"
             else:
                 txt = "No hay servicios guardados"
             enviar(chat, txt)
+
         elif accion == "WEB":
             actuales = homeserve.obtener()
             if actuales:
-                txt = "🌐 <b>Servicios en la WEB</b>\n\n" + "\n\n".join(actuales.values())
+                txt = "🌐 <b>Servicios en la WEB</b>\n\n"
+                for s in actuales.values():
+                    txt += s + "\n\n"
             else:
                 txt = "No hay servicios en web"
             enviar(chat, txt)
+
     return jsonify(ok=True)
 
-###########################################################
-# THREAD Y RUN
-###########################################################
-
-# Iniciar loop en background
+# -------------------------------
+# THREAD
+# -------------------------------
 threading.Thread(target=bot_loop, daemon=True).start()
 
+# -------------------------------
+# RUN
+# -------------------------------
 if __name__ == "__main__":
-    # Registrar webhook al iniciar
-    set_webhook()
+    set_webhook()  # registramos webhook al iniciar
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
