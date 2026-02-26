@@ -137,11 +137,11 @@ def telegram_webhook():
 
         elif accion == "REFRESH":
             SERVICIOS_ACTUALES.update(homeserve.obtener())
-            enviar(chat, "🔄 Actualizado")
+            enviar(chat, "🔄 Actualizado Mi sensei")
 
         elif accion == "GUARDADOS":
             if SERVICIOS_ACTUALES:
-                txt = "📋 <b>Servicios guardados</b>\n\n"
+                txt = "📋 <b>Servicio almacenado</b>\n\n"
                 for s in SERVICIOS_ACTUALES.values():
                     txt += s + "\n\n"
             else:
@@ -155,7 +155,7 @@ def telegram_webhook():
                 for s in actuales.values():
                     txt += s + "\n\n"
             else:
-                txt = "No hay servicios en web"
+                txt = "Andamos repailas "
             enviar(chat, txt)
 
     # Comando /start
