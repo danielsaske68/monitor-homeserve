@@ -37,8 +37,9 @@ def botones():
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
-            [{"text": "📋 Guardados", "callback_data": "GUARDADOS"}],
-            [{"text": "🌐 Web", "callback_data": "WEB"}]
+            [{"text": "📋 Ver servicios guardados", "callback_data": "GUARDADOS"}],
+            [{"text": "🌐 Ver servicios WEB", "callback_data": "WEB"}],
+            [{"text": "🌐 Ir asignación", "url": ASIGNACION_URL}]
         ]
     }
 
@@ -55,7 +56,7 @@ def enviar(chat, texto):
             timeout=10
         )
     except Exception as e:
-        logger.error(f"Error Telegram: {e}")
+        logger.error(f"Error enviando mensaje a Telegram: {e}")
 
 # ---------------- HOMESERVE ----------------
 
@@ -64,72 +65,56 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
-        try:
-            payload = {
-                "CODIGO": USUARIO,
-                "PASSW": PASSWORD,
-                "BTN": "Aceptar"
-            }
-            self.session.get(LOGIN_URL, timeout=10)
-            r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-
-            if "error" in r.text.lower():
-                logger.error("Login fallo")
-                return False
-
-            logger.info("Login OK")
-            return True
-        except Exception as e:
-            logger.error(f"Error login: {e}")
+        payload = {
+            "CODIGO": USUARIO,
+            "PASSW": PASSWORD,
+            "BTN": "Aceptar"
+        }
+        self.session.get(LOGIN_URL)
+        r = self.session.post(LOGIN_URL, data=payload)
+        if "error" in r.text.lower():
+            logger.error("Login fallo")
             return False
+        logger.info("Login OK")
+        return True
 
     def obtener(self):
-        try:
-            r = self.session.get(ASIGNACION_URL, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            texto = soup.get_text("\n")
-
-            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
-            servicios = {}
-
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    idserv = m.group(0)
-                    limpio = " ".join(b.split())
-                    servicios[idserv] = limpio
-
-            logger.info(f"Servicios: {len(servicios)}")
-            return servicios
-
-        except Exception as e:
-            logger.error(f"Error obtener: {e}")
-            return {}
+        r = self.session.get(ASIGNACION_URL, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
+        texto = soup.get_text("\n")
+        bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
+        servicios = {}
+        for b in bloques:
+            m = re.search(r"\b\d{7,8}\b", b)
+            if m:
+                idserv = m.group(0)
+                limpio = " ".join(b.split())
+                servicios[idserv] = limpio
+        logger.info(f"Servicios detectados: {len(servicios)}")
+        return servicios
 
 homeserve = HomeServe()
 
-# ---------------- LOOP ----------------
+# ---------------- LOOP AUTOMÁTICO ----------------
 
 def bot_loop():
     global SERVICIOS_ACTUALES
-
-    homeserve.login()
-
+    if not homeserve.login():
+        logger.error("No se pudo iniciar sesión al arrancar el bot")
     while True:
         try:
             actuales = homeserve.obtener()
-
+            # Detectar nuevos
             for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_ACTUALES:
                     enviar(CHAT_ID, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}")
-
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
-
         except Exception as e:
-            logger.error(f"Loop error: {e}")
+            logger.error(f"Error loop: {e}")
             homeserve.login()
             time.sleep(20)
+
 
 # ---------------- FLASK ----------------
 
@@ -139,45 +124,50 @@ app = Flask(__name__)
 def home():
     return f"OK - Servicios: {len(SERVICIOS_ACTUALES)}"
 
+# ---------------- TELEGRAM WEBHOOK ----------------
+
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
 
+    # Botones
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
         if accion == "LOGIN":
             ok = homeserve.login()
-            enviar(chat, "✅ Login OK" if ok else "❌ Error login")
+            enviar(chat, "✅ Ando ready mi rey" if ok else "❌ Pailas mi rey tamos en fallo")
 
         elif accion == "REFRESH":
             SERVICIOS_ACTUALES.update(homeserve.obtener())
-            enviar(chat, "🔄 Actualizado")
+            enviar(chat, "🔄 Actualizado Mi sensei")
 
         elif accion == "GUARDADOS":
             if SERVICIOS_ACTUALES:
-                txt = "📋 <b>Servicios</b>\n\n"
+                txt = "📋 <b>Servicio almacenado</b>\n\n"
                 for s in SERVICIOS_ACTUALES.values():
                     txt += s + "\n\n"
             else:
-                txt = "Sin datos"
+                txt = "Andamos pailas"
             enviar(chat, txt)
 
         elif accion == "WEB":
             actuales = homeserve.obtener()
             if actuales:
-                txt = "🌐 <b>Web</b>\n\n"
+                txt = "🌐 <b>Mi lideeeel encontre algo</b>\n\n"
                 for s in actuales.values():
                     txt += s + "\n\n"
             else:
-                txt = "Nada encontrado"
+                txt = "Andamos repailas "
             enviar(chat, txt)
 
-    elif "message" in data:
+    # Comando /start
+    elif "message" in data and "text" in data["message"]:
         chat = data["message"]["chat"]["id"]
-        if data["message"].get("text") == "/start":
-            enviar(chat, "👋 Bot activo")
+        texto = data["message"]["text"]
+        if texto == "/start":
+            enviar(chat, "👋 ¡Bot activo! Usa los botones para interactuar.")
 
     return jsonify(ok=True)
 
