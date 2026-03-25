@@ -37,12 +37,10 @@ def botones():
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
-            [{"text": "📋 Ver servicios guardados", "callback_data": "GUARDADOS"}],
-            [{"text": "🌐 Ver servicios WEB", "callback_data": "WEB"}],
-            [{"text": "🌐 Ir asignación", "url": ASIGNACION_URL}]
+            [{"text": "📋 Guardados", "callback_data": "GUARDADOS"}],
+            [{"text": "🌐 Web", "callback_data": "WEB"}]
         ]
     }
-
 
 def enviar(chat, texto):
     try:
@@ -57,7 +55,7 @@ def enviar(chat, texto):
             timeout=10
         )
     except Exception as e:
-        logger.error(f"Error enviando mensaje: {e}")
+        logger.error(f"Error Telegram: {e}")
 
 # ---------------- HOMESERVE ----------------
 
@@ -66,17 +64,19 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
-        payload = {
-            "CODIGO": USUARIO,
-            "PASSW": PASSWORD,
-            "BTN": "Aceptar"
-        }
         try:
+            payload = {
+                "CODIGO": USUARIO,
+                "PASSW": PASSWORD,
+                "BTN": "Aceptar"
+            }
             self.session.get(LOGIN_URL, timeout=10)
             r = self.session.post(LOGIN_URL, data=payload, timeout=10)
+
             if "error" in r.text.lower():
-                logger.error("Login falló")
+                logger.error("Login fallo")
                 return False
+
             logger.info("Login OK")
             return True
         except Exception as e:
@@ -88,18 +88,22 @@ class HomeServe:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             soup = BeautifulSoup(r.text, "html.parser")
             texto = soup.get_text("\n")
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
+
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     idserv = m.group(0)
                     limpio = " ".join(b.split())
                     servicios[idserv] = limpio
-            logger.info(f"Servicios detectados: {len(servicios)}")
+
+            logger.info(f"Servicios: {len(servicios)}")
             return servicios
+
         except Exception as e:
-            logger.error(f"Error obteniendo servicios: {e}")
+            logger.error(f"Error obtener: {e}")
             return {}
 
 homeserve = HomeServe()
@@ -109,8 +113,7 @@ homeserve = HomeServe()
 def bot_loop():
     global SERVICIOS_ACTUALES
 
-    if not homeserve.login():
-        logger.error("No se pudo iniciar sesión al arrancar")
+    homeserve.login()
 
     while True:
         try:
@@ -124,7 +127,7 @@ def bot_loop():
             time.sleep(INTERVALO)
 
         except Exception as e:
-            logger.error(f"Error loop: {e}")
+            logger.error(f"Loop error: {e}")
             homeserve.login()
             time.sleep(20)
 
@@ -171,20 +174,17 @@ def telegram_webhook():
                 txt = "Nada encontrado"
             enviar(chat, txt)
 
-    elif "message" in data and "text" in data["message"]:
+    elif "message" in data:
         chat = data["message"]["chat"]["id"]
-        if data["message"]["text"] == "/start":
+        if data["message"].get("text") == "/start":
             enviar(chat, "👋 Bot activo")
 
     return jsonify(ok=True)
 
-# ---------------- THREAD SAFE ----------------
+# ---------------- START ----------------
 
-if os.environ.get("RAILWAY_ENVIRONMENT"):
-    threading.Thread(target=bot_loop, daemon=True).start()
-
-# ---------------- RUN ----------------
+threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
