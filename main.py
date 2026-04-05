@@ -29,7 +29,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
 SERVICIOS_ACTUALES = {}
-SERVICIOS_ESTADO = {}  # ✅ NUEVO
+SERVICIOS_ESTADO = {}
+
+# ---------------- BOTONES GENERALES ----------------
+
+def botones_generales():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔐 Login", "callback_data": "LOGIN"},
+                {"text": "🔄 Refresh", "callback_data": "REFRESH"}
+            ],
+            [
+                {"text": "📋 Guardados", "callback_data": "GUARDADOS"}
+            ],
+            [
+                {"text": "🌐 Web", "callback_data": "WEB"}
+            ],
+            [
+                {"text": "🌐 Ir asignación", "url": ASIGNACION_URL}
+            ]
+        ]
+    }
 
 # ---------------- TELEGRAM ----------------
 
@@ -39,7 +60,8 @@ def enviar(chat, texto):
         json={
             "chat_id": chat,
             "text": texto,
-            "parse_mode": "HTML"
+            "parse_mode": "HTML",
+            "reply_markup": botones_generales()
         }
     )
 
@@ -49,6 +71,9 @@ def enviar_servicio(chat, servicio_id, texto):
             [
                 {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{servicio_id}"},
                 {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{servicio_id}"}
+            ],
+            [
+                {"text": "🔄 Refresh", "callback_data": "REFRESH"}
             ]
         ]
     }
@@ -159,25 +184,52 @@ def telegram_webhook():
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
-        # ✅ ACEPTAR
-        if accion.startswith("ACEPTAR_"):
+        # ---------------- BOTONES ANTIGUOS ----------------
+
+        if accion == "LOGIN":
+            ok = homeserve.login()
+            enviar(chat, "✅ Login OK" if ok else "❌ Error login")
+
+        elif accion == "REFRESH":
+            SERVICIOS_ACTUALES.update(homeserve.obtener())
+            enviar(chat, "🔄 Actualizado")
+
+        elif accion == "GUARDADOS":
+            if SERVICIOS_ACTUALES:
+                txt = "📋 <b>Servicios</b>\n\n"
+                for s in SERVICIOS_ACTUALES.values():
+                    txt += s + "\n\n"
+            else:
+                txt = "Sin datos"
+            enviar(chat, txt)
+
+        elif accion == "WEB":
+            actuales = homeserve.obtener()
+            if actuales:
+                txt = "🌐 <b>Web</b>\n\n"
+                for s in actuales.values():
+                    txt += s + "\n\n"
+            else:
+                txt = "Nada encontrado"
+            enviar(chat, txt)
+
+        # ---------------- NUEVOS BOTONES ----------------
+
+        elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
-
             enviar(chat, f"✅ Servicio {servicio_id} aceptado")
 
-        # ❌ RECHAZAR
         elif accion.startswith("RECHAZAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
-
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
     elif "message" in data:
         chat = data["message"]["chat"]["id"]
 
         if data["message"].get("text") == "/start":
-            enviar(chat, "👋 Bot activo con control de servicios")
+            enviar(chat, "👋 Bot activo con control total")
 
     return jsonify(ok=True)
 
