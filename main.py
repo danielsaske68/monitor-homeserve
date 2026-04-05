@@ -105,21 +105,31 @@ def enviar_estado_servicio(chat, servicio_id, texto):
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
+        self.driver = None
+        self.logged_in = False
 
+    # ---------------- LOGIN ----------------
     def login(self):
         try:
-            payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
-            self.session.get(LOGIN_URL, timeout=10)
-            r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-            if "error" in r.text.lower():
-                logger.error("Login fallo")
-                return False
-            logger.info("Login OK")
+            if self.driver:
+                self.driver.quit()
+            options = webdriver.ChromeOptions()
+            options.add_argument("--headless")
+            self.driver = webdriver.Chrome(options=options)
+            self.driver.get(LOGIN_URL)
+            self.driver.find_element(By.NAME, "CODIGO").send_keys(USUARIO)
+            self.driver.find_element(By.NAME, "PASSW").send_keys(PASSWORD)
+            self.driver.find_element(By.NAME, "BTN").click()
+            time.sleep(2)
+            self.logged_in = True
+            logger.info("Login Selenium OK")
             return True
         except Exception as e:
-            logger.error(f"Error login: {e}")
+            logger.error(f"Error login Selenium: {e}")
+            self.logged_in = False
             return False
 
+    # ---------------- SERVICIOS ----------------
     def obtener_servicios_nuevos(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
@@ -158,66 +168,55 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
-    # ---------------- CAMBIO DE ESTADO CON SELENIUM ----------------
+    # ---------------- CAMBIO DE ESTADO ----------------
     def cambiar_estado_servicio(self, servicio_id):
-        logger.info(f"🔧 Iniciando cambio de estado (Selenium) para {servicio_id}")
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless")  # Ejecutar sin abrir ventana
-        driver = webdriver.Chrome(options=options)
-
+        if not self.logged_in:
+            if not self.login():
+                return False
         try:
-            # 1️⃣ Login
-            driver.get(LOGIN_URL)
-            driver.find_element(By.NAME, "CODIGO").send_keys(USUARIO)
-            driver.find_element(By.NAME, "PASSW").send_keys(PASSWORD)
-            driver.find_element(By.NAME, "BTN").click()
-            time.sleep(2)
-
-            # 2️⃣ Abrir servicio
+            # Abrir servicio
             url_servicio = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio={servicio_id}&Pag=1"
-            driver.get(url_servicio)
+            self.driver.get(url_servicio)
             time.sleep(2)
 
-            # 3️⃣ Click en imagen "repaso"
-            driver.find_element(By.NAME, "repaso").click()
+            # Click en repaso
+            self.driver.find_element(By.NAME, "repaso").click()
             time.sleep(2)
 
-            # 4️⃣ Seleccionar estado
-            select_estado = Select(driver.find_element(By.NAME, "estado"))
-            select_estado.select_by_value("348")  # En espera de Cliente
+            # Estado
+            Select(self.driver.find_element(By.NAME, "estado")).select_by_value("348")
 
-            # 5️⃣ Fecha siguiente
+            # Fecha siguiente
             mañana = datetime.now() + timedelta(days=1)
-            driver.find_element(By.NAME, "FECSIG").clear()
-            driver.find_element(By.NAME, "FECSIG").send_keys(mañana.strftime("%d/%m/%Y"))
+            fecha_input = self.driver.find_element(By.NAME, "FECSIG")
+            fecha_input.clear()
+            fecha_input.send_keys(mañana.strftime("%d/%m/%Y"))
 
-            # 6️⃣ Marcar checkbox
-            driver.find_element(By.NAME, "INFORMO").click()
+            # Checkbox INFORMO
+            checkbox = self.driver.find_element(By.NAME, "INFORMO")
+            if not checkbox.is_selected():
+                checkbox.click()
 
-            # 7️⃣ Rellenar observaciones
-            driver.find_element(By.NAME, "Observaciones").send_keys("ala espera de localizar asegurado")
+            # Observaciones
+            obs = self.driver.find_element(By.NAME, "Observaciones")
+            obs.clear()
+            obs.send_keys("ala espera de localizar asegurado")
 
-            # 8️⃣ Click en "Aceptar el Cambio"
-            driver.find_element(By.NAME, "BTNCAMBIAESTADO").click()
+            # Aceptar cambios
+            self.driver.find_element(By.NAME, "BTNCAMBIAESTADO").click()
             time.sleep(2)
 
-            logger.info(f"✅ Servicio {servicio_id} actualizado con Selenium")
+            logger.info(f"✅ Servicio {servicio_id} actualizado")
             return True
-
         except Exception as e:
-            logger.error(f"❌ Error cambiando estado servicio {servicio_id}: {e}")
+            logger.error(f"❌ Error cambiando estado {servicio_id}: {e}")
             return False
-
-        finally:
-            driver.quit()
-
 
 homeserve = HomeServe()
 
-# ---------------- LOOP DE SERVICIOS NUEVOS ----------------
+# ---------------- LOOP SERVICIOS NUEVOS ----------------
 def bot_loop():
     global SERVICIOS_ACTUALES
-
     homeserve.login()
 
     while True:
@@ -243,7 +242,6 @@ def home():
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     global SERVICIOS_ESTADO, SERVICIOS_CURSO, SERVICIOS_ACTUALES
-
     data = request.json
 
     if "callback_query" in data:
