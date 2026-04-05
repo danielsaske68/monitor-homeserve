@@ -32,7 +32,6 @@ SERVICIOS_ACTUALES = {}
 SERVICIOS_ESTADO = {}
 
 # ---------------- BOTONES GENERALES ----------------
-
 def botones_generales():
     return {
         "inline_keyboard": [
@@ -41,10 +40,8 @@ def botones_generales():
                 {"text": "🔄 Refresh", "callback_data": "REFRESH"}
             ],
             [
-                {"text": "📋 Guardados", "callback_data": "GUARDADOS"}
-            ],
-            [
-                {"text": "🌐 Web", "callback_data": "WEB"}
+                {"text": "🌐 Web", "callback_data": "WEB"},
+                {"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}
             ],
             [
                 {"text": "🌐 Ir asignación", "url": ASIGNACION_URL}
@@ -53,7 +50,6 @@ def botones_generales():
     }
 
 # ---------------- TELEGRAM ----------------
-
 def enviar(chat, texto):
     requests.post(
         TELEGRAM_API + "/sendMessage",
@@ -89,7 +85,6 @@ def enviar_servicio(chat, servicio_id, texto):
     )
 
 # ---------------- HOMESERVE ----------------
-
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
@@ -137,10 +132,22 @@ class HomeServe:
             logger.error(f"Error obtener: {e}")
             return {}
 
+    def cambiar_estado_servicio(self, idserv, estado):
+        """
+        Función dummy para cambiar el estado del servicio.
+        Dependiendo de la web, aquí se puede hacer POST con idserv y estado.
+        """
+        try:
+            # TODO: Implementar POST real según el endpoint de cambio de estado
+            logger.info(f"Cambiando estado {idserv} -> {estado}")
+            return True
+        except Exception as e:
+            logger.error(f"Error cambiar estado: {e}")
+            return False
+
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
-
 def bot_loop():
     global SERVICIOS_ACTUALES
 
@@ -167,7 +174,6 @@ def bot_loop():
             time.sleep(20)
 
 # ---------------- FLASK ----------------
-
 app = Flask(__name__)
 
 @app.route("/")
@@ -185,7 +191,6 @@ def telegram_webhook():
         chat = data["callback_query"]["message"]["chat"]["id"]
 
         # ---------------- BOTONES ANTIGUOS ----------------
-
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
@@ -193,15 +198,6 @@ def telegram_webhook():
         elif accion == "REFRESH":
             SERVICIOS_ACTUALES.update(homeserve.obtener())
             enviar(chat, "🔄 Actualizado")
-
-        elif accion == "GUARDADOS":
-            if SERVICIOS_ACTUALES:
-                txt = "📋 <b>Servicios</b>\n\n"
-                for s in SERVICIOS_ACTUALES.values():
-                    txt += s + "\n\n"
-            else:
-                txt = "Sin datos"
-            enviar(chat, txt)
 
         elif accion == "WEB":
             actuales = homeserve.obtener()
@@ -214,7 +210,6 @@ def telegram_webhook():
             enviar(chat, txt)
 
         # ---------------- NUEVOS BOTONES ----------------
-
         elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
@@ -225,16 +220,50 @@ def telegram_webhook():
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
+        # ---------------- CAMBIAR ESTADO ----------------
+        elif accion == "CAMBIAR_ESTADO":
+            servicios = homeserve.obtener()  # Servicios en curso
+            if not servicios:
+                enviar(chat, "No hay servicios en curso.")
+                return jsonify(ok=True)
+
+            for idserv, texto_servicio in servicios.items():
+                botones = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "✅ Pendiente", "callback_data": f"ESTADO_{idserv}_PENDIENTE"},
+                            {"text": "🔧 En Proceso", "callback_data": f"ESTADO_{idserv}_ENPROCESO"},
+                            {"text": "✔️ Finalizado", "callback_data": f"ESTADO_{idserv}_FINALIZADO"}
+                        ]
+                    ]
+                }
+                requests.post(
+                    TELEGRAM_API + "/sendMessage",
+                    json={
+                        "chat_id": chat,
+                        "text": f"<b>Servicio {idserv}</b>\n\n{texto_servicio}",
+                        "parse_mode": "HTML",
+                        "reply_markup": botones
+                    }
+                )
+
+        elif accion.startswith("ESTADO_"):
+            _, idserv, nuevo_estado = accion.split("_")
+            exito = homeserve.cambiar_estado_servicio(idserv, estado=nuevo_estado)
+            if exito:
+                SERVICIOS_ESTADO[idserv] = nuevo_estado
+                enviar(chat, f"✅ Servicio {idserv} cambiado a {nuevo_estado}")
+            else:
+                enviar(chat, f"❌ No se pudo cambiar el estado del servicio {idserv}")
+
     elif "message" in data:
         chat = data["message"]["chat"]["id"]
-
         if data["message"].get("text") == "/start":
             enviar(chat, "👋 Bot activo con control total")
 
     return jsonify(ok=True)
 
 # ---------------- START ----------------
-
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
