@@ -20,7 +20,7 @@ INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 60))
 if not all([USUARIO, PASSWORD, BOT_TOKEN, CHAT_ID]):
     raise ValueError("Faltan variables de entorno")
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
