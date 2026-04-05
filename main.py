@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 
@@ -33,8 +34,7 @@ SERVICIOS_ACTUALES = {}
 SERVICIOS_ESTADO = {}
 SERVICIOS_CURSO = {}
 
-# ---------------- BOTONES GENERALES ----------------
-
+# ---------------- BOTONES ----------------
 def botones_generales():
     return {
         "inline_keyboard": [
@@ -44,8 +44,6 @@ def botones_generales():
             [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}]
         ]
     }
-
-# ---------------- TELEGRAM ----------------
 
 def enviar(chat, texto):
     requests.post(
@@ -98,7 +96,6 @@ def enviar_estado_servicio(chat, servicio_id, texto):
     )
 
 # ---------------- HOMESERVE ----------------
-
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
@@ -119,6 +116,7 @@ class HomeServe:
             logger.error(f"Error login: {e}")
             return False
 
+    # Servicios nuevos
     def obtener(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
@@ -138,6 +136,7 @@ class HomeServe:
             logger.error(f"Error obtener: {e}")
             return {}
 
+    # Servicios en curso
     def obtener_servicios_en_curso(self):
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
@@ -157,40 +156,54 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
-    def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
-        """
-        Cambia el estado de un servicio en HomeServe automáticamente.
-        nuevo_estado: 'ENPROGRESO' o 'FINALIZADO'
-        """
+    # Cambiar estado de un servicio
+    def cambiar_estado(self, servicio_id, nuevo_estado):
         try:
-            url_servicio = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=detalle_servicio&id={servicio_id}"
-            r = self.session.get(url_servicio, timeout=10)
+            # Paso 1: ir a la página del servicio
+            url_detalle = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_servicio_detalle&ID_SERVICIO={servicio_id}"
+            r = self.session.get(url_detalle, timeout=10)
             soup = BeautifulSoup(r.text, "html.parser")
+
+            # Paso 2: localizar el formulario de cambio de estado
+            form = soup.find("form", {"name": "form_estado"})
+            if not form:
+                logger.error(f"No se encontró el formulario de cambio de estado para {servicio_id}")
+                return False
+
+            # Paso 3: obtener todos los campos hidden
             payload = {}
-            for inp in soup.find_all("input", {"type": "hidden"}):
-                payload[inp.get("name")] = inp.get("value")
+            for input_tag in form.find_all("input", {"type": "hidden"}):
+                if input_tag.get("name"):
+                    payload[input_tag["name"]] = input_tag.get("value", "")
 
+            # Paso 4: agregar el estado y la fecha actual
             payload["estado"] = nuevo_estado
-            cambio_url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=cambio_estado"
-            r2 = self.session.post(cambio_url, data=payload, timeout=10)
+            payload["fecha"] = datetime.now().strftime("%-d/%m/%Y")  # ej: 6/03/2026
 
-            if "error" in r2.text.lower():
+            # Paso 5: enviar POST
+            action_url = form.get("action")
+            if not action_url.startswith("http"):
+                action_url = "https://www.clientes.homeserve.es" + action_url
+
+            r_post = self.session.post(action_url, data=payload, timeout=10)
+            if "error" in r_post.text.lower():
                 logger.error(f"Error al cambiar estado del servicio {servicio_id}")
                 return False
 
-            logger.info(f"Servicio {servicio_id} cambiado a {nuevo_estado} ✅")
+            logger.info(f"Servicio {servicio_id} cambiado a {nuevo_estado}")
             return True
         except Exception as e:
-            logger.error(f"Excepción cambiar_estado_servicio: {e}")
+            logger.error(f"Excepción cambiando estado {servicio_id}: {e}")
             return False
 
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
-
 def bot_loop():
     global SERVICIOS_ACTUALES
+
     homeserve.login()
+
     while True:
         try:
             actuales = homeserve.obtener()
@@ -205,7 +218,6 @@ def bot_loop():
             time.sleep(20)
 
 # ---------------- FLASK ----------------
-
 app = Flask(__name__)
 
 @app.route("/")
@@ -215,12 +227,14 @@ def home():
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     global SERVICIOS_ESTADO, SERVICIOS_CURSO
+
     data = request.json
 
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
+        # BOTONES GENERALES
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
@@ -255,14 +269,14 @@ def telegram_webhook():
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
-        # CAMBIO DE ESTADO AUTOMÁTICO
+        # CAMBIO DE ESTADO EN CURSO
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
-            ok = homeserve.cambiar_estado_servicio(servicio_id, nuevo_estado)
+            ok = homeserve.cambiar_estado(servicio_id, nuevo_estado)
             if ok:
                 SERVICIOS_ESTADO[servicio_id] = nuevo_estado
-                enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado} ✅")
+                enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
             else:
                 enviar(chat, f"❌ Error cambiando estado del servicio {servicio_id}")
 
@@ -274,7 +288,6 @@ def telegram_webhook():
     return jsonify(ok=True)
 
 # ---------------- START ----------------
-
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
