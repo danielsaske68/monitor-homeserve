@@ -7,7 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -34,7 +34,8 @@ SERVICIOS_ACTUALES = {}
 SERVICIOS_ESTADO = {}
 SERVICIOS_CURSO = {}
 
-# ---------------- BOTONES ----------------
+# ---------------- BOTONES GENERALES ----------------
+
 def botones_generales():
     return {
         "inline_keyboard": [
@@ -44,6 +45,8 @@ def botones_generales():
             [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}]
         ]
     }
+
+# ---------------- TELEGRAM ----------------
 
 def enviar(chat, texto):
     requests.post(
@@ -96,6 +99,7 @@ def enviar_estado_servicio(chat, servicio_id, texto):
     )
 
 # ---------------- HOMESERVE ----------------
+
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
@@ -156,49 +160,94 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
-    # Cambiar estado de un servicio
-    def cambiar_estado(self, servicio_id, nuevo_estado):
+    # Cambiar estado automáticamente
+    def cambiar_estado_servicio(self, servicio_id, estado="348"):
         try:
-            # Paso 1: ir a la página del servicio
-            url_detalle = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_servicio_detalle&ID_SERVICIO={servicio_id}"
-            r = self.session.get(url_detalle, timeout=10)
+            logger.info(f"🔧 Cambiando estado servicio {servicio_id}")
+
+            # 1. Abrir lista servicios
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
             soup = BeautifulSoup(r.text, "html.parser")
 
-            # Paso 2: localizar el formulario de cambio de estado
-            form = soup.find("form", {"name": "form_estado"})
+            # 2. Buscar link del servicio
+            link_servicio = None
+            for a in soup.find_all("a"):
+                if servicio_id in a.text:
+                    link_servicio = a.get("href")
+                    break
+
+            if not link_servicio:
+                logger.error(f"No se encontró link del servicio {servicio_id}")
+                return False
+
+            if not link_servicio.startswith("http"):
+                link_servicio = "https://www.clientes.homeserve.es" + link_servicio
+
+            # 3. Entrar al servicio
+            r2 = self.session.get(link_servicio, timeout=15)
+            soup2 = BeautifulSoup(r2.text, "html.parser")
+
+            form = soup2.find("form")
             if not form:
+                logger.error(f"No se encontró form del servicio {servicio_id}")
+                return False
+
+            action = form.get("action")
+            if not action.startswith("http"):
+                action = "https://www.clientes.homeserve.es" + action
+
+            # 4. Simular click en botón IMAGE (repaso)
+            data_click = {}
+            for inp in form.find_all("input"):
+                if inp.get("name"):
+                    data_click[inp.get("name")] = inp.get("value", "")
+
+            # Este es el click clave
+            data_click["repaso.x"] = "10"
+            data_click["repaso.y"] = "10"
+
+            r3 = self.session.post(action, data=data_click, timeout=15)
+            soup3 = BeautifulSoup(r3.text, "html.parser")
+
+            # 5. Buscar formulario de cambio de estado
+            form_estado = soup3.find("form")
+            if not form_estado:
                 logger.error(f"No se encontró el formulario de cambio de estado para {servicio_id}")
                 return False
 
-            # Paso 3: obtener todos los campos hidden
-            payload = {}
-            for input_tag in form.find_all("input", {"type": "hidden"}):
-                if input_tag.get("name"):
-                    payload[input_tag["name"]] = input_tag.get("value", "")
+            action_estado = form_estado.get("action")
+            if not action_estado.startswith("http"):
+                action_estado = "https://www.clientes.homeserve.es" + action_estado
 
-            # Paso 4: agregar el estado y la fecha actual
-            payload["estado"] = nuevo_estado
-            payload["fecha"] = datetime.now().strftime("%-d/%m/%Y")  # ej: 6/03/2026
+            # 6. Generar fecha
+            fecha = datetime.now().strftime("%d/%m/%Y")
 
-            # Paso 5: enviar POST
-            action_url = form.get("action")
-            if not action_url.startswith("http"):
-                action_url = "https://www.clientes.homeserve.es" + action_url
+            # 7. Enviar cambio
+            data_estado = {
+                "ESTADO": estado,
+                "FECSIG": fecha,
+                "INFORMO": "on",
+                "Observaciones": "Gestionado automáticamente",
+                "BTNCAMBIAESTADO": "Aceptar el Cambio"
+            }
 
-            r_post = self.session.post(action_url, data=payload, timeout=10)
-            if "error" in r_post.text.lower():
-                logger.error(f"Error al cambiar estado del servicio {servicio_id}")
-                return False
+            r4 = self.session.post(action_estado, data=data_estado, timeout=15)
 
-            logger.info(f"Servicio {servicio_id} cambiado a {nuevo_estado}")
-            return True
+            if "estado actual" in r4.text.lower() or "reparacion" in r4.text.lower():
+                logger.info(f"✅ Estado cambiado correctamente {servicio_id}")
+                return True
+
+            logger.error(f"❌ Fallo real cambiando estado {servicio_id}")
+            return False
+
         except Exception as e:
-            logger.error(f"Excepción cambiando estado {servicio_id}: {e}")
+            logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
             return False
 
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
+
 def bot_loop():
     global SERVICIOS_ACTUALES
 
@@ -218,6 +267,7 @@ def bot_loop():
             time.sleep(20)
 
 # ---------------- FLASK ----------------
+
 app = Flask(__name__)
 
 @app.route("/")
@@ -273,7 +323,11 @@ def telegram_webhook():
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
-            ok = homeserve.cambiar_estado(servicio_id, nuevo_estado)
+
+            # Elegir código según botón
+            estado_code = "348" if nuevo_estado == "ENPROGRESO" else "349"
+
+            ok = homeserve.cambiar_estado_servicio(servicio_id, estado=estado_code)
             if ok:
                 SERVICIOS_ESTADO[servicio_id] = nuevo_estado
                 enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
@@ -288,6 +342,7 @@ def telegram_webhook():
     return jsonify(ok=True)
 
 # ---------------- START ----------------
+
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
