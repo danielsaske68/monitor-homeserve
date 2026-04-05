@@ -40,10 +40,8 @@ def botones_generales():
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
-            [{"text": "📋 Guardados", "callback_data": "GUARDADOS"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}],
-            [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}],
-            [{"text": "🌐 Ir asignación", "url": ASIGNACION_URL}]
+            [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}]
         ]
     }
 
@@ -121,7 +119,6 @@ class HomeServe:
             logger.error(f"Error login: {e}")
             return False
 
-    # Servicios nuevos
     def obtener(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
@@ -141,7 +138,6 @@ class HomeServe:
             logger.error(f"Error obtener: {e}")
             return {}
 
-    # Servicios en curso
     def obtener_servicios_en_curso(self):
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
@@ -161,15 +157,40 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
+    def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
+        """
+        Cambia el estado de un servicio en HomeServe automáticamente.
+        nuevo_estado: 'ENPROGRESO' o 'FINALIZADO'
+        """
+        try:
+            url_servicio = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=detalle_servicio&id={servicio_id}"
+            r = self.session.get(url_servicio, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            payload = {}
+            for inp in soup.find_all("input", {"type": "hidden"}):
+                payload[inp.get("name")] = inp.get("value")
+
+            payload["estado"] = nuevo_estado
+            cambio_url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=cambio_estado"
+            r2 = self.session.post(cambio_url, data=payload, timeout=10)
+
+            if "error" in r2.text.lower():
+                logger.error(f"Error al cambiar estado del servicio {servicio_id}")
+                return False
+
+            logger.info(f"Servicio {servicio_id} cambiado a {nuevo_estado} ✅")
+            return True
+        except Exception as e:
+            logger.error(f"Excepción cambiar_estado_servicio: {e}")
+            return False
+
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
 
 def bot_loop():
     global SERVICIOS_ACTUALES
-
     homeserve.login()
-
     while True:
         try:
             actuales = homeserve.obtener()
@@ -194,14 +215,12 @@ def home():
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     global SERVICIOS_ESTADO, SERVICIOS_CURSO
-
     data = request.json
 
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
-        # ---------------- BOTONES GENERALES ----------------
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
@@ -210,12 +229,6 @@ def telegram_webhook():
             SERVICIOS_ACTUALES.update(homeserve.obtener())
             enviar(chat, "🔄 Actualizado")
 
-        elif accion == "GUARDADOS":
-            txt = "📋 <b>Servicios</b>\n\n"
-            for s in SERVICIOS_ACTUALES.values():
-                txt += s + "\n\n"
-            enviar(chat, txt if SERVICIOS_ACTUALES else "Sin datos")
-
         elif accion == "WEB":
             actuales = homeserve.obtener()
             txt = "🌐 <b>Web</b>\n\n"
@@ -223,36 +236,15 @@ def telegram_webhook():
                 txt += s + "\n\n"
             enviar(chat, txt if actuales else "Nada encontrado")
 
-        # ---------------- CAMBIAR ESTADO ----------------
         elif accion == "CAMBIAR_ESTADO":
             SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
             if SERVICIOS_CURSO:
-                # Enviar lista de servicios para seleccionar
-                botones = {"inline_keyboard": []}
                 for idserv, servicio in SERVICIOS_CURSO.items():
-                    botones["inline_keyboard"].append(
-                        [{"text": f"{idserv} - {servicio[:30]}...", "callback_data": f"SELECCION_{idserv}"}]
-                    )
-                requests.post(
-                    TELEGRAM_API + "/sendMessage",
-                    json={
-                        "chat_id": chat,
-                        "text": "🔧 <b>Selecciona un servicio para cambiar estado</b>",
-                        "parse_mode": "HTML",
-                        "reply_markup": botones
-                    }
-                )
+                    enviar_estado_servicio(chat, idserv, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
             else:
                 enviar(chat, "No hay servicios en curso para cambiar estado.")
 
-        # ---------------- SELECCIÓN DE SERVICIO ----------------
-        elif accion.startswith("SELECCION_"):
-            servicio_id = accion.split("_")[1]
-            servicio = SERVICIOS_CURSO.get(servicio_id, "Servicio no encontrado")
-            # Enviar botones de cambio de estado para este servicio
-            enviar_estado_servicio(chat, servicio_id, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
-
-        # ---------------- SERVICIOS NUEVOS ----------------
+        # SERVICIOS NUEVOS
         elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
@@ -263,14 +255,17 @@ def telegram_webhook():
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
-        # ---------------- CAMBIO DE ESTADO EN CURSO ----------------
+        # CAMBIO DE ESTADO AUTOMÁTICO
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
-            SERVICIOS_ESTADO[servicio_id] = nuevo_estado
-            enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
+            ok = homeserve.cambiar_estado_servicio(servicio_id, nuevo_estado)
+            if ok:
+                SERVICIOS_ESTADO[servicio_id] = nuevo_estado
+                enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado} ✅")
+            else:
+                enviar(chat, f"❌ Error cambiando estado del servicio {servicio_id}")
 
-    # ---------------- COMANDOS ----------------
     elif "message" in data:
         chat = data["message"]["chat"]["id"]
         if data["message"].get("text") == "/start":
