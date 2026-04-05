@@ -7,7 +7,12 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
+
+# 🔹 Selenium imports
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import Select
 
 load_dotenv()
 
@@ -153,18 +158,59 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
-    def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
+    # ---------------- CAMBIO DE ESTADO CON SELENIUM ----------------
+    def cambiar_estado_servicio(self, servicio_id):
+        logger.info(f"🔧 Iniciando cambio de estado (Selenium) para {servicio_id}")
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")  # Ejecutar sin abrir ventana
+        driver = webdriver.Chrome(options=options)
+
         try:
-            # Formato fecha dd/mm/yyyy
-            fecha = datetime.now().strftime("%d/%m/%Y")
-            # Simulamos el cambio de estado
-            # Aquí debes colocar la lógica exacta que envía POST a HomeServe con 'repaso' u otros campos
-            logger.info(f"🔧 Cambiando estado servicio {servicio_id} a {nuevo_estado} ({fecha})")
-            # Si todo va bien
+            # 1️⃣ Login
+            driver.get(LOGIN_URL)
+            driver.find_element(By.NAME, "CODIGO").send_keys(USUARIO)
+            driver.find_element(By.NAME, "PASSW").send_keys(PASSWORD)
+            driver.find_element(By.NAME, "BTN").click()
+            time.sleep(2)
+
+            # 2️⃣ Abrir servicio
+            url_servicio = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio={servicio_id}&Pag=1"
+            driver.get(url_servicio)
+            time.sleep(2)
+
+            # 3️⃣ Click en imagen "repaso"
+            driver.find_element(By.NAME, "repaso").click()
+            time.sleep(2)
+
+            # 4️⃣ Seleccionar estado
+            select_estado = Select(driver.find_element(By.NAME, "estado"))
+            select_estado.select_by_value("348")  # En espera de Cliente
+
+            # 5️⃣ Fecha siguiente
+            mañana = datetime.now() + timedelta(days=1)
+            driver.find_element(By.NAME, "FECSIG").clear()
+            driver.find_element(By.NAME, "FECSIG").send_keys(mañana.strftime("%d/%m/%Y"))
+
+            # 6️⃣ Marcar checkbox
+            driver.find_element(By.NAME, "INFORMO").click()
+
+            # 7️⃣ Rellenar observaciones
+            driver.find_element(By.NAME, "Observaciones").send_keys("ala espera de localizar asegurado")
+
+            # 8️⃣ Click en "Aceptar el Cambio"
+            driver.find_element(By.NAME, "BTNCAMBIAESTADO").click()
+            time.sleep(2)
+
+            logger.info(f"✅ Servicio {servicio_id} actualizado con Selenium")
             return True
+
         except Exception as e:
-            logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
+            logger.error(f"❌ Error cambiando estado servicio {servicio_id}: {e}")
             return False
+
+        finally:
+            driver.quit()
+
 
 homeserve = HomeServe()
 
@@ -243,7 +289,7 @@ def telegram_webhook():
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
-            ok = homeserve.cambiar_estado_servicio(servicio_id, nuevo_estado)
+            ok = homeserve.cambiar_estado_servicio(servicio_id)
             if ok:
                 SERVICIOS_ESTADO[servicio_id] = nuevo_estado
                 enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
