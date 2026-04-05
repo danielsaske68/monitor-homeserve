@@ -188,7 +188,7 @@ def telegram_webhook():
 
         if accion == "LOGIN":
             ok = homeserve.login()
-            enviar(chat, "✅ Login OK" if ok else "❌ Error login")
+            enviar(chat, "✅ Andamos Ready mi rey" if ok else "❌ Error login")
 
         elif accion == "REFRESH":
             SERVICIOS_ACTUALES.update(homeserve.obtener())
@@ -200,7 +200,7 @@ def telegram_webhook():
                 for s in SERVICIOS_ACTUALES.values():
                     txt += s + "\n\n"
             else:
-                txt = "Sin datos"
+                txt = "tamos pailas"
             enviar(chat, txt)
 
         elif accion == "WEB":
@@ -210,7 +210,7 @@ def telegram_webhook():
                 for s in actuales.values():
                     txt += s + "\n\n"
             else:
-                txt = "Nada encontrado"
+                txt = "No hay nada mi rey"
             enviar(chat, txt)
 
         # ---------------- NUEVOS BOTONES ----------------
