@@ -1,0 +1,27 @@
+# Ignorar entornos virtuales
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignorar archivos de logs y temporales
+*.log
+*.tmp
+*.swp
+
+# Ignorar configuraciones locales y secretos
+.env
+.env.local
+.env.*.local
+
+# Ignorar archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Ignorar carpetas de node_modules si las tienes
+node_modules/
+
+# Ignorar navegadores descargados por Playwright (se instalarán en el contenedor)
+~/.cache/ms-playwright/
