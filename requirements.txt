@@ -1,9 +1,24 @@
+# Flask
 flask==3.1.3
+# Requests para hacer llamadas HTTP
 requests==2.33.1
+# BeautifulSoup para parsear HTML
 beautifulsoup4==4.14.3
+# Gunicorn para producción
 gunicorn==25.3.0
+# Bot de Telegram
 python-telegram-bot==13.15
+# Manejo de variables de entorno
 python-dotenv==1.2.2
+# Playwright para automatización de navegadores
 playwright==1.44.0
-greenlet==3.0.3
+# Scheduler para tareas programadas
+APScheduler==3.6.3
+# Librerías auxiliares requeridas por python-telegram-bot
+cachetools==4.2.2
+pytz==2026.1.post1
+six==1.17.0
+tzlocal==5.3.1
+# Librerías opcionales para compatibilidad de Playwright
 pyee==11.1.0
+typing-extensions==4.15.0
