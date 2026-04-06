@@ -8,13 +8,13 @@ from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
+# ---------------- CARGA DE VARIABLES ----------------
 load_dotenv()
 
-# ---------------- CONFIG ----------------
 USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # Chat ID de prueba
+CHAT_ID = os.getenv("CHAT_ID")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
@@ -60,13 +60,9 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
-        payload = {
-            "CODIGO": USUARIO,
-            "PASSW": PASSWORD,
-            "BTN": "Aceptar"
-        }
+        payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
         try:
-            self.session.get(LOGIN_URL)
+            self.session.get(LOGIN_URL, timeout=15)
             r = self.session.post(LOGIN_URL, data=payload, timeout=15)
             if "error" in r.text.lower():
                 logger.error("Login fallo")
@@ -78,12 +74,11 @@ class HomeServe:
             return False
 
     def obtener(self):
-        """Obtiene servicios de asignación para alertas de nuevos servicios"""
+        """Servicios nuevos para alertas"""
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             r.encoding = "latin-1"
-            soup = BeautifulSoup(r.text, "html.parser")
-            texto = soup.get_text("\n")
+            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
@@ -99,15 +94,12 @@ class HomeServe:
             return {}
 
     def obtener_servicios_curso(self):
-        """Obtiene todos los servicios en curso"""
+        """Servicios para cambiar estado"""
         try:
-            # Paso previo para asegurar sesión
-            self.session.get(ASIGNACION_URL, timeout=15)
             url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
             r = self.session.get(url, timeout=15)
             r.encoding = "latin-1"
-            soup = BeautifulSoup(r.text, "html.parser")
-            texto = soup.get_text("\n")
+            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
@@ -123,7 +115,7 @@ class HomeServe:
             return {}
 
     def cambiar_estado(self, servicio_id):
-        """Cambia el estado de un servicio usando el mismo flujo que el script manual"""
+        """Cambia el estado exactamente como el script manual"""
         try:
             payload = {
                 "w3exec": "ver_servicioencurso",
@@ -154,6 +146,7 @@ homeserve = HomeServe()
 # ---------------- LOOP AUTOMÁTICO ----------------
 def bot_loop():
     global SERVICIOS_ACTUALES
+    logger.info("Iniciando loop automático de alertas...")
     if not homeserve.login():
         logger.error("No se pudo iniciar sesión al arrancar el bot")
     while True:
@@ -176,7 +169,6 @@ app = Flask(__name__)
 def home():
     return f"HomeServe Monitor OK - Servicios guardados: {len(SERVICIOS_ACTUALES)}"
 
-# ---------------- TELEGRAM WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
@@ -234,5 +226,7 @@ threading.Thread(target=bot_loop, daemon=True).start()
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
+    logger.info("Arrancando Flask...")
     port = int(os.environ.get("PORT", 10000))
+    logger.info(f"Usando puerto: {port}")
     app.run(host="0.0.0.0", port=port)
