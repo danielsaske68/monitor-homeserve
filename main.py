@@ -15,7 +15,7 @@ USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")  # Chat ID de prueba
-INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 60))
+INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
@@ -29,7 +29,6 @@ logger = logging.getLogger("main")
 SERVICIOS_ACTUALES = {}
 
 # ---------------- TELEGRAM ----------------
-
 def botones():
     return {
         "inline_keyboard": [
@@ -56,7 +55,6 @@ def enviar(chat, texto):
         logger.error(f"Error enviando mensaje a Telegram: {e}")
 
 # ---------------- HOMESERVE ----------------
-
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
@@ -80,7 +78,7 @@ class HomeServe:
             return False
 
     def obtener(self):
-        """Obtiene servicios de la pestaña de asignación para alertas de nuevos servicios"""
+        """Obtiene servicios de asignación para alertas de nuevos servicios"""
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             r.encoding = "latin-1"
@@ -101,12 +99,10 @@ class HomeServe:
             return {}
 
     def obtener_servicios_curso(self):
-        """Obtiene servicios en curso (lista completa) siguiendo flujo manual para evitar 0 servicios"""
+        """Obtiene todos los servicios en curso"""
         try:
-            # Paso 1: Login y visitar la asignación para cargar sesión
+            # Paso previo para asegurar sesión
             self.session.get(ASIGNACION_URL, timeout=15)
-
-            # Paso 2: Visitar lista de servicios total
             url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
             r = self.session.get(url, timeout=15)
             r.encoding = "latin-1"
@@ -126,25 +122,20 @@ class HomeServe:
             logger.error(f"Error al obtener servicios en curso: {e}")
             return {}
 
-    def cambiar_estado(self, servicio_id, estado="348", fecsig="10/04/2026", observaciones="En espera de cliente por localizar"):
-        """Cambia el estado de un servicio"""
+    def cambiar_estado(self, servicio_id):
+        """Cambia el estado de un servicio usando el mismo flujo que el script manual"""
         try:
-            # Paso previo: visitar página del servicio
-            self.session.get(f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={servicio_id}", timeout=15)
-
-            # POST para cambiar el estado
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": servicio_id,
                 "Pag": "1",
-                "ESTADO": estado,
-                "FECSIG": fecsig,
+                "ESTADO": "348",
+                "FECSIG": "10/04/2026",
                 "INFORMO": "on",
-                "Observaciones": observaciones,
+                "Observaciones": "En espera de cliente por localizar",
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
             r = self.session.post(BASE_URL, data=payload, timeout=15)
-
             if "estado actual de la reparacion" in r.text.lower():
                 logger.info(f"Cambio de estado exitoso para {servicio_id}")
                 return True, "✅ Cambio de estado posible éxito"
@@ -161,7 +152,6 @@ class HomeServe:
 homeserve = HomeServe()
 
 # ---------------- LOOP AUTOMÁTICO ----------------
-
 def bot_loop():
     global SERVICIOS_ACTUALES
     if not homeserve.login():
@@ -180,7 +170,6 @@ def bot_loop():
             time.sleep(20)
 
 # ---------------- FLASK ----------------
-
 app = Flask(__name__)
 
 @app.route("/")
@@ -188,7 +177,6 @@ def home():
     return f"HomeServe Monitor OK - Servicios guardados: {len(SERVICIOS_ACTUALES)}"
 
 # ---------------- TELEGRAM WEBHOOK ----------------
-
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
@@ -242,11 +230,9 @@ def telegram_webhook():
     return jsonify(ok=True)
 
 # ---------------- THREAD ----------------
-
 threading.Thread(target=bot_loop, daemon=True).start()
 
 # ---------------- RUN ----------------
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
