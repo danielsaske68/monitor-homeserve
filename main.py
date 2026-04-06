@@ -24,7 +24,6 @@ if not all([USUARIO, PASSWORD, BOT_TOKEN, CHAT_ID]):
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
-CAMBIO_ESTADO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=cambiar_estado_servicio"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -58,13 +57,14 @@ def enviar(chat, texto):
         }
     )
 
-def enviar_servicio_nuevo(chat, servicio_id, texto):
+def enviar_servicio(chat, servicio_id, texto):
     botones = {
         "inline_keyboard": [
             [
                 {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{servicio_id}"},
                 {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{servicio_id}"}
-            ]
+            ],
+            [{"text": "🔄 Refresh", "callback_data": "REFRESH"}]
         ]
     }
     requests.post(
@@ -164,20 +164,17 @@ class HomeServe:
 
 homeserve = HomeServe()
 
-# ---------------- LOOP ----------------
+# ---------------- LOOP DE SERVICIOS NUEVOS ----------------
 def bot_loop():
-    global SERVICIOS_NUEVOS, SERVICIOS_CURSO
-
+    global SERVICIOS_NUEVOS
     homeserve.login()
     while True:
         try:
-            nuevos = homeserve.obtener_servicios_nuevos()
-            for idserv, servicio in nuevos.items():
+            actuales = homeserve.obtener_servicios_nuevos()
+            for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_NUEVOS:
-                    enviar_servicio_nuevo(CHAT_ID, idserv, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}")
-            SERVICIOS_NUEVOS = nuevos
-
-            SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
+                    enviar_servicio(CHAT_ID, idserv, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}")
+            SERVICIOS_NUEVOS = actuales
             time.sleep(INTERVALO)
         except Exception as e:
             logger.error(f"Loop error: {e}")
@@ -189,13 +186,14 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return f"OK - Servicios nuevos: {len(SERVICIOS_NUEVOS)} | En curso: {len(SERVICIOS_CURSO)}"
+    return f"OK - Servicios nuevos: {len(SERVICIOS_NUEVOS)}"
 
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
-    global SERVICIOS_ESTADO, SERVICIOS_NUEVOS, SERVICIOS_CURSO
+    global SERVICIOS_ESTADO, SERVICIOS_CURSO, SERVICIOS_NUEVOS
 
     data = request.json
+
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
@@ -204,35 +202,38 @@ def telegram_webhook():
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
+
         elif accion == "REFRESH":
-            nuevos = homeserve.obtener_servicios_nuevos()
-            SERVICIOS_NUEVOS.update(nuevos)
-            SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
+            SERVICIOS_NUEVOS.update(homeserve.obtener_servicios_nuevos())
             enviar(chat, "🔄 Actualizado")
+
         elif accion == "WEB":
+            # Mostrar solo servicios nuevos
             txt = ""
             for s in SERVICIOS_NUEVOS.values():
                 txt += s + "\n\n"
-            for s in SERVICIOS_CURSO.values():
-                txt += s + "\n\n"
-            enviar(chat, txt if txt else "Nada encontrado")
+            enviar(chat, txt if SERVICIOS_NUEVOS else "Nada nuevo por asignar")
+
         elif accion == "CAMBIAR_ESTADO":
-            for idserv, servicio in SERVICIOS_CURSO.items():
-                enviar_estado_servicio(chat, idserv, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
+            SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
+            if SERVICIOS_CURSO:
+                for idserv, servicio in SERVICIOS_CURSO.items():
+                    enviar_estado_servicio(chat, idserv, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
+            else:
+                enviar(chat, "No hay servicios en curso para cambiar estado.")
 
         # SERVICIOS NUEVOS
         elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
-            SERVICIOS_NUEVOS.pop(servicio_id, None)
             enviar(chat, f"✅ Servicio {servicio_id} aceptado")
+
         elif accion.startswith("RECHAZAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
-            SERVICIOS_NUEVOS.pop(servicio_id, None)
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
-        # SERVICIOS EN CURSO
+        # CAMBIO DE ESTADO EN CURSO
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
