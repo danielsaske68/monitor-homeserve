@@ -1,7 +1,13 @@
-# start.sh
-#!/bin/bash
-# instalar dependencias del sistema necesarias
-apt-get update && apt-get install -y \
+# Dockerfile
+# ---------------------------
+# Imagen base con Python 3.14
+FROM python:3.14-slim
+
+# Evitar prompts de instalación
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instalar dependencias de sistema necesarias para Playwright
+RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     fonts-liberation \
@@ -22,12 +28,24 @@ apt-get update && apt-get install -y \
     libfontconfig1 \
     && rm -rf /var/lib/apt/lists/*
 
-# instalar paquetes de Python
-pip install --upgrade pip
-pip install -r requirements.txt
+# Directorio de trabajo
+WORKDIR /app
 
-# instalar navegadores de Playwright
-playwright install --with-deps
+# Copiar requirements
+COPY requirements.txt .
 
-# arrancar el servidor
-gunicorn main:app --workers 1 --bind 0.0.0.0:$PORT
+# Instalar dependencias de Python
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
+
+# Copiar todo el proyecto
+COPY . .
+
+# Instalar navegadores de Playwright
+RUN playwright install --with-deps
+
+# Puerto de Railway
+ENV PORT=8080
+
+# Comando de inicio
+CMD ["gunicorn", "main:app", "--workers", "1", "--bind", "0.0.0.0:8080"]
