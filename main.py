@@ -122,18 +122,23 @@ class HomeServe:
 
     def cambiar_estado(self, servicio_id, estado="348", fecsig="10/04/2026", observaciones="En espera de cliente por localizar"):
         """Cambia el estado de un servicio"""
-        payload = {
-            "w3exec": "ver_servicioencurso",
-            "Servicio": servicio_id,
-            "Pag": "1",
-            "ESTADO": estado,
-            "FECSIG": fecsig,
-            "INFORMO": "on",
-            "Observaciones": observaciones,
-            "BTNCAMBIAESTADO": "Aceptar el Cambio"
-        }
         try:
+            # Paso previo: visitar la página de detalle del servicio
+            self.session.get(f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={servicio_id}", timeout=15)
+
+            # POST para cambiar el estado
+            payload = {
+                "w3exec": "ver_servicioencurso",
+                "Servicio": servicio_id,
+                "Pag": "1",
+                "ESTADO": estado,
+                "FECSIG": fecsig,
+                "INFORMO": "on",
+                "Observaciones": observaciones,
+                "BTNCAMBIAESTADO": "Aceptar el Cambio"
+            }
             r = self.session.post(BASE_URL, data=payload, timeout=15)
+
             if "estado actual de la reparacion" in r.text.lower():
                 logger.info(f"Cambio de estado exitoso para {servicio_id}")
                 return True, "✅ Cambio de estado posible éxito"
@@ -143,6 +148,7 @@ class HomeServe:
             else:
                 logger.warning(f"HTML inesperado para {servicio_id}")
                 return None, "⚠️ Revisar HTML manualmente"
+
         except Exception as e:
             logger.error(f"Error cambiando estado {servicio_id}: {e}")
             return False, f"❌ Error en request: {e}"
