@@ -7,7 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -155,13 +155,23 @@ class HomeServe:
 
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
-            # Formato fecha dd/mm/yyyy
-            fecha = datetime.now().strftime("%d/%m/%Y")
-            # Simulamos el cambio de estado
-            # Aquí debes colocar la lógica exacta que envía POST a HomeServe con 'repaso' u otros campos
-            logger.info(f"🔧 Cambiando estado servicio {servicio_id} a {nuevo_estado} ({fecha})")
-            # Si todo va bien
-            return True
+            fecha_siguiente = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+            payload = {
+                "SERVICIO": servicio_id,
+                "ESTADO": nuevo_estado,
+                "FECSIG": fecha_siguiente,
+                "INFORMO": "on",
+                "Observaciones": "ala espera de contactar con cliente",
+                "BTNCAMBIAESTADO": "Aceptar el Cambio"
+            }
+            url = SERVICIOS_CURSO_URL
+            r = self.session.post(url, data=payload, timeout=15)
+            if r.status_code == 200:
+                logger.info(f"🔧 Servicio {servicio_id} cambiado a {nuevo_estado}")
+                return True
+            else:
+                logger.error(f"Error HTTP {r.status_code} cambiando estado {servicio_id}")
+                return False
         except Exception as e:
             logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
             return False
@@ -171,9 +181,7 @@ homeserve = HomeServe()
 # ---------------- LOOP DE SERVICIOS NUEVOS ----------------
 def bot_loop():
     global SERVICIOS_ACTUALES
-
     homeserve.login()
-
     while True:
         try:
             actuales = homeserve.obtener_servicios_nuevos()
@@ -197,14 +205,12 @@ def home():
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     global SERVICIOS_ESTADO, SERVICIOS_CURSO, SERVICIOS_ACTUALES
-
     data = request.json
 
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
-        # BOTONES GENERALES
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
@@ -228,7 +234,6 @@ def telegram_webhook():
             else:
                 enviar(chat, "No hay servicios en curso para cambiar estado.")
 
-        # SERVICIOS NUEVOS
         elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
@@ -239,7 +244,6 @@ def telegram_webhook():
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
-        # CAMBIO DE ESTADO EN CURSO
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
