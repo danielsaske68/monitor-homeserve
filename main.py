@@ -24,6 +24,7 @@ if not all([USUARIO, PASSWORD, BOT_TOKEN, CHAT_ID]):
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
+BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -77,20 +78,27 @@ def enviar_servicio(chat, servicio_id, texto):
         }
     )
 
-def enviar_estado_servicio(chat, servicio_id, texto):
-    botones = {
-        "inline_keyboard": [
-            [
-                {"text": "🟡 En progreso", "callback_data": f"ESTADO_{servicio_id}_ENPROGRESO"},
-                {"text": "✅ Finalizado", "callback_data": f"ESTADO_{servicio_id}_FINALIZADO"}
-            ]
-        ]
-    }
+def enviar_estado_servicio(chat, servicio_id, estados_disponibles):
+    """
+    Envia botones dinámicos con todos los estados detectados en HomeServe.
+    """
+    keyboard = []
+    fila = []
+    for estado in estados_disponibles:
+        fila.append({"text": estado.replace("_", " "), "callback_data": f"ESTADO_{servicio_id}_{estado}"})
+        if len(fila) == 2:  # 2 botones por fila
+            keyboard.append(fila)
+            fila = []
+    if fila:
+        keyboard.append(fila)
+
+    botones = {"inline_keyboard": keyboard}
+
     requests.post(
         TELEGRAM_API + "/sendMessage",
         json={
             "chat_id": chat,
-            "text": texto,
+            "text": f"🔧 <b>Cambiar estado del servicio {servicio_id}</b>",
             "parse_mode": "HTML",
             "reply_markup": botones
         }
@@ -100,12 +108,15 @@ def enviar_estado_servicio(chat, servicio_id, texto):
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+        }
 
     def login(self):
         try:
             payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
-            self.session.get(LOGIN_URL, timeout=10)
-            r = self.session.post(LOGIN_URL, data=payload, timeout=10)
+            self.session.get(LOGIN_URL, timeout=10, headers=self.headers)
+            r = self.session.post(LOGIN_URL, data=payload, timeout=10, headers=self.headers)
             if "error" in r.text.lower():
                 logger.error("Login fallo")
                 return False
@@ -117,7 +128,7 @@ class HomeServe:
 
     def obtener_servicios_nuevos(self):
         try:
-            r = self.session.get(ASIGNACION_URL, timeout=15)
+            r = self.session.get(ASIGNACION_URL, timeout=15, headers=self.headers)
             soup = BeautifulSoup(r.text, "html.parser")
             texto = soup.get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
@@ -136,7 +147,7 @@ class HomeServe:
 
     def obtener_servicios_en_curso(self):
         try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15, headers=self.headers)
             soup = BeautifulSoup(r.text, "html.parser")
             texto = soup.get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
@@ -153,20 +164,18 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
-    # ---------------- CAMBIO DE ESTADO AUTOMÁTICO ----------------
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
-            BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
             fecha = datetime.now().strftime("%d/%m/%Y")
 
             # PASO 1: Abrir servicio
             url_servicio = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={servicio_id}&Pag=1"
-            r1 = self.session.get(url_servicio, timeout=15)
+            r1 = self.session.get(url_servicio, timeout=15, headers=self.headers)
             if "error" in r1.text.lower():
                 logger.error("Error abriendo servicio")
                 return False
 
-            # PASO 2: Simular click para cargar sección de cambio de estado
+            # PASO 2: Simular click para cargar sección cambio de estado
             payload_click = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": servicio_id,
@@ -174,7 +183,7 @@ class HomeServe:
                 "repaso.x": "10",
                 "repaso.y": "10"
             }
-            r2 = self.session.post(BASE_URL, data=payload_click, timeout=15)
+            r2 = self.session.post(BASE_URL, data=payload_click, timeout=15, headers=self.headers)
             if "illegal command" in r2.text.lower():
                 logger.error("Error entrando a cambio de estado")
                 return False
@@ -218,7 +227,7 @@ class HomeServe:
             }
 
             logger.info(f"📤 Enviando cambio estado {servicio_id} → {nuevo_estado} ({estado_valor})")
-            r3 = self.session.post(BASE_URL, data=payload_final, timeout=15)
+            r3 = self.session.post(BASE_URL, data=payload_final, timeout=15, headers=self.headers)
 
             # Guardar para debug
             with open(f"debug_estado_{servicio_id}.html", "w", encoding="latin-1") as f:
@@ -293,7 +302,16 @@ def telegram_webhook():
             SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
             if SERVICIOS_CURSO:
                 for idserv, servicio in SERVICIOS_CURSO.items():
-                    enviar_estado_servicio(chat, idserv, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
+                    # Obtener estados reales del servicio
+                    r = homeserve.session.get(f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={idserv}&Pag=1",
+                                              headers=homeserve.headers)
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    select_estado = soup.find("select", {"name": "ESTADO"})
+                    if select_estado:
+                        estados_disponibles = [opt.text.strip().upper().replace(" ", "_") for opt in select_estado.find_all("option")]
+                        enviar_estado_servicio(chat, idserv, estados_disponibles)
+                    else:
+                        enviar(chat, f"No se pudieron obtener estados para {idserv}")
             else:
                 enviar(chat, "No hay servicios en curso para cambiar estado.")
 
@@ -310,11 +328,10 @@ def telegram_webhook():
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
-            # Llamada a la función automática que detecta IDs
             ok = homeserve.cambiar_estado_servicio(servicio_id, nuevo_estado)
             if ok:
                 SERVICIOS_ESTADO[servicio_id] = nuevo_estado
-                enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
+                enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado.replace('_',' ')}")
             else:
                 enviar(chat, f"❌ Error cambiando estado del servicio {servicio_id}")
 
