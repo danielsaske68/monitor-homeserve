@@ -154,25 +154,42 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
+    # ---------------- AJUSTE CAMBIO ESTADO ----------------
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
+        """
+        Cambia el estado de un servicio sin tocar el resto del flujo.
+        """
         try:
-            # Fecha siguiente día
+            # 1️⃣ Obtener la página de cambio de estado
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
+            if "login" in r.text.lower():
+                logger.info("Sesión expirada, relogueando...")
+                if not self.login():
+                    return False
+                r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
+
+            # 2️⃣ Preparar payload según el HTML real
             fecha_siguiente = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
             payload = {
                 "SERVICIO": servicio_id,
-                "ESTADO": nuevo_estado,  # 307 En progreso, 308 Finalizado
+                "ESTADO": nuevo_estado,  # 307 = En progreso, 308 = Finalizado
                 "FECSIG": fecha_siguiente,
-                "INFORMO": "on",
-                "Observaciones": "ala espera de contactar con cliente",
+                "INFORMO": "on",  # Casilla marcada como en HTML
+                "Observaciones": "Actualizado vía bot",
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
-            r = self.session.post(CAMBIO_ESTADO_URL, data=payload, timeout=10)
-            if r.status_code == 200:
+
+            # 3️⃣ POST al formulario de cambio de estado
+            r_post = self.session.post(CAMBIO_ESTADO_URL, data=payload, timeout=10)
+
+            # 4️⃣ Confirmar que el cambio se aplicó
+            if "El estado actual de la reparacion es" in r_post.text:
                 logger.info(f"✔ Servicio {servicio_id} cambiado correctamente a {nuevo_estado}")
                 return True
             else:
-                logger.error(f"❌ Error POST servicio {servicio_id}, status: {r.status_code}")
+                logger.error(f"❌ Fallo al cambiar estado del servicio {servicio_id}")
                 return False
+
         except Exception as e:
             logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
             return False
@@ -184,9 +201,7 @@ def bot_loop():
     homeserve.login()
     while True:
         try:
-            # Solo actualizamos servicios en curso para el loop interno
             SERVICIOS_CURSO.update(homeserve.obtener_servicios_en_curso())
-            # Actualizamos servicios nuevos y avisamos de nuevos
             nuevos = homeserve.obtener_servicios_nuevos()
             for idserv, servicio in nuevos.items():
                 if idserv not in SERVICIOS_NUEVOS:
@@ -222,7 +237,6 @@ def telegram_webhook():
             enviar(chat, "🔄 Actualizado")
 
         elif accion == "WEB":
-            # Mostrar solo servicios nuevos
             txt = ""
             for s in SERVICIOS_NUEVOS.values():
                 txt += s + "\n\n"
@@ -236,7 +250,6 @@ def telegram_webhook():
             else:
                 enviar(chat, "No hay servicios en curso para cambiar estado.")
 
-        # Servicios nuevos
         elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
@@ -247,7 +260,6 @@ def telegram_webhook():
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
-        # Cambio de estado en curso
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]  # 307 o 308
