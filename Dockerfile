@@ -4,7 +4,7 @@ FROM python:3.14-slim
 # Establecer directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias del sistema necesarias para compilación y Playwright
+# Instalar dependencias del sistema necesarias
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y \
 # Copiar archivo de dependencias
 COPY requirements.txt .
 
-# Actualizar pip y instalar dependencias Python
+# Actualizar pip e instalar dependencias Python
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -41,6 +41,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Instalar navegadores de Playwright con sus dependencias
+RUN pip install playwright
 RUN playwright install --with-deps
 
 # Exponer el puerto de la app (Flask/Gunicorn)
