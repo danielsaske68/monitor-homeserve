@@ -1,10 +1,11 @@
-# Dockerfile corregido para Playwright en Railway
+# ----------------------------
+# Dockerfile para Python 3.14 + Playwright
+# ----------------------------
 FROM python:3.14-slim
 
-# Evitar prompts
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Instalar dependencias de sistema necesarias + build tools
+# ----------------------------
+# Instalar dependencias del sistema
+# ----------------------------
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -26,26 +27,40 @@ RUN apt-get update && apt-get install -y \
     libfontconfig1 \
     build-essential \
     python3-dev \
+    wget \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Directorio de trabajo
+# ----------------------------
+# Crear directorio de la app
+# ----------------------------
 WORKDIR /app
 
-# Copiar requirements
+# ----------------------------
+# Copiar requirements.txt
+# ----------------------------
 COPY requirements.txt .
 
+# ----------------------------
 # Actualizar pip e instalar dependencias
+# ----------------------------
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ----------------------------
 # Copiar todo el proyecto
+# ----------------------------
 COPY . .
 
-# Instalar navegadores de Playwright con dependencias
+# ----------------------------
+# Instalar navegadores de Playwright
+# ----------------------------
 RUN playwright install --with-deps
 
-# Puerto de Railway
+# ----------------------------
+# Puerto y comando
+# ----------------------------
 ENV PORT=8080
+EXPOSE 8080
 
-# Comando de inicio
-CMD ["gunicorn", "main:app", "--workers", "1", "--bind", "0.0.0.0:8080"]
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8080", "main:app"]
