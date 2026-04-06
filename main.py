@@ -3,10 +3,11 @@ import time
 import threading
 import logging
 import re
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
-from playwright.sync_api import sync_playwright
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -23,6 +24,7 @@ if not all([USUARIO, PASSWORD, BOT_TOKEN, CHAT_ID]):
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
+CAMBIO_ESTADO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=cambiar_estado_servicio"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -45,7 +47,6 @@ def botones_generales():
     }
 
 def enviar(chat, texto):
-    import requests
     requests.post(
         TELEGRAM_API + "/sendMessage",
         json={
@@ -57,7 +58,6 @@ def enviar(chat, texto):
     )
 
 def enviar_estado_servicio(chat, servicio_id, texto):
-    import requests
     botones = {
         "inline_keyboard": [
             [
@@ -79,18 +79,13 @@ def enviar_estado_servicio(chat, servicio_id, texto):
 # ---------------- HOMESERVE ----------------
 class HomeServe:
     def __init__(self):
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=True)
-        self.page = self.browser.new_page()
+        self.session = requests.Session()
 
     def login(self):
         try:
-            self.page.goto(LOGIN_URL)
-            self.page.fill('input[name="CODIGO"]', USUARIO)
-            self.page.fill('input[name="PASSW"]', PASSWORD)
-            self.page.click('input[type="submit"]')
-            self.page.wait_for_load_state("networkidle", timeout=10000)
-            if "error" in self.page.content().lower():
+            payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
+            r = self.session.post(LOGIN_URL, data=payload, timeout=10)
+            if "error" in r.text.lower():
                 logger.error("Login fallo")
                 return False
             logger.info("Login OK")
@@ -101,16 +96,16 @@ class HomeServe:
 
     def obtener_servicios_en_curso(self):
         try:
-            self.page.goto(SERVICIOS_CURSO_URL)
-            self.page.wait_for_load_state("networkidle", timeout=10000)
-            contenido = self.page.content()
-            bloques = re.split(r"\n(?=\d{7,8}\s)", contenido)
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
+            soup = BeautifulSoup(r.text, "html.parser")
+            texto = soup.get_text("\n")
+            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     idserv = m.group(0)
-                    limpio = " ".join(re.sub("<.*?>", "", b).split())
+                    limpio = " ".join(b.split())
                     servicios[idserv] = limpio
             logger.info(f"Servicios en curso: {len(servicios)}")
             return servicios
@@ -120,57 +115,32 @@ class HomeServe:
 
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
-            # 1️⃣ Ir a la página de servicios en curso
-            self.page.goto(SERVICIOS_CURSO_URL)
-            self.page.wait_for_load_state("networkidle", timeout=10000)
-
-            # 2️⃣ Buscar el enlace del servicio por ID
-            enlace_servicio = self.page.locator(f"a:has-text('{servicio_id}')")
-            if not enlace_servicio.count():
-                logger.error(f"No se encontró el servicio {servicio_id}")
-                return False
-
-            # 3️⃣ Click en el servicio
-            enlace_servicio.first.click()
-            self.page.wait_for_load_state("networkidle", timeout=10000)
-
-            # 4️⃣ Click en el botón "Cambiar Estado"
-            boton_cambiar = self.page.locator("input[name='BTNCAMBIAESTADO']")
-            if not boton_cambiar.count():
-                logger.error(f"No se encontró el botón cambiar estado para {servicio_id}")
-                return False
-
-            # 5️⃣ Rellenar formulario
+            # Fecha siguiente día
             fecha_siguiente = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-            self.page.fill('input[name="FECSIG"]', fecha_siguiente)
-            self.page.select_option('select[name="ESTADO"]', nuevo_estado)
-            self.page.check('input[name="INFORMO"]')
-            self.page.fill('textarea[name="Observaciones"]', "A la espera de contactar con cliente")
-
-            # 6️⃣ Enviar
-            boton_cambiar.click()
-            self.page.wait_for_load_state("networkidle", timeout=10000)
-
-            logger.info(f"✔ Estado enviado correctamente para servicio {servicio_id}")
-            return True
-
+            payload = {
+                "SERVICIO": servicio_id,
+                "ESTADO": nuevo_estado,
+                "FECSIG": fecha_siguiente,
+                "INFORMO": "on",
+                "Observaciones": "ala espera de contactar con cliente",
+                "BTNCAMBIAESTADO": "Aceptar el Cambio"
+            }
+            r = self.session.post(CAMBIO_ESTADO_URL, data=payload, timeout=10)
+            if r.status_code == 200:
+                logger.info(f"✔ POST simulado enviado correctamente para servicio {servicio_id}")
+                return True
+            else:
+                logger.error(f"❌ Error POST servicio {servicio_id}, status: {r.status_code}")
+                return False
         except Exception as e:
-            logger.error(f"Error cambiando estado del servicio {servicio_id}: {e}")
+            logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
             return False
-
-    def cerrar(self):
-        self.page.close()
-        self.browser.close()
-        self.playwright.stop()
-
 
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
 def bot_loop():
-    if not homeserve.login():
-        logger.error("No se pudo loguear")
-        return
+    homeserve.login()
     while True:
         try:
             SERVICIOS_CURSO.update(homeserve.obtener_servicios_en_curso())
