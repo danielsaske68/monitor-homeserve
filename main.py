@@ -153,13 +153,10 @@ class HomeServe:
             logger.error(f"Error obtener servicios en curso: {e}")
             return {}
 
-    # ---------------- CAMBIO DE ESTADO COMPLETO ----------------
+    # ---------------- CAMBIO DE ESTADO AUTOMÁTICO ----------------
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
             BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
-
-            # Mapeo de estado fijo
-            estado_valor = "348"  # Siempre "En espera de Cliente por indicaciones"
             fecha = datetime.now().strftime("%d/%m/%Y")
 
             # PASO 1: Abrir servicio
@@ -169,7 +166,7 @@ class HomeServe:
                 logger.error("Error abriendo servicio")
                 return False
 
-            # PASO 2: Simular click en cambio de estado
+            # PASO 2: Simular click para cargar sección de cambio de estado
             payload_click = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": servicio_id,
@@ -178,14 +175,35 @@ class HomeServe:
                 "repaso.y": "10"
             }
             r2 = self.session.post(BASE_URL, data=payload_click, timeout=15)
-            if "Illegal command" in r2.text:
-                logger.error("Error entrando a cambio estado")
+            if "illegal command" in r2.text.lower():
+                logger.error("Error entrando a cambio de estado")
                 return False
 
             soup = BeautifulSoup(r2.text, "html.parser")
+
+            # Detectar Pag dinámicamente
             pag_input = soup.find("input", {"name": "Pag"})
             pag = pag_input["value"] if pag_input else "1"
             logger.info(f"➡️ Pag detectado: {pag}")
+
+            # Detectar automáticamente los IDs de los estados
+            select_estado = soup.find("select", {"name": "ESTADO"})
+            if not select_estado:
+                logger.error("No se encontró el select de ESTADO")
+                return False
+
+            estados_map = {}
+            for option in select_estado.find_all("option"):
+                nombre_estado = option.text.strip().upper().replace(" ", "_")
+                valor_estado = option.get("value")
+                if valor_estado:
+                    estados_map[nombre_estado] = valor_estado
+
+            if nuevo_estado not in estados_map:
+                logger.error(f"Estado '{nuevo_estado}' no disponible. Detectados: {list(estados_map.keys())}")
+                return False
+
+            estado_valor = estados_map[nuevo_estado]
 
             # PASO 3: Enviar formulario final
             payload_final = {
@@ -195,21 +213,21 @@ class HomeServe:
                 "ESTADO": estado_valor,
                 "FECSIG": fecha,
                 "INFORMO": "on",
-                "Observaciones": "En espera de cliente por localizar",
+                "Observaciones": "Cambio de estado vía bot",
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            logger.info(f"📤 Enviando cambio estado {servicio_id} → {estado_valor}")
+            logger.info(f"📤 Enviando cambio estado {servicio_id} → {nuevo_estado} ({estado_valor})")
             r3 = self.session.post(BASE_URL, data=payload_final, timeout=15)
 
             # Guardar para debug
             with open(f"debug_estado_{servicio_id}.html", "w", encoding="latin-1") as f:
                 f.write(r3.text)
 
-            if "Illegal command" in r3.text:
+            # Verificación
+            if "illegal command" in r3.text.lower():
                 logger.error("❌ Illegal command al guardar")
                 return False
-
             if "estado actual de la reparacion" in r3.text.lower():
                 logger.info("✅ Cambio de estado realizado")
                 return True
@@ -292,6 +310,7 @@ def telegram_webhook():
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
+            # Llamada a la función automática que detecta IDs
             ok = homeserve.cambiar_estado_servicio(servicio_id, nuevo_estado)
             if ok:
                 SERVICIOS_ESTADO[servicio_id] = nuevo_estado
