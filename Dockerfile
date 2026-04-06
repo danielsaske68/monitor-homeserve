@@ -1,7 +1,7 @@
-# Dockerfile optimizado para Railway y Python 3.14
+# Dockerfile funcional para Railway con Python 3.14
 FROM python:3.14-slim
 
-# Establecer directorio de trabajo
+# Directorio de trabajo
 WORKDIR /app
 
 # Instalar dependencias del sistema necesarias
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
     libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libglib2.0-0 \
     libfontconfig1 build-essential python3-dev libffi-dev libssl-dev \
-    pkg-config git python3.14-venv cython \
+    pkg-config git cython3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar requirements.txt
