@@ -4,7 +4,7 @@ FROM python:3.14-slim
 # Establecer directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias del sistema necesarias
+# Instalar dependencias del sistema necesarias para Playwright y compilación de paquetes
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -28,6 +28,9 @@ RUN apt-get update && apt-get install -y \
     libfontconfig1 \
     build-essential \
     python3-dev \
+    libffi-dev \
+    libssl-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar archivo de dependencias
@@ -44,7 +47,7 @@ COPY . .
 RUN pip install playwright
 RUN playwright install --with-deps
 
-# Exponer el puerto de la app (Flask/Gunicorn)
+# Exponer el puerto de la app
 EXPOSE 5000
 
 # Comando por defecto
