@@ -1,10 +1,8 @@
-# Dockerfile funcional para Railway con Python 3.14
 FROM python:3.14-slim
 
-# Directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias del sistema necesarias
+# Dependencias del sistema
 RUN apt-get update && apt-get install -y \
     curl wget unzip ca-certificates fonts-liberation \
     libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 \
@@ -14,18 +12,15 @@ RUN apt-get update && apt-get install -y \
     pkg-config git cython3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt
 COPY requirements.txt .
 
-# Actualizar pip e instalar dependencias de Python
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+# Forzar greenlet compatible con Python 3.14
+RUN pip install --no-cache-dir "greenlet>=3.1.2" -r requirements.txt
 
-# Copiar todo el proyecto
 COPY . .
 
-# Instalar navegadores de Playwright
+# Playwright
 RUN python -m playwright install
 
-# Comando por defecto (ajusta según tu app)
 CMD ["python", "main.py"]
