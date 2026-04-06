@@ -1,11 +1,7 @@
-# ----------------------------
-# Dockerfile para Python 3.14 + Playwright
-# ----------------------------
+# Dockerfile para Flask + Playwright + Python-Telegram-Bot
 FROM python:3.14-slim
 
-# ----------------------------
-# Instalar dependencias del sistema
-# ----------------------------
+# Instalar dependencias del sistema necesarias
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
@@ -31,36 +27,24 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# ----------------------------
 # Crear directorio de la app
-# ----------------------------
 WORKDIR /app
 
-# ----------------------------
-# Copiar requirements.txt
-# ----------------------------
+# Copiar archivo de requerimientos
 COPY requirements.txt .
 
-# ----------------------------
-# Actualizar pip e instalar dependencias
-# ----------------------------
+# Actualizar pip e instalar dependencias de Python
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ----------------------------
-# Copiar todo el proyecto
-# ----------------------------
+# Copiar el resto del proyecto
 COPY . .
 
-# ----------------------------
-# Instalar navegadores de Playwright
-# ----------------------------
+# Instalar navegadores y dependencias de Playwright
 RUN playwright install --with-deps
 
-# ----------------------------
-# Puerto y comando
-# ----------------------------
-ENV PORT=8080
+# Exponer puerto de Flask
 EXPOSE 8080
 
+# Comando de inicio con Gunicorn
 CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8080", "main:app"]
