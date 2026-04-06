@@ -1,10 +1,10 @@
-# Usa la imagen slim de Python 3.14
+# Usar Python 3.14 slim
 FROM python:3.14-slim
 
-# Establece directorio de trabajo
+# Establecer directorio de trabajo
 WORKDIR /app
 
-# Instala dependencias del sistema necesarias
+# Instalar dependencias del sistema necesarias para compilación y Playwright
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -30,21 +30,21 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia el archivo de dependencias
+# Copiar archivo de dependencias
 COPY requirements.txt .
 
-# Actualiza pip y instala las dependencias Python
+# Actualizar pip y instalar dependencias Python
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia todo el proyecto al contenedor
+# Copiar todo el proyecto
 COPY . .
 
-# Instala navegadores de Playwright
+# Instalar navegadores de Playwright con sus dependencias
 RUN playwright install --with-deps
 
-# Expone el puerto que usa Flask (ajusta si es diferente)
+# Exponer el puerto de la app (Flask/Gunicorn)
 EXPOSE 5000
 
-# Comando por defecto al iniciar el contenedor
+# Comando por defecto
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000"]
