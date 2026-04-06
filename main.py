@@ -3,11 +3,11 @@ import time
 import threading
 import logging
 import re
-import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
@@ -47,6 +47,7 @@ def botones_generales():
     }
 
 def enviar(chat, texto):
+    import requests
     requests.post(
         TELEGRAM_API + "/sendMessage",
         json={
@@ -58,6 +59,7 @@ def enviar(chat, texto):
     )
 
 def enviar_estado_servicio(chat, servicio_id, texto):
+    import requests
     botones = {
         "inline_keyboard": [
             [
@@ -76,18 +78,27 @@ def enviar_estado_servicio(chat, servicio_id, texto):
         }
     )
 
-# ---------------- HOMESERVE ----------------
+# ---------------- HOMESERVE CON PLAYWRIGHT ----------------
 class HomeServe:
     def __init__(self):
-        self.session = requests.Session()
+        self.playwright = sync_playwright().start()
+        self.browser = self.playwright.chromium.launch(headless=True)
+        self.context = self.browser.new_context()
+        self.page = self.context.new_page()
 
     def login(self):
         try:
-            payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
-            r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-            if "error" in r.text.lower():
+            self.page.goto(LOGIN_URL)
+            self.page.fill('input[name="CODIGO"]', USUARIO)
+            self.page.fill('input[name="PASSW"]', PASSWORD)
+            self.page.click('input[name="BTN"]')
+            self.page.wait_for_load_state("networkidle", timeout=10000)
+            
+            content = self.page.content()
+            if "error" in content.lower():
                 logger.error("Login fallo")
                 return False
+            
             logger.info("Login OK")
             return True
         except Exception as e:
@@ -96,10 +107,14 @@ class HomeServe:
 
     def obtener_servicios_en_curso(self):
         try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
+            self.page.goto(SERVICIOS_CURSO_URL)
+            self.page.wait_for_load_state("networkidle", timeout=10000)
+            html = self.page.content()
+            
+            soup = BeautifulSoup(html, "html.parser")
             texto = soup.get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
+            
             servicios = {}
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
@@ -115,26 +130,29 @@ class HomeServe:
 
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
-            # Fecha siguiente día
+            self.page.goto(f"{CAMBIO_ESTADO_URL}?SERVICIO={servicio_id}")
+            self.page.wait_for_load_state("networkidle", timeout=10000)
+
             fecha_siguiente = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
-            payload = {
-                "SERVICIO": servicio_id,
-                "ESTADO": nuevo_estado,
-                "FECSIG": fecha_siguiente,
-                "INFORMO": "on",
-                "Observaciones": "ala espera de contactar con cliente",
-                "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            }
-            r = self.session.post(CAMBIO_ESTADO_URL, data=payload, timeout=10)
-            if r.status_code == 200:
-                logger.info(f"✔ POST simulado enviado correctamente para servicio {servicio_id}")
-                return True
-            else:
-                logger.error(f"❌ Error POST servicio {servicio_id}, status: {r.status_code}")
-                return False
+
+            self.page.fill('input[name="FECSIG"]', fecha_siguiente)
+            self.page.select_option('select[name="ESTADO"]', nuevo_estado)
+            self.page.check('input[name="INFORMO"]')
+            self.page.fill('textarea[name="Observaciones"]', "A la espera de contactar con cliente")
+            self.page.click('input[name="BTNCAMBIAESTADO"]')
+            self.page.wait_for_load_state("networkidle", timeout=10000)
+
+            logger.info(f"✔ Estado enviado correctamente para servicio {servicio_id}")
+            return True
         except Exception as e:
-            logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
+            logger.error(f"Error cambiando estado del servicio {servicio_id}: {e}")
             return False
+
+    def close(self):
+        self.context.close()
+        self.browser.close()
+        self.playwright.stop()
+
 
 homeserve = HomeServe()
 
