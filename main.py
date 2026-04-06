@@ -79,21 +79,16 @@ def enviar_servicio(chat, servicio_id, texto):
     )
 
 def enviar_estado_servicio(chat, servicio_id, estados_disponibles):
-    """
-    Envia botones dinámicos con todos los estados detectados en HomeServe.
-    """
     keyboard = []
     fila = []
     for estado in estados_disponibles:
         fila.append({"text": estado.replace("_", " "), "callback_data": f"ESTADO_{servicio_id}_{estado}"})
-        if len(fila) == 2:  # 2 botones por fila
+        if len(fila) == 2:
             keyboard.append(fila)
             fila = []
     if fila:
         keyboard.append(fila)
-
     botones = {"inline_keyboard": keyboard}
-
     requests.post(
         TELEGRAM_API + "/sendMessage",
         json={
@@ -175,27 +170,17 @@ class HomeServe:
                 logger.error("Error abriendo servicio")
                 return False
 
-            # PASO 2: Simular click para cargar sección cambio de estado
-            payload_click = {
-                "w3exec": "ver_servicioencurso",
-                "Servicio": servicio_id,
-                "Pag": "1",
-                "repaso.x": "10",
-                "repaso.y": "10"
-            }
+            # PASO 2: Click de repaso para cargar sección cambio de estado
+            payload_click = {"w3exec": "ver_servicioencurso", "Servicio": servicio_id, "Pag": "1", "repaso.x": "10", "repaso.y": "10"}
             r2 = self.session.post(BASE_URL, data=payload_click, timeout=15, headers=self.headers)
             if "illegal command" in r2.text.lower():
                 logger.error("Error entrando a cambio de estado")
                 return False
 
             soup = BeautifulSoup(r2.text, "html.parser")
-
-            # Detectar Pag dinámicamente
             pag_input = soup.find("input", {"name": "Pag"})
             pag = pag_input["value"] if pag_input else "1"
-            logger.info(f"➡️ Pag detectado: {pag}")
 
-            # Detectar automáticamente los IDs de los estados
             select_estado = soup.find("select", {"name": "ESTADO"})
             if not select_estado:
                 logger.error("No se encontró el select de ESTADO")
@@ -226,14 +211,10 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            logger.info(f"📤 Enviando cambio estado {servicio_id} → {nuevo_estado} ({estado_valor})")
             r3 = self.session.post(BASE_URL, data=payload_final, timeout=15, headers=self.headers)
-
-            # Guardar para debug
             with open(f"debug_estado_{servicio_id}.html", "w", encoding="latin-1") as f:
                 f.write(r3.text)
 
-            # Verificación
             if "illegal command" in r3.text.lower():
                 logger.error("❌ Illegal command al guardar")
                 return False
@@ -247,7 +228,6 @@ class HomeServe:
         except Exception as e:
             logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
             return False
-
 
 homeserve = HomeServe()
 
@@ -302,10 +282,14 @@ def telegram_webhook():
             SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
             if SERVICIOS_CURSO:
                 for idserv, servicio in SERVICIOS_CURSO.items():
-                    # Obtener estados reales del servicio
-                    r = homeserve.session.get(f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={idserv}&Pag=1",
-                                              headers=homeserve.headers)
-                    soup = BeautifulSoup(r.text, "html.parser")
+                    # LOGIN + GET + POST de repaso
+                    homeserve.login()
+                    url_servicio = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={idserv}&Pag=1"
+                    r1 = homeserve.session.get(url_servicio, headers=homeserve.headers, timeout=15)
+                    payload_click = {"w3exec": "ver_servicioencurso", "Servicio": idserv, "Pag": "1", "repaso.x": "10", "repaso.y": "10"}
+                    r2 = homeserve.session.post(BASE_URL, data=payload_click, headers=homeserve.headers, timeout=15)
+
+                    soup = BeautifulSoup(r2.text, "html.parser")
                     select_estado = soup.find("select", {"name": "ESTADO"})
                     if select_estado:
                         estados_disponibles = [opt.text.strip().upper().replace(" ", "_") for opt in select_estado.find_all("option")]
