@@ -22,7 +22,6 @@ if not all([USUARIO, PASSWORD, BOT_TOKEN, CHAT_ID]):
     raise ValueError("Faltan variables de entorno")
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
 CAMBIO_ESTADO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=cambiar_estado_servicio"
 
@@ -31,11 +30,11 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-SERVICIOS_ACTUALES = {}
-SERVICIOS_ESTADO = {}
-SERVICIOS_CURSO = {}
+SERVICIOS_CURSO = {}     # Todos los servicios actuales
+SERVICIOS_ACTUALES = {}  # Solo los nuevos detectados
+SERVICIOS_ESTADO = {}    # Para guardar cambios de estado
 
-# ---------------- BOTONES GENERALES ----------------
+# ---------------- BOTONES ----------------
 def botones_generales():
     return {
         "inline_keyboard": [
@@ -57,20 +56,31 @@ def enviar(chat, texto):
         }
     )
 
-def enviar_estado_servicio(chat, servicio_id, texto):
-    botones = {
-        "inline_keyboard": [
-            [
-                {"text": "🟡 En progreso", "callback_data": f"ESTADO_{servicio_id}_307"},
-                {"text": "✅ Finalizado", "callback_data": f"ESTADO_{servicio_id}_308"}
+def enviar_botones_servicio(chat, servicio_id, servicio_texto, nuevo=True):
+    if nuevo:
+        botones = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Aceptar", "callback_data": f"NUEVO_{servicio_id}_ACEPTAR"},
+                    {"text": "❌ Rechazar", "callback_data": f"NUEVO_{servicio_id}_RECHAZAR"}
+                ]
             ]
-        ]
-    }
+        }
+    else:
+        botones = {
+            "inline_keyboard": [
+                [
+                    {"text": "🟡 En progreso", "callback_data": f"ESTADO_{servicio_id}_307"},
+                    {"text": "✅ Finalizado", "callback_data": f"ESTADO_{servicio_id}_308"}
+                ]
+            ]
+        }
+
     requests.post(
         TELEGRAM_API + "/sendMessage",
         json={
             "chat_id": chat,
-            "text": texto,
+            "text": servicio_texto,
             "parse_mode": "HTML",
             "reply_markup": botones
         }
@@ -115,7 +125,6 @@ class HomeServe:
 
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
-            # Fecha siguiente día
             fecha_siguiente = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
             payload = {
                 "SERVICIO": servicio_id,
@@ -143,7 +152,13 @@ def bot_loop():
     homeserve.login()
     while True:
         try:
-            SERVICIOS_CURSO.update(homeserve.obtener_servicios_en_curso())
+            servicios_actualizados = homeserve.obtener_servicios_en_curso()
+            nuevos_servicios = {k: v for k, v in servicios_actualizados.items() if k not in SERVICIOS_CURSO}
+
+            # Actualizar globales
+            SERVICIOS_CURSO.update(servicios_actualizados)
+            SERVICIOS_ACTUALES.update(nuevos_servicios)
+
             time.sleep(INTERVALO)
         except Exception as e:
             logger.error(f"Loop error: {e}")
@@ -167,17 +182,25 @@ def telegram_webhook():
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
+
         elif accion == "REFRESH":
-            SERVICIOS_CURSO.update(homeserve.obtener_servicios_en_curso())
+            servicios_actualizados = homeserve.obtener_servicios_en_curso()
+            nuevos_servicios = {k: v for k, v in servicios_actualizados.items() if k not in SERVICIOS_CURSO}
+            SERVICIOS_CURSO.update(servicios_actualizados)
+            SERVICIOS_ACTUALES.update(nuevos_servicios)
             enviar(chat, "🔄 Actualizado")
+
         elif accion == "WEB":
-            txt = ""
-            for s in SERVICIOS_CURSO.values():
-                txt += s + "\n\n"
+            txt = "\n\n".join(SERVICIOS_CURSO.values())
             enviar(chat, txt if txt else "Nada encontrado")
+
         elif accion == "CAMBIAR_ESTADO":
             for idserv, servicio in SERVICIOS_CURSO.items():
-                enviar_estado_servicio(chat, idserv, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
+                if idserv in SERVICIOS_ACTUALES:
+                    enviar_botones_servicio(chat, idserv, f"🆕 Nuevo servicio:\n\n{servicio}", nuevo=True)
+                else:
+                    enviar_botones_servicio(chat, idserv, f"🔧 Servicio en curso:\n\n{servicio}", nuevo=False)
+
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
@@ -187,6 +210,17 @@ def telegram_webhook():
                 enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
             else:
                 enviar(chat, f"❌ Error cambiando estado del servicio {servicio_id}")
+
+        elif accion.startswith("NUEVO_"):
+            parts = accion.split("_")
+            servicio_id, decision = parts[1], parts[2]
+            if decision == "ACEPTAR":
+                enviar(chat, f"✅ Servicio {servicio_id} aceptado")
+            else:
+                enviar(chat, f"❌ Servicio {servicio_id} rechazado")
+            # Quitar de nuevos
+            SERVICIOS_ACTUALES.pop(servicio_id, None)
+
     elif "message" in data:
         chat = data["message"]["chat"]["id"]
         if data["message"].get("text") == "/start":
