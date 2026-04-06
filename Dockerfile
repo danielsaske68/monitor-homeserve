@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -15,8 +15,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 RUN pip install --upgrade pip
-# Forzar greenlet compatible con Python 3.14
-RUN pip install --no-cache-dir "greenlet>=3.1.2" -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
