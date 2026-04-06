@@ -78,6 +78,7 @@ def enviar_servicio(chat, servicio_id, texto):
     )
 
 def enviar_estado_servicio(chat, servicio_id, texto):
+    # Botones reales para cambiar estado
     botones = {
         "inline_keyboard": [
             [
@@ -155,7 +156,9 @@ class HomeServe:
 
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
+            # Fecha del día siguiente
             fecha_siguiente = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+
             payload = {
                 "SERVICIO": servicio_id,
                 "ESTADO": nuevo_estado,
@@ -164,16 +167,17 @@ class HomeServe:
                 "Observaciones": "ala espera de contactar con cliente",
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
-            url = SERVICIOS_CURSO_URL
-            r = self.session.post(url, data=payload, timeout=15)
+
+            # Hacemos POST real
+            r = self.session.post(SERVICIOS_CURSO_URL, data=payload, timeout=10)
             if r.status_code == 200:
-                logger.info(f"🔧 Servicio {servicio_id} cambiado a {nuevo_estado}")
+                logger.info(f"🔧 Servicio {servicio_id} cambiado a {nuevo_estado} ({fecha_siguiente})")
                 return True
             else:
-                logger.error(f"Error HTTP {r.status_code} cambiando estado {servicio_id}")
+                logger.error(f"❌ Error HTTP al cambiar estado {servicio_id}: {r.status_code}")
                 return False
         except Exception as e:
-            logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
+            logger.error(f"❌ Error cambiar estado {servicio_id}: {e}")
             return False
 
 homeserve = HomeServe()
@@ -206,7 +210,6 @@ def home():
 def telegram_webhook():
     global SERVICIOS_ESTADO, SERVICIOS_CURSO, SERVICIOS_ACTUALES
     data = request.json
-
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
@@ -214,18 +217,15 @@ def telegram_webhook():
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
-
         elif accion == "REFRESH":
             SERVICIOS_ACTUALES.update(homeserve.obtener_servicios_nuevos())
             enviar(chat, "🔄 Actualizado")
-
         elif accion == "WEB":
             actuales = homeserve.obtener_servicios_nuevos()
             txt = "🌐 <b>Web</b>\n\n"
             for s in actuales.values():
                 txt += s + "\n\n"
             enviar(chat, txt if actuales else "Nada encontrado")
-
         elif accion == "CAMBIAR_ESTADO":
             SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
             if SERVICIOS_CURSO:
@@ -233,17 +233,14 @@ def telegram_webhook():
                     enviar_estado_servicio(chat, idserv, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
             else:
                 enviar(chat, "No hay servicios en curso para cambiar estado.")
-
         elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
             enviar(chat, f"✅ Servicio {servicio_id} aceptado")
-
         elif accion.startswith("RECHAZAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
-
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             servicio_id, nuevo_estado = parts[1], parts[2]
@@ -253,12 +250,10 @@ def telegram_webhook():
                 enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
             else:
                 enviar(chat, f"❌ Error cambiando estado del servicio {servicio_id}")
-
     elif "message" in data:
         chat = data["message"]["chat"]["id"]
         if data["message"].get("text") == "/start":
             enviar(chat, "👋 Bot activo con control total")
-
     return jsonify(ok=True)
 
 # ---------------- START ----------------
