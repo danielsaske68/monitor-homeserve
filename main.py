@@ -7,7 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -24,6 +24,7 @@ if not all([USUARIO, PASSWORD, BOT_TOKEN, CHAT_ID]):
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
+CAMBIO_ESTADO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=cambiar_estado_servicio"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -81,8 +82,8 @@ def enviar_estado_servicio(chat, servicio_id, texto):
     botones = {
         "inline_keyboard": [
             [
-                {"text": "🟡 En progreso", "callback_data": f"ESTADO_{servicio_id}_ENPROGRESO"},
-                {"text": "✅ Finalizado", "callback_data": f"ESTADO_{servicio_id}_FINALIZADO"}
+                {"text": "🟡 En progreso", "callback_data": f"ESTADO_{servicio_id}_307"},
+                {"text": "✅ Finalizado", "callback_data": f"ESTADO_{servicio_id}_308"}
             ]
         ]
     }
@@ -155,26 +156,42 @@ class HomeServe:
 
     def cambiar_estado_servicio(self, servicio_id, nuevo_estado):
         try:
-            fecha = datetime.now().strftime("%d/%m/%Y")
-            logger.info(f"🔧 Cambiando estado servicio {servicio_id} a {nuevo_estado} ({fecha})")
-            return True
+            # Fecha siguiente día
+            fecha_siguiente = (datetime.now() + timedelta(days=1)).strftime("%d/%m/%Y")
+            payload = {
+                "SERVICIO": servicio_id,
+                "ESTADO": nuevo_estado,  # 307 En progreso, 308 Finalizado
+                "FECSIG": fecha_siguiente,
+                "INFORMO": "on",
+                "Observaciones": "ala espera de contactar con cliente",
+                "BTNCAMBIAESTADO": "Aceptar el Cambio"
+            }
+            r = self.session.post(CAMBIO_ESTADO_URL, data=payload, timeout=10)
+            if r.status_code == 200:
+                logger.info(f"✔ Servicio {servicio_id} cambiado correctamente a {nuevo_estado}")
+                return True
+            else:
+                logger.error(f"❌ Error POST servicio {servicio_id}, status: {r.status_code}")
+                return False
         except Exception as e:
             logger.error(f"Error al cambiar estado del servicio {servicio_id}: {e}")
             return False
 
 homeserve = HomeServe()
 
-# ---------------- LOOP DE SERVICIOS NUEVOS ----------------
+# ---------------- LOOP ----------------
 def bot_loop():
-    global SERVICIOS_NUEVOS
     homeserve.login()
     while True:
         try:
-            actuales = homeserve.obtener_servicios_nuevos()
-            for idserv, servicio in actuales.items():
+            # Solo actualizamos servicios en curso para el loop interno
+            SERVICIOS_CURSO.update(homeserve.obtener_servicios_en_curso())
+            # Actualizamos servicios nuevos y avisamos de nuevos
+            nuevos = homeserve.obtener_servicios_nuevos()
+            for idserv, servicio in nuevos.items():
                 if idserv not in SERVICIOS_NUEVOS:
                     enviar_servicio(CHAT_ID, idserv, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}")
-            SERVICIOS_NUEVOS = actuales
+            SERVICIOS_NUEVOS.update(nuevos)
             time.sleep(INTERVALO)
         except Exception as e:
             logger.error(f"Loop error: {e}")
@@ -186,25 +203,22 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return f"OK - Servicios nuevos: {len(SERVICIOS_NUEVOS)}"
+    return f"OK - Servicios nuevos: {len(SERVICIOS_NUEVOS)}, en curso: {len(SERVICIOS_CURSO)}"
 
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
-    global SERVICIOS_ESTADO, SERVICIOS_CURSO, SERVICIOS_NUEVOS
-
     data = request.json
-
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
-        # BOTONES GENERALES
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
 
         elif accion == "REFRESH":
             SERVICIOS_NUEVOS.update(homeserve.obtener_servicios_nuevos())
+            SERVICIOS_CURSO.update(homeserve.obtener_servicios_en_curso())
             enviar(chat, "🔄 Actualizado")
 
         elif accion == "WEB":
@@ -215,14 +229,14 @@ def telegram_webhook():
             enviar(chat, txt if SERVICIOS_NUEVOS else "Nada nuevo por asignar")
 
         elif accion == "CAMBIAR_ESTADO":
-            SERVICIOS_CURSO = homeserve.obtener_servicios_en_curso()
+            SERVICIOS_CURSO.update(homeserve.obtener_servicios_en_curso())
             if SERVICIOS_CURSO:
                 for idserv, servicio in SERVICIOS_CURSO.items():
                     enviar_estado_servicio(chat, idserv, f"🔧 <b>Cambiar estado</b>\n\n{servicio}")
             else:
                 enviar(chat, "No hay servicios en curso para cambiar estado.")
 
-        # SERVICIOS NUEVOS
+        # Servicios nuevos
         elif accion.startswith("ACEPTAR_"):
             servicio_id = accion.split("_")[1]
             SERVICIOS_ESTADO[servicio_id] = "ACEPTADO"
@@ -233,14 +247,15 @@ def telegram_webhook():
             SERVICIOS_ESTADO[servicio_id] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {servicio_id} rechazado")
 
-        # CAMBIO DE ESTADO EN CURSO
+        # Cambio de estado en curso
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
-            servicio_id, nuevo_estado = parts[1], parts[2]
+            servicio_id, nuevo_estado = parts[1], parts[2]  # 307 o 308
             ok = homeserve.cambiar_estado_servicio(servicio_id, nuevo_estado)
             if ok:
                 SERVICIOS_ESTADO[servicio_id] = nuevo_estado
-                enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {nuevo_estado}")
+                estado_texto = "En progreso" if nuevo_estado == "307" else "Finalizado"
+                enviar(chat, f"🛠 Servicio {servicio_id} cambiado a: {estado_texto}")
             else:
                 enviar(chat, f"❌ Error cambiando estado del servicio {servicio_id}")
 
