@@ -15,7 +15,7 @@ USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")  # Chat ID de prueba
-INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
+INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 60))
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
@@ -35,10 +35,8 @@ def botones():
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
-            [{"text": "📋 Ver servicios guardados", "callback_data": "GUARDADOS"}],
             [{"text": "🌐 Ver servicios WEB", "callback_data": "WEB"}],
-            [{"text": "🔁 Cambiar estado servicios", "callback_data": "CAMBIAR_ESTADO"}],
-            [{"text": "🌐 Ir asignación", "url": ASIGNACION_URL}]
+            [{"text": "🔁 Cambiar estado servicios", "callback_data": "CAMBIAR_ESTADO"}]
         ]
     }
 
@@ -82,8 +80,10 @@ class HomeServe:
             return False
 
     def obtener(self):
+        """Obtiene servicios de la pestaña de asignación para alertas de nuevos servicios"""
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
+            r.encoding = "latin-1"
             soup = BeautifulSoup(r.text, "html.parser")
             texto = soup.get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
@@ -101,10 +101,15 @@ class HomeServe:
             return {}
 
     def obtener_servicios_curso(self):
-        """Obtiene servicios en curso desde lista_servicios_total"""
+        """Obtiene servicios en curso (lista completa) siguiendo flujo manual para evitar 0 servicios"""
         try:
+            # Paso 1: Login y visitar la asignación para cargar sesión
+            self.session.get(ASIGNACION_URL, timeout=15)
+
+            # Paso 2: Visitar lista de servicios total
             url = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
             r = self.session.get(url, timeout=15)
+            r.encoding = "latin-1"
             soup = BeautifulSoup(r.text, "html.parser")
             texto = soup.get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
@@ -115,6 +120,7 @@ class HomeServe:
                     idserv = m.group(0)
                     limpio = " ".join(b.split())
                     servicios[idserv] = limpio
+            logger.info(f"Servicios en curso detectados: {len(servicios)}")
             return servicios
         except Exception as e:
             logger.error(f"Error al obtener servicios en curso: {e}")
@@ -123,7 +129,7 @@ class HomeServe:
     def cambiar_estado(self, servicio_id, estado="348", fecsig="10/04/2026", observaciones="En espera de cliente por localizar"):
         """Cambia el estado de un servicio"""
         try:
-            # Paso previo: visitar la página de detalle del servicio
+            # Paso previo: visitar página del servicio
             self.session.get(f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={servicio_id}", timeout=15)
 
             # POST para cambiar el estado
@@ -148,7 +154,6 @@ class HomeServe:
             else:
                 logger.warning(f"HTML inesperado para {servicio_id}")
                 return None, "⚠️ Revisar HTML manualmente"
-
         except Exception as e:
             logger.error(f"Error cambiando estado {servicio_id}: {e}")
             return False, f"❌ Error en request: {e}"
@@ -217,15 +222,6 @@ def telegram_webhook():
         elif accion == "REFRESH":
             SERVICIOS_ACTUALES.update(homeserve.obtener())
             enviar(chat, "🔄 Actualizado Mi sensei")
-
-        elif accion == "GUARDADOS":
-            if SERVICIOS_ACTUALES:
-                txt = "📋 <b>Servicio almacenado</b>\n\n"
-                for s in SERVICIOS_ACTUALES.values():
-                    txt += s + "\n\n"
-            else:
-                txt = "Andamos pailas"
-            enviar(chat, txt)
 
         elif accion == "WEB":
             actuales = homeserve.obtener()
