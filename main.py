@@ -72,8 +72,8 @@ def botones_servicio_nuevo(servicio_id):
 
 def botones_lista_servicios(servicios):
     teclado = []
-    for sid in servicios.keys():
-        teclado.append([{"text": f"{sid}", "callback_data": f"SEL_{sid}"}])
+    for sid in servicios:
+        teclado.append([{"text": sid, "callback_data": f"SEL_{sid}"}])
     return {"inline_keyboard": teclado}
 
 # ---------------- HOMESERVE ----------------
@@ -96,6 +96,7 @@ class HomeServe:
             return False
 
     def obtener(self):
+        """Detecta servicios nuevos"""
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
@@ -106,12 +107,14 @@ class HomeServe:
                 if m:
                     sid = m.group(0)
                     servicios[sid] = " ".join(b.split())
+            logger.info(f"🔎 Revisando servicios... encontrados: {len(servicios)}")
             return servicios
         except Exception as e:
             logger.error(f"Error obteniendo servicios: {e}")
             return {}
 
     def obtener_curso(self):
+        """Servicios en curso"""
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
@@ -128,32 +131,38 @@ class HomeServe:
             return {}
 
     def cambiar_estado(self, servicio_id, estado):
+        """Cambia el estado y valida correctamente"""
         try:
             fecha = datetime.now() + timedelta(days=3)
-            if fecha.weekday() == 5:
+            if fecha.weekday() == 5:  # sábado
                 fecha += timedelta(days=2)
-            elif fecha.weekday() == 6:
+            elif fecha.weekday() == 6:  # domingo
                 fecha += timedelta(days=1)
+            fecha_str = fecha.strftime("%d/%m/%Y")
 
             obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional por confirmación del Siniestro"
 
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": servicio_id,
+                "Pag": "1",
                 "ESTADO": estado,
-                "FECSIG": fecha.strftime("%d/%m/%Y"),
+                "FECSIG": fecha_str,
+                "INFORMO": "on",
                 "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
             r = self.session.post(BASE_URL, data=payload, timeout=10)
-            r.encoding = "latin-1"
+            texto = r.text.lower()
 
-            if (estado == "348" and "Pendiente" in r.text) or (estado == "318" and "En espera" in r.text):
+            # Validación confiable
+            if estado == "348" and ("pendiente" in texto or "pendiente de localizar" in texto):
+                return True, f"✅ Estado {estado} aplicado correctamente"
+            elif estado == "318" and ("en espera" in texto):
                 return True, f"✅ Estado {estado} aplicado correctamente"
             else:
                 return False, f"⚠️ Revisar HTML manualmente"
-
         except Exception as e:
             return False, f"❌ Error: {e}"
 
@@ -163,7 +172,6 @@ homeserve = HomeServe()
 def bot_loop():
     global SERVICIOS_ACTUALES
     logger.info("🔥 Iniciando loop de servicios...")
-
     if not homeserve.login():
         logger.error("❌ No se pudo hacer login inicial")
 
@@ -185,6 +193,7 @@ def bot_loop():
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
+    chat = None
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
@@ -195,19 +204,19 @@ def telegram_webhook():
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
+        # Login / Refresh / Web
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
-
         elif accion == "REFRESH":
             homeserve.obtener()
             enviar(chat, "🔄 Actualizado")
-
         elif accion == "WEB":
             actuales = homeserve.obtener()
             txt = "\n\n".join(actuales.values()) if actuales else "No hay servicios"
             enviar(chat, txt)
 
+        # CAMBIAR ESTADO 🔧
         elif accion == "CAMBIAR_ESTADO":
             curso = homeserve.obtener_curso()
             if curso:
@@ -217,25 +226,28 @@ def telegram_webhook():
 
         elif accion.startswith("SEL_"):
             sid = accion.split("_")[1]
-            enviar(chat, f"🔧 Servicio {sid}\nSelecciona estado:", botones_estado(sid))
+            enviar(chat, f"🔧 Servicio {sid}\n\nSelecciona estado:", botones_estado(sid))
 
         elif accion.startswith("ESTADO_"):
             _, sid, estado = accion.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
             enviar(chat, f"{sid}\n{msg}")
 
+        # Servicios nuevos
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
+            SERVICIOS_ESTADO[sid] = "ACEPTADO"
             enviar(chat, f"✅ Servicio {sid} aceptado")
-
         elif accion.startswith("RECHAZAR_"):
             sid = accion.split("_")[1]
+            SERVICIOS_ESTADO[sid] = "RECHAZADO"
             enviar(chat, f"❌ Servicio {sid} rechazado")
 
     return jsonify(ok=True)
 
 # ---------------- START ----------------
 threading.Thread(target=bot_loop, daemon=True).start()
+
 if __name__ == "__main__":
     logger.info("🚀 Bot iniciado correctamente")
     app.run(host="0.0.0.0", port=10000)
