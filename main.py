@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import sys
 
 load_dotenv()
 
@@ -25,12 +26,15 @@ SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exe
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(level=logging.INFO)
+# ---------------- LOGGING ----------------
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("main")
 
+# ---------------- VARIABLES GLOBALES ----------------
 SERVICIOS_ACTUALES = {}
 SERVICIOS_ESTADO = {}
 
+# ---------------- FLASK ----------------
 app = Flask(__name__)
 
 # ---------------- TELEGRAM ----------------
@@ -56,8 +60,8 @@ def botones_generales():
 def botones_estado(servicio_id):
     return {
         "inline_keyboard": [
-            [{"text": "348 - Pendiente de cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
-             {"text": "318 - En espera profesional", "callback_data": f"ESTADO_{servicio_id}_318"}]
+            [{"text": "✅348 - Pendiente de cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
+             {"text": "✅318 - En espera profesional", "callback_data": f"ESTADO_{servicio_id}_318"}]
         ]
     }
 
@@ -77,7 +81,6 @@ class HomeServe:
     def login(self):
         payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
         try:
-            logger.info("Intentando login...")
             self.session.get(LOGIN_URL, timeout=10)
             r = self.session.post(LOGIN_URL, data=payload, timeout=10)
             if "error" in r.text.lower():
@@ -91,7 +94,6 @@ class HomeServe:
 
     def obtener_servicios_nuevos(self):
         try:
-            logger.info("Obteniendo servicios nuevos...")
             r = self.session.get(ASIGNACION_URL, timeout=10)
             r.encoding = "latin-1"
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
@@ -103,9 +105,7 @@ class HomeServe:
                     idserv = m.group(0)
                     limpio = " ".join(b.split())
                     servicios[idserv] = limpio
-            logger.info(f"Servicios detectados en asignación: {len(servicios)}")
-            for sid in servicios:
-                logger.info(f"Servicio ID detectado: {sid}")
+            logger.info(f"Servicios detectados: {len(servicios)}")
             return servicios
         except Exception as e:
             logger.error(f"Error obteniendo servicios nuevos: {e}")
@@ -162,19 +162,17 @@ homeserve = HomeServe()
 # ---------------- LOOP ALERTAS ----------------
 def bot_loop():
     global SERVICIOS_ACTUALES
-    homeserve.login()
+    if not homeserve.login():
+        logger.error("No se pudo iniciar sesión al arrancar el bot")
     while True:
         try:
-            logger.info("=== Iniciando iteración del loop ===")
             actuales = homeserve.obtener_servicios_nuevos()
-            if len(actuales) == 0:
-                logger.info("Actualmente no hay servicios en asignación.")
+            logger.info(f"Revisando servicios... encontrados: {len(actuales)}")
             for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_ACTUALES:
                     logger.info(f"Nuevo servicio detectado: {idserv}")
                     enviar(CHAT_ID, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(idserv))
             SERVICIOS_ACTUALES = actuales
-            logger.info("=== Iteración del loop finalizada ===\n")
             time.sleep(INTERVALO)
         except Exception as e:
             logger.error(f"Error en loop: {e}")
@@ -196,6 +194,7 @@ def telegram_webhook():
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
+        # Login / Refresh / Web
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Login fallo")
@@ -210,11 +209,15 @@ def telegram_webhook():
             curso = homeserve.obtener_servicios_curso()
             for sid in curso:
                 enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid))
+
+        # Cambio de estado por botón
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             sid, estado = parts[1], parts[2]
             ok, msg = homeserve.cambiar_estado(sid, estado)
             enviar(chat, f"Servicio {sid}:\n{msg}")
+
+        # Servicios nuevos: Aceptar / Rechazar
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
             SERVICIOS_ESTADO[sid] = "ACEPTADO"
@@ -228,6 +231,6 @@ def telegram_webhook():
 
 # ---------------- INICIO ----------------
 if __name__ == "__main__":
-    threading.Thread(target=bot_loop, daemon=True).start()
+    threading.Thread(target=bot_loop).start()  # hilo no daemon
     logger.info("Bot arrancado correctamente")
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
