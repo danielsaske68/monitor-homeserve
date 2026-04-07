@@ -108,58 +108,10 @@ class HomeServe:
             logger.error(f"Error obteniendo servicios nuevos: {e}")
             return {}
 
-    def obtener_servicios_curso(self):
-        try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
-            r.encoding = "latin-1"
-            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
-            servicios = {}
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    servicios[m.group(0)] = " ".join(b.split())
-            return servicios
-        except Exception as e:
-            logger.error(f"Error obteniendo servicios en curso: {e}")
-            return {}
-
-    def cambiar_estado(self, servicio_id, codigo_estado):
-        try:
-            fecha = datetime.now() + timedelta(days=3)  # 3 días de margen
-            # Evitar sábado/domingo
-            if fecha.weekday() == 5:  # sábado
-                fecha += timedelta(days=2)
-            elif fecha.weekday() == 6:  # domingo
-                fecha += timedelta(days=1)
-            fecha_str = fecha.strftime("%d/%m/%Y")
-
-            obs = "Pendiente de localizar a asegurado" if codigo_estado == "348" else "En espera de Profesional por confirmación del Siniestro"
-
-            payload = {
-                "w3exec": "ver_servicioencurso",
-                "Servicio": servicio_id,
-                "Pag": "1",
-                "ESTADO": codigo_estado,
-                "FECSIG": fecha_str,
-                "INFORMO": "on",
-                "Observaciones": obs,
-                "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            }
-
-            r = self.session.post(BASE_URL, data=payload, timeout=10)
-            if "estado actual de la reparacion" in r.text.lower() or "Pendiente" in r.text:
-                return True, f"✅ Estado {codigo_estado} aplicado correctamente"
-            else:
-                return False, f"⚠️ Revisar HTML manualmente"
-        except Exception as e:
-            return False, f"❌ Error: {e}"
-
 homeserve = HomeServe()
 
 # ---------------- LOOP ALERTAS ----------------
 def bot_loop():
-    global SERVICIOS_ACTUALES
     homeserve.login()
     while True:
         try:
@@ -167,6 +119,7 @@ def bot_loop():
             for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_ACTUALES:
                     enviar(CHAT_ID, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(idserv))
+            global SERVICIOS_ACTUALES
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -189,44 +142,15 @@ def telegram_webhook():
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
-        # Login / Refresh / Web
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Login fallo")
-        elif accion == "REFRESH":
-            homeserve.obtener_servicios_nuevos()
-            enviar(chat, "🔄 Actualizado")
-        elif accion == "WEB":
-            actuales = homeserve.obtener_servicios_nuevos()
-            txt = "\n\n".join(actuales.values()) if actuales else "No hay servicios"
-            enviar(chat, txt)
-        elif accion == "CAMBIAR_ESTADO":
-            curso = homeserve.obtener_servicios_curso()
-            for sid in curso:
-                enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid))
-
-        # Cambio de estado por botón
-        elif accion.startswith("ESTADO_"):
-            parts = accion.split("_")
-            sid, estado = parts[1], parts[2]
-            ok, msg = homeserve.cambiar_estado(sid, estado)
-            enviar(chat, f"Servicio {sid}:\n{msg}")
-
-        # Servicios nuevos: Aceptar / Rechazar
-        elif accion.startswith("ACEPTAR_"):
-            sid = accion.split("_")[1]
-            SERVICIOS_ESTADO[sid] = "ACEPTADO"
-            enviar(chat, f"✅ Servicio {sid} aceptado")
-        elif accion.startswith("RECHAZAR_"):
-            sid = accion.split("_")[1]
-            SERVICIOS_ESTADO[sid] = "RECHAZADO"
-            enviar(chat, f"❌ Servicio {sid} rechazado")
 
     return jsonify(ok=True)
 
 # ---------------- INICIO ----------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # puerto dinámico Render
-    threading.Thread(target=bot_loop, daemon=True).start()
-    logger.info("Bot arrancado correctamente")
-    app.run(host="0.0.0.0", port=port)
+# Lanzar loop de alertas en un hilo antes de Gunicorn
+threading.Thread(target=bot_loop, daemon=True).start()
+logger.info("Bot loop arrancado correctamente")
+
+# Flask app seguirá siendo usada por Gunicorn
