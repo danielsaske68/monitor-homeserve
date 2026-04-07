@@ -26,7 +26,7 @@ SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exe
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ---------------- LOGGING ----------------
+# ---------------- LOGS ----------------
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
@@ -34,7 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-# ---------------- VARIABLES GLOBALES ----------------
+# ---------------- VARIABLES ----------------
 SERVICIOS_ACTUALES = {}
 SERVICIOS_ESTADO = {}
 
@@ -101,16 +101,20 @@ class HomeServe:
             r = self.session.get(ASIGNACION_URL, timeout=10)
             r.encoding = "latin-1"
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
+
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     idserv = m.group(0)
                     limpio = " ".join(b.split())
                     servicios[idserv] = limpio
-            logger.info(f"Revisando servicios... encontrados: {len(servicios)}")
+
+            logger.info(f"🔎 Revisando servicios... encontrados: {len(servicios)}")
             return servicios
+
         except Exception as e:
             logger.error(f"Error obteniendo servicios nuevos: {e}")
             return {}
@@ -120,13 +124,17 @@ class HomeServe:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
+
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
+
             return servicios
+
         except Exception as e:
             logger.error(f"Error obteniendo servicios en curso: {e}")
             return {}
@@ -134,12 +142,16 @@ class HomeServe:
     def cambiar_estado(self, servicio_id, codigo_estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
+
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
+
             fecha_str = fecha.strftime("%d/%m/%Y")
+
             obs = "Pendiente de localizar a asegurado" if codigo_estado == "348" else "En espera de Profesional por confirmación del Siniestro"
+
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": servicio_id,
@@ -150,39 +162,58 @@ class HomeServe:
                 "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
+
             r = self.session.post(BASE_URL, data=payload, timeout=10)
+
             if "estado actual de la reparacion" in r.text.lower() or "Pendiente" in r.text:
                 return True, f"✅ Estado {codigo_estado} aplicado correctamente"
             else:
-                return False, f"⚠️ Revisar HTML manualmente"
+                return False, "⚠️ Revisar HTML manualmente"
+
         except Exception as e:
             return False, f"❌ Error: {e}"
 
 homeserve = HomeServe()
 
-# ---------------- LOOP ALERTAS ----------------
+# ---------------- LOOP ----------------
 def bot_loop():
     global SERVICIOS_ACTUALES
+
+    logger.info("🔥 Iniciando loop de servicios...")
+    
     if not homeserve.login():
-        logger.error("No se pudo iniciar sesión al arrancar el bot")
+        logger.error("❌ No se pudo iniciar sesión")
+
     while True:
         try:
+            logger.info("⏱ Ejecutando revisión...")
+
             actuales = homeserve.obtener_servicios_nuevos()
+
+            if not actuales:
+                logger.info("⚠️ No hay servicios disponibles")
+
             for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_ACTUALES:
-                    logger.info(f"Nuevo servicio detectado: {idserv}")
-                    enviar(CHAT_ID, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(idserv))
+                    logger.info(f"🆕 Nuevo servicio detectado: {idserv}")
+                    enviar(
+                        CHAT_ID,
+                        f"🆕 <b>Nuevo servicio</b>\n\n{servicio}",
+                        botones_servicio_nuevo(idserv)
+                    )
+
             SERVICIOS_ACTUALES = actuales
+
             time.sleep(INTERVALO)
+
         except Exception as e:
-            logger.error(f"Error en loop: {e}")
+            logger.error(f"💥 Error en loop: {e}")
             time.sleep(20)
 
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
-    chat = None
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
@@ -197,13 +228,16 @@ def telegram_webhook():
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Login fallo")
+
         elif accion == "REFRESH":
             homeserve.obtener_servicios_nuevos()
             enviar(chat, "🔄 Actualizado")
+
         elif accion == "WEB":
             actuales = homeserve.obtener_servicios_nuevos()
             txt = "\n\n".join(actuales.values()) if actuales else "No hay servicios"
             enviar(chat, txt)
+
         elif accion == "CAMBIAR_ESTADO":
             curso = homeserve.obtener_servicios_curso()
             for sid in curso:
@@ -219,6 +253,7 @@ def telegram_webhook():
             sid = accion.split("_")[1]
             SERVICIOS_ESTADO[sid] = "ACEPTADO"
             enviar(chat, f"✅ Servicio {sid} aceptado")
+
         elif accion.startswith("RECHAZAR_"):
             sid = accion.split("_")[1]
             SERVICIOS_ESTADO[sid] = "RECHAZADO"
@@ -226,9 +261,11 @@ def telegram_webhook():
 
     return jsonify(ok=True)
 
-# ---------------- INICIO ----------------
+# ---------------- INICIO (CLAVE PARA RAILWAY) ----------------
+threading.Thread(target=bot_loop).start()
+logger.info("🚀 Bot y loop iniciados correctamente")
+
+# ---------------- LOCAL ----------------
 if __name__ == "__main__":
-    threading.Thread(target=bot_loop).start()  # hilo no daemon
-    logger.info("Bot arrancado correctamente")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
