@@ -129,6 +129,48 @@ class HomeServe:
             logger.error(f"Error obteniendo servicios: {e}")
             return {}
 
+    def obtener_curso(self):
+        try:
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
+            r.encoding = "latin-1"
+            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
+            servicios = {}
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+            return servicios
+        except Exception as e:
+            logger.error(f"Error servicios curso: {e}")
+            return {}
+
+    def cambiar_estado(self, servicio_id, estado):
+        try:
+            fecha = datetime.now() + timedelta(days=3)
+            if fecha.weekday() == 5:
+                fecha += timedelta(days=2)
+            elif fecha.weekday() == 6:
+                fecha += timedelta(days=1)
+
+            obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional por confirmación del Siniestro"
+
+            payload = {
+                "w3exec": "ver_servicioencurso",
+                "Servicio": servicio_id,
+                "ESTADO": estado,
+                "FECSIG": fecha.strftime("%d/%m/%Y"),
+                "INFORMO": "on",
+                "Observaciones": obs,
+                "BTNCAMBIAESTADO": "Aceptar el Cambio"
+            }
+
+            self.session.post(BASE_URL, data=payload, timeout=10)
+            return True, f"✅ Estado {estado} aplicado correctamente"
+
+        except Exception as e:
+            return False, f"❌ Error: {e}"
+
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
@@ -146,7 +188,6 @@ def bot_loop():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
 
-                    # 🔥 ENVIAR A TODOS LOS USUARIOS
                     for user in obtener_usuarios():
                         enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
 
@@ -167,7 +208,7 @@ def telegram_webhook():
         chat = data["message"]["chat"]["id"]
 
         if data["message"].get("text") == "/start":
-            guardar_usuario(chat)  # 🔥 guardar usuario
+            guardar_usuario(chat)
             enviar(chat, "👋 Bot activo", botones_generales())
 
     if "callback_query" in data:
@@ -181,6 +222,35 @@ def telegram_webhook():
         elif accion == "REFRESH":
             homeserve.obtener()
             enviar(chat, "🔄 Actualizado")
+
+        elif accion == "WEB":
+            actuales = homeserve.obtener()
+            txt = "\n\n".join(actuales.values()) if actuales else "No hay servicios"
+            enviar(chat, txt)
+
+        elif accion == "CAMBIAR_ESTADO":
+            curso = homeserve.obtener_curso()
+            if curso:
+                enviar(chat, "🛠 Selecciona servicio:", botones_lista_servicios(curso))
+            else:
+                enviar(chat, "⚠️ No hay servicios en curso")
+
+        elif accion.startswith("SEL_"):
+            sid = accion.split("_")[1]
+            enviar(chat, f"🔧 Servicio {sid}\n\nSelecciona estado:", botones_estado(sid))
+
+        elif accion.startswith("ESTADO_"):
+            _, sid, estado = accion.split("_")
+            ok, msg = homeserve.cambiar_estado(sid, estado)
+            enviar(chat, f"{sid}\n{msg}")
+
+        elif accion.startswith("ACEPTAR_"):
+            sid = accion.split("_")[1]
+            enviar(chat, f"✅ Servicio {sid} aceptado")
+
+        elif accion.startswith("RECHAZAR_"):
+            sid = accion.split("_")[1]
+            enviar(chat, f"❌ Servicio {sid} rechazado")
 
     return jsonify(ok=True)
 
