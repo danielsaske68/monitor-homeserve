@@ -27,7 +27,11 @@ SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exe
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # ---------------- LOGGING ----------------
-logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger("main")
 
 # ---------------- VARIABLES GLOBALES ----------------
@@ -60,8 +64,8 @@ def botones_generales():
 def botones_estado(servicio_id):
     return {
         "inline_keyboard": [
-            [{"text": "✅348 - Pendiente de cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
-             {"text": "✅318 - En espera profesional", "callback_data": f"ESTADO_{servicio_id}_318"}]
+            [{"text": "348 - Pendiente de cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
+             {"text": "318 - En espera profesional", "callback_data": f"ESTADO_{servicio_id}_318"}]
         ]
     }
 
@@ -105,7 +109,7 @@ class HomeServe:
                     idserv = m.group(0)
                     limpio = " ".join(b.split())
                     servicios[idserv] = limpio
-            logger.info(f"Servicios detectados: {len(servicios)}")
+            logger.info(f"Revisando servicios... encontrados: {len(servicios)}")
             return servicios
         except Exception as e:
             logger.error(f"Error obteniendo servicios nuevos: {e}")
@@ -135,9 +139,7 @@ class HomeServe:
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
             fecha_str = fecha.strftime("%d/%m/%Y")
-
             obs = "Pendiente de localizar a asegurado" if codigo_estado == "348" else "En espera de Profesional por confirmación del Siniestro"
-
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": servicio_id,
@@ -148,7 +150,6 @@ class HomeServe:
                 "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
-
             r = self.session.post(BASE_URL, data=payload, timeout=10)
             if "estado actual de la reparacion" in r.text.lower() or "Pendiente" in r.text:
                 return True, f"✅ Estado {codigo_estado} aplicado correctamente"
@@ -167,7 +168,6 @@ def bot_loop():
     while True:
         try:
             actuales = homeserve.obtener_servicios_nuevos()
-            logger.info(f"Revisando servicios... encontrados: {len(actuales)}")
             for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_ACTUALES:
                     logger.info(f"Nuevo servicio detectado: {idserv}")
@@ -194,7 +194,6 @@ def telegram_webhook():
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
-        # Login / Refresh / Web
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Login fallo")
@@ -210,14 +209,12 @@ def telegram_webhook():
             for sid in curso:
                 enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid))
 
-        # Cambio de estado por botón
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             sid, estado = parts[1], parts[2]
             ok, msg = homeserve.cambiar_estado(sid, estado)
             enviar(chat, f"Servicio {sid}:\n{msg}")
 
-        # Servicios nuevos: Aceptar / Rechazar
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
             SERVICIOS_ESTADO[sid] = "ACEPTADO"
@@ -233,4 +230,5 @@ def telegram_webhook():
 if __name__ == "__main__":
     threading.Thread(target=bot_loop).start()  # hilo no daemon
     logger.info("Bot arrancado correctamente")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
