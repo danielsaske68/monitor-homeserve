@@ -17,7 +17,6 @@ PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
-PORT = int(os.environ.get("PORT", 10000))
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
@@ -51,6 +50,7 @@ def botones_generales():
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
+            [{"text": "📋 Ver servicios guardados", "callback_data": "GUARDADOS"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}],
             [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}]
         ]
@@ -91,11 +91,12 @@ class HomeServe:
             logger.error(f"Login error: {e}")
             return False
 
+    # Captura de servicios igual que tu script anterior
     def obtener_servicios_nuevos(self):
         try:
-            r = self.session.get(ASIGNACION_URL, timeout=10)
-            r.encoding = "latin-1"
-            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+            r = self.session.get(ASIGNACION_URL, timeout=15)
+            soup = BeautifulSoup(r.text, "html.parser")
+            texto = soup.get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
@@ -104,11 +105,13 @@ class HomeServe:
                     idserv = m.group(0)
                     limpio = " ".join(b.split())
                     servicios[idserv] = limpio
+            logger.info(f"Servicios detectados: {len(servicios)}")
             return servicios
         except Exception as e:
             logger.error(f"Error obteniendo servicios nuevos: {e}")
             return {}
 
+    # Servicios en curso
     def obtener_servicios_curso(self):
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
@@ -160,17 +163,20 @@ homeserve = HomeServe()
 # ---------------- LOOP ALERTAS ----------------
 def bot_loop():
     global SERVICIOS_ACTUALES
-    homeserve.login()
+    if not homeserve.login():
+        logger.error("No se pudo iniciar sesión al arrancar el bot")
     while True:
         try:
             actuales = homeserve.obtener_servicios_nuevos()
+            # Detectar nuevos
             for idserv, servicio in actuales.items():
                 if idserv not in SERVICIOS_ACTUALES:
                     enviar(CHAT_ID, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(idserv))
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
-            logger.error(f"Error en loop: {e}")
+            logger.error(f"Error loop: {e}")
+            homeserve.login()
             time.sleep(20)
 
 # ---------------- WEBHOOK ----------------
@@ -189,6 +195,7 @@ def telegram_webhook():
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
 
+        # Login / Refresh / Web
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Login fallo")
@@ -204,12 +211,14 @@ def telegram_webhook():
             for sid in curso:
                 enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid))
 
+        # Cambio de estado por botón
         elif accion.startswith("ESTADO_"):
             parts = accion.split("_")
             sid, estado = parts[1], parts[2]
             ok, msg = homeserve.cambiar_estado(sid, estado)
             enviar(chat, f"Servicio {sid}:\n{msg}")
 
+        # Servicios nuevos: Aceptar / Rechazar
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
             SERVICIOS_ESTADO[sid] = "ACEPTADO"
@@ -225,4 +234,5 @@ def telegram_webhook():
 if __name__ == "__main__":
     threading.Thread(target=bot_loop, daemon=True).start()
     logger.info("Bot arrancado correctamente")
-    app.run(host="0.0.0.0", port=PORT)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
