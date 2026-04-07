@@ -145,6 +145,7 @@ class HomeServe:
             logger.error(f"Error servicios curso: {e}")
             return {}
 
+    # ---------------- ESTADO ----------------
     def cambiar_estado(self, servicio_id, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
@@ -165,11 +166,36 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            self.session.post(BASE_URL, data=payload, timeout=10)
-            return True, f"✅ Estado {estado} aplicado correctamente"
-
+            r = self.session.post(BASE_URL, data=payload, timeout=10)
+            # Revisamos si cambio correctamente
+            if "estado actual" in r.text.lower() or "Pendiente" in r.text:
+                return True, f"✅ Estado {estado} aplicado correctamente"
+            else:
+                return False, f"⚠️ Revisar HTML manualmente"
         except Exception as e:
             return False, f"❌ Error: {e}"
+
+    # ---------------- ACEPTAR / RECHAZAR ----------------
+    def aceptar_servicio(self, servicio_id):
+        try:
+            payload = {"w3exec": "prof_asignacion", "Servicio": servicio_id, "ACEPTAR": "Aceptar"}
+            r = self.session.post(BASE_URL, data=payload, timeout=10)
+            if "confirmación" in r.text.lower() or "aceptado" in r.text.lower():
+                return True, f"✅ Servicio {servicio_id} aceptado correctamente"
+            return False, f"⚠️ Servicio {servicio_id} NO aceptado, revisar HTML"
+        except Exception as e:
+            return False, f"❌ Error aceptando servicio {servicio_id}: {e}"
+
+    def rechazar_servicio(self, servicio_id):
+        try:
+            payload = {"w3exec": "prof_asignacion", "Servicio": servicio_id, "RECHAZAR": "Rechazar"}
+            r = self.session.post(BASE_URL, data=payload, timeout=10)
+            if "confirmación" in r.text.lower() or "rechazado" in r.text.lower():
+                return True, f"❌ Servicio {servicio_id} rechazado correctamente"
+            return False, f"⚠️ Servicio {servicio_id} NO rechazado, revisar HTML"
+        except Exception as e:
+            return False, f"❌ Error rechazando servicio {servicio_id}: {e}"
+
 
 homeserve = HomeServe()
 
@@ -187,13 +213,10 @@ def bot_loop():
             for sid, servicio in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
-
                     for user in obtener_usuarios():
                         enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
-
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
-
         except Exception as e:
             logger.error(f"Error loop: {e}")
             homeserve.login()
@@ -203,10 +226,8 @@ def bot_loop():
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
-
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-
         if data["message"].get("text") == "/start":
             guardar_usuario(chat)
             enviar(chat, "👋 Bot activo", botones_generales())
@@ -225,16 +246,11 @@ def telegram_webhook():
 
         elif accion == "WEB":
             actuales = homeserve.obtener()
-
             if not actuales:
                 enviar(chat, "No hay servicios")
             else:
                 for sid, servicio in actuales.items():
-                    enviar(
-                        chat,
-                        f"📋 <b>Servicio</b>\n\n{servicio}",
-                        botones_servicio_nuevo(sid)
-                    )
+                    enviar(chat, f"📋 <b>Servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
 
         elif accion == "CAMBIAR_ESTADO":
             curso = homeserve.obtener_curso()
@@ -254,11 +270,13 @@ def telegram_webhook():
 
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
-            enviar(chat, f"✅ Servicio {sid} aceptado")
+            ok, msg = homeserve.aceptar_servicio(sid)
+            enviar(chat, msg)
 
         elif accion.startswith("RECHAZAR_"):
             sid = accion.split("_")[1]
-            enviar(chat, f"❌ Servicio {sid} rechazado")
+            ok, msg = homeserve.rechazar_servicio(sid)
+            enviar(chat, msg)
 
     return jsonify(ok=True)
 
