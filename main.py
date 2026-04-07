@@ -57,8 +57,8 @@ def botones_generales():
 def botones_estado(servicio_id):
     return {
         "inline_keyboard": [
-            [{"text": "348 - Pendiente", "callback_data": f"ESTADO_{servicio_id}_348"},
-             {"text": "318 - En espera", "callback_data": f"ESTADO_{servicio_id}_318"}]
+            [{"text": "🔴Pendiente de cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
+             {"text": "🟢En espera por confirmar", "callback_data": f"ESTADO_{servicio_id}_318"}]
         ]
     }
 
