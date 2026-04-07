@@ -225,8 +225,16 @@ def telegram_webhook():
 
         elif accion == "WEB":
             actuales = homeserve.obtener()
-            txt = "\n\n".join(actuales.values()) if actuales else "No hay servicios"
-            enviar(chat, txt)
+
+            if not actuales:
+                enviar(chat, "No hay servicios")
+            else:
+                for sid, servicio in actuales.items():
+                    enviar(
+                        chat,
+                        f"📋 <b>Servicio</b>\n\n{servicio}",
+                        botones_servicio_nuevo(sid)
+                    )
 
         elif accion == "CAMBIAR_ESTADO":
             curso = homeserve.obtener_curso()
