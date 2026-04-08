@@ -33,58 +33,49 @@ SERVICIOS_ACTUALES = {}
 app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
-DB_VOLUME_PATH = "/var/lib/containers/railwayapp/bind-mounts/vol_otk7v841omd3up84"
+DB_VOLUME_PATH = "/data/usuarios"  # Carpeta persistente en Railway
 DB_PATH = os.path.join(DB_VOLUME_PATH, "usuarios.db")
 os.makedirs(DB_VOLUME_PATH, exist_ok=True)
 
-class DB:
-    def __init__(self, path):
-        self.path = path
-        self.init_db()
+def init_db():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                chat_id TEXT PRIMARY KEY
+            )
+        """)
+        conn.commit()
+        conn.close()
+        logger.info(f"📁 Base de datos inicializada en: {DB_PATH}")
+    except Exception as e:
+        logger.error(f"Error inicializando DB: {e}")
 
-    def init_db(self):
-        try:
-            with sqlite3.connect(self.path) as conn:
-                c = conn.cursor()
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS usuarios (
-                        chat_id TEXT PRIMARY KEY
-                    )
-                """)
-                conn.commit()
-            logger.info(f"📁 Base de datos inicializada en: {self.path}")
-        except Exception as e:
-            logger.error(f"Error inicializando DB: {e}")
+def guardar_usuario(chat_id):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+        conn.commit()
+        conn.close()
+        logger.info(f"👤 Usuario guardado: {chat_id}")
+    except Exception as e:
+        logger.error(f"Error guardando usuario: {e}")
 
-    def guardar_usuario(self, chat_id):
-        try:
-            nuevo_usuario = False
-            with sqlite3.connect(self.path) as conn:
-                c = conn.cursor()
-                c.execute("SELECT 1 FROM usuarios WHERE chat_id = ?", (str(chat_id),))
-                if not c.fetchone():
-                    c.execute("INSERT INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
-                    conn.commit()
-                    nuevo_usuario = True
-            if nuevo_usuario:
-                logger.info(f"👤 Usuario guardado: {chat_id}")
-                enviar(chat_id, "🤖 Bot activo")  # Mensaje automático al usuario nuevo
-            return nuevo_usuario
-        except Exception as e:
-            logger.error(f"Error guardando usuario: {e}")
-            return False
+def obtener_usuarios():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT chat_id FROM usuarios")
+        usuarios = [row[0] for row in c.fetchall()]
+        conn.close()
+        return usuarios
+    except Exception as e:
+        logger.error(f"Error obteniendo usuarios: {e}")
+        return []
 
-    def obtener_usuarios(self):
-        try:
-            with sqlite3.connect(self.path) as conn:
-                c = conn.cursor()
-                c.execute("SELECT chat_id FROM usuarios")
-                return [row[0] for row in c.fetchall()]
-        except Exception as e:
-            logger.error(f"Error obteniendo usuarios: {e}")
-            return []
-
-db = DB(DB_PATH)
+init_db()
 
 # ---------------- TELEGRAM ----------------
 def enviar(chat, texto, botones=None):
@@ -184,8 +175,10 @@ class HomeServe:
     def cambiar_estado(self, servicio_id, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
-            if fecha.weekday() == 5: fecha += timedelta(days=2)
-            elif fecha.weekday() == 6: fecha += timedelta(days=1)
+            if fecha.weekday() == 5:
+                fecha += timedelta(days=2)
+            elif fecha.weekday() == 6:
+                fecha += timedelta(days=1)
             obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional por confirmación del Siniestro"
             payload = {
                 "w3exec": "ver_servicioencurso",
@@ -197,30 +190,21 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
             r = self.session.post(BASE_URL, data=payload, timeout=10)
-            if r.status_code == 200:
-                return True, f"✅ Estado {estado} aplicado correctamente"
-            else:
-                return False, f"⚠️ Error HTTP {r.status_code}"
+            return (r.status_code == 200, f"✅ Estado {estado} aplicado correctamente" if r.status_code == 200 else f"⚠️ Error HTTP {r.status_code}")
         except Exception as e:
             return False, f"❌ Error: {e}"
 
     def aceptar_servicio(self, servicio_id):
         try:
-            payload = {"w3exec": "prof_asignacion","servicio": servicio_id,"ACEPTAR": "Aceptar"}
-            r = self.session.post(BASE_URL, data=payload, timeout=10)
-            if r.status_code == 200:
-                return True, f"✅ Servicio {servicio_id} aceptado"
-            return False, f"⚠️ Error aceptando"
+            r = self.session.post(BASE_URL, data={"w3exec": "prof_asignacion","servicio": servicio_id,"ACEPTAR": "Aceptar"}, timeout=10)
+            return (r.status_code == 200, f"✅ Servicio {servicio_id} aceptado" if r.status_code == 200 else "⚠️ Error aceptando")
         except Exception as e:
             return False, f"❌ Error: {e}"
 
     def rechazar_servicio(self, servicio_id):
         try:
-            payload = {"w3exec": "prof_asignacion","servicio": servicio_id,"RECHAZAR": "Rechazar"}
-            r = self.session.post(BASE_URL, data=payload, timeout=10)
-            if r.status_code == 200:
-                return True, f"❌ Servicio {servicio_id} rechazado"
-            return False, f"⚠️ Error rechazando"
+            r = self.session.post(BASE_URL, data={"w3exec": "prof_asignacion","servicio": servicio_id,"RECHAZAR": "Rechazar"}, timeout=10)
+            return (r.status_code == 200, f"❌ Servicio {servicio_id} rechazado" if r.status_code == 200 else "⚠️ Error rechazando")
         except Exception as e:
             return False, f"❌ Error: {e}"
 
@@ -238,7 +222,7 @@ def bot_loop():
             for sid, servicio in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
-                    for user in db.obtener_usuarios():
+                    for user in obtener_usuarios():
                         enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -253,13 +237,13 @@ def telegram_webhook():
     data = request.json
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        db.guardar_usuario(chat)  # Mensaje bot activo si es usuario nuevo
+        guardar_usuario(chat)
         if data["message"].get("text") == "/start":
             enviar(chat, "👋 Bot activo", botones_generales())
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
-        db.guardar_usuario(chat)
+        guardar_usuario(chat)
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
@@ -296,12 +280,17 @@ def telegram_webhook():
             enviar(chat, msg)
     return jsonify(ok=True)
 
-# ---------------- START ----------------
+# ---------------- INICIO ----------------
+# Enviar "Bot activo" solo a usuarios únicos cargados
+usuarios = obtener_usuarios()
+usuarios_enviados = set()
+for user in usuarios:
+    if user not in usuarios_enviados:
+        enviar(user, "🤖 Bot activo")
+        usuarios_enviados.add(user)
+
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
-    # Mensaje bot activo a todos los usuarios guardados al iniciar
-    for user in db.obtener_usuarios():
-        enviar(user, "🤖 Bot activo")
     logger.info("🚀 Bot iniciado correctamente")
     app.run(host="0.0.0.0", port=10000)
