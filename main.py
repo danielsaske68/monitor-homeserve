@@ -245,7 +245,8 @@ def telegram_webhook():
     data = request.json
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        if data["message"].get("text") == "/start":
+        msg = data["message"].get("text", "")
+        if msg.startswith("/start"):
             enviar(chat, "👋 Hola, en qué puedo ayudar", menu_principal())
             guardar_usuario(chat, None)
         else:
