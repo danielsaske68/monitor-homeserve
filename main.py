@@ -25,55 +25,55 @@ SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exe
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("main")
 
 # ---------------- VARIABLES ----------------
 SERVICIOS_ACTUALES = {}
 app = Flask(__name__)
+DB_PATH = "/var/lib/containers/railwayapp/bind-mounts/vol_otk7v841omd3up84/usuarios.db"
 
 # ---------------- DATABASE ----------------
-# Ruta de DB persistente en Railway
-DB_PATH = "/var/lib/containers/railwayapp/bind-mounts/695080cd-74cc-4fef-b8e2-8bbf3479ff28/vol_otk7v841omd3up84/usuarios.db"
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+class DB:
+    def __init__(self, path):
+        self.path = path
+        self.init_db()
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            chat_id TEXT PRIMARY KEY
-        )
-    """)
-    conn.commit()
-    conn.close()
-    logger.info(f"📁 Base de datos inicializada en: {DB_PATH}")
+    def init_db(self):
+        try:
+            with sqlite3.connect(self.path) as conn:
+                c = conn.cursor()
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS usuarios (
+                        chat_id TEXT PRIMARY KEY
+                    )
+                """)
+                conn.commit()
+            logger.info(f"📁 Base de datos inicializada en: {self.path}")
+        except Exception as e:
+            logger.error(f"Error inicializando DB: {e}")
 
-def guardar_usuario(chat_id):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
-        conn.commit()
-        conn.close()
-        logger.info(f"👤 Usuario guardado: {chat_id}")
-    except Exception as e:
-        logger.error(f"Error guardando usuario: {e}")
+    def guardar_usuario(self, chat_id):
+        try:
+            with sqlite3.connect(self.path) as conn:
+                c = conn.cursor()
+                c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+                conn.commit()
+            logger.info(f"👤 Usuario guardado: {chat_id}")
+        except Exception as e:
+            logger.error(f"Error guardando usuario: {e}")
 
-def obtener_usuarios():
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT chat_id FROM usuarios")
-        usuarios = [row[0] for row in c.fetchall()]
-        conn.close()
-        return usuarios
-    except Exception as e:
-        logger.error(f"Error obteniendo usuarios: {e}")
-        return []
+    def obtener_usuarios(self):
+        try:
+            with sqlite3.connect(self.path) as conn:
+                c = conn.cursor()
+                c.execute("SELECT chat_id FROM usuarios")
+                return [row[0] for row in c.fetchall()]
+        except Exception as e:
+            logger.error(f"Error obteniendo usuarios: {e}")
+            return []
 
-init_db()
+db = DB(DB_PATH)
 
 # ---------------- TELEGRAM ----------------
 def enviar(chat, texto, botones=None):
@@ -141,19 +141,15 @@ class HomeServe:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             soup = BeautifulSoup(r.text, "html.parser")
             texto = soup.get_text("\n")
-
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
-
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     sid = m.group(0)
                     servicios[sid] = " ".join(b.split())
-
             logger.info(f"🔎 Revisando servicios... encontrados: {len(servicios)}")
             return servicios
-
         except Exception as e:
             logger.error(f"Error obteniendo servicios: {e}")
             return {}
@@ -163,15 +159,12 @@ class HomeServe:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
-
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
-
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
-
             return servicios
         except Exception as e:
             logger.error(f"Error servicios curso: {e}")
@@ -184,9 +177,7 @@ class HomeServe:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
-
             obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional por confirmación del Siniestro"
-
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": servicio_id,
@@ -196,26 +187,39 @@ class HomeServe:
                 "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
-
             r = self.session.post(BASE_URL, data=payload, timeout=10)
-            return (True, f"✅ Estado {estado} aplicado correctamente") if r.status_code == 200 else (False, f"⚠️ Error HTTP {r.status_code}")
-
+            if r.status_code == 200:
+                return True, f"✅ Estado {estado} aplicado correctamente"
+            else:
+                return False, f"⚠️ Error HTTP {r.status_code}"
         except Exception as e:
             return False, f"❌ Error: {e}"
 
     def aceptar_servicio(self, servicio_id):
         try:
-            payload = {"w3exec": "prof_asignacion", "servicio": servicio_id, "ACEPTAR": "Aceptar"}
+            payload = {
+                "w3exec": "prof_asignacion",
+                "servicio": servicio_id,
+                "ACEPTAR": "Aceptar"
+            }
             r = self.session.post(BASE_URL, data=payload, timeout=10)
-            return (True, f"✅ Servicio {servicio_id} aceptado") if r.status_code == 200 else (False, f"⚠️ Error aceptando")
+            if r.status_code == 200:
+                return True, f"✅ Servicio {servicio_id} aceptado"
+            return False, f"⚠️ Error aceptando"
         except Exception as e:
             return False, f"❌ Error: {e}"
 
     def rechazar_servicio(self, servicio_id):
         try:
-            payload = {"w3exec": "prof_asignacion", "servicio": servicio_id, "RECHAZAR": "Rechazar"}
+            payload = {
+                "w3exec": "prof_asignacion",
+                "servicio": servicio_id,
+                "RECHAZAR": "Rechazar"
+            }
             r = self.session.post(BASE_URL, data=payload, timeout=10)
-            return (True, f"❌ Servicio {servicio_id} rechazado") if r.status_code == 200 else (False, f"⚠️ Error rechazando")
+            if r.status_code == 200:
+                return True, f"❌ Servicio {servicio_id} rechazado"
+            return False, f"⚠️ Error rechazando"
         except Exception as e:
             return False, f"❌ Error: {e}"
 
@@ -225,17 +229,15 @@ homeserve = HomeServe()
 def bot_loop():
     global SERVICIOS_ACTUALES
     logger.info("🔥 Iniciando loop de servicios...")
-
     if not homeserve.login():
         logger.error("❌ No se pudo hacer login inicial")
-
     while True:
         try:
             actuales = homeserve.obtener()
             for sid, servicio in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
-                    for user in obtener_usuarios():
+                    for user in db.obtener_usuarios():
                         enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -248,18 +250,15 @@ def bot_loop():
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     data = request.json
-
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        guardar_usuario(chat)
+        db.guardar_usuario(chat)
         if data["message"].get("text") == "/start":
             enviar(chat, "👋 Bot activo", botones_generales())
-
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
-        guardar_usuario(chat)
-
+        db.guardar_usuario(chat)
         if accion == "LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login")
@@ -294,10 +293,13 @@ def telegram_webhook():
             sid = accion.split("_")[1]
             ok, msg = homeserve.rechazar_servicio(sid)
             enviar(chat, msg)
-
     return jsonify(ok=True)
 
 # ---------------- START ----------------
+# Enviar "bot activo" a todos los usuarios guardados al iniciar
+for user in db.obtener_usuarios():
+    enviar(user, "👋 Bot activo", botones_generales())
+
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
