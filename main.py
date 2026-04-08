@@ -33,7 +33,7 @@ SERVICIOS_ACTUALES = {}
 app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
-DB_VOLUME_PATH = "/data/usuarios"  # Carpeta persistente en Railway
+DB_VOLUME_PATH = "/data/usuarios"
 DB_PATH = os.path.join(DB_VOLUME_PATH, "usuarios.db")
 os.makedirs(DB_VOLUME_PATH, exist_ok=True)
 
@@ -78,14 +78,21 @@ def obtener_usuarios():
 init_db()
 
 # ---------------- TELEGRAM ----------------
-def enviar(chat, texto, botones=None):
+ULTIMO_MENSAJE = {}  # Guardamos último message_id por usuario
+
+def enviar_o_editar(chat, texto, mensaje_id=None, botones=None):
     data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
     if botones:
         data["reply_markup"] = botones
     try:
-        requests.post(TELEGRAM_API + "/sendMessage", json=data, timeout=10)
+        if mensaje_id:
+            data["message_id"] = mensaje_id
+            requests.post(TELEGRAM_API + "/editMessageText", json=data, timeout=10)
+        else:
+            r = requests.post(TELEGRAM_API + "/sendMessage", json=data, timeout=10)
+            return r.json().get("result", {}).get("message_id")
     except Exception as e:
-        logger.error(f"Error enviando mensaje: {e}")
+        logger.error(f"Error enviando/actualizando mensaje: {e}")
 
 def botones_generales():
     return {
@@ -223,7 +230,7 @@ def bot_loop():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
                     for user in obtener_usuarios():
-                        enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
+                        enviar_o_editar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones=botones_servicio_nuevo(sid))
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -239,55 +246,58 @@ def telegram_webhook():
         chat = data["message"]["chat"]["id"]
         guardar_usuario(chat)
         if data["message"].get("text") == "/start":
-            enviar(chat, "👋 Hola, En que puedo ayudar", botones_generales())
+            msg_id = enviar_o_editar(chat, "👋 Hola, en qué puedo ayudar", botones_generales())
+            ULTIMO_MENSAJE[chat] = msg_id
+
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
+        mensaje_id = data["callback_query"]["message"]["message_id"]
         guardar_usuario(chat)
+        msg_id = ULTIMO_MENSAJE.get(chat, mensaje_id)
+
         if accion == "LOGIN":
             ok = homeserve.login()
-            enviar(chat, "✅ Login OK" if ok else "❌ Error login")
+            enviar_o_editar(chat, "✅ Login OK" if ok else "❌ Error login", mensaje_id=msg_id, botones=botones_generales())
         elif accion == "REFRESH":
             homeserve.obtener()
-            enviar(chat, "🔄 Actualizado")
+            enviar_o_editar(chat, "🔄 Actualizado", mensaje_id=msg_id, botones=botones_generales())
         elif accion == "WEB":
             actuales = homeserve.obtener()
             if not actuales:
-                enviar(chat, "No hay servicios")
+                enviar_o_editar(chat, "No hay servicios", mensaje_id=msg_id, botones=botones_generales())
             else:
-                for sid, servicio in actuales.items():
-                    enviar(chat, f"📋 {servicio}", botones_servicio_nuevo(sid))
+                texto = "\n".join([f"📋 {s}" for s in actuales.values()])
+                enviar_o_editar(chat, texto, mensaje_id=msg_id, botones=botones_servicio_nuevo(list(actuales.keys())[0]))
         elif accion == "CAMBIAR_ESTADO":
             curso = homeserve.obtener_curso()
             if curso:
-                enviar(chat, "🛠 Selecciona servicio:", botones_lista_servicios(curso))
+                enviar_o_editar(chat, "🛠 Selecciona servicio:", mensaje_id=msg_id, botones=botones_lista_servicios(curso))
             else:
-                enviar(chat, "⚠️ No hay servicios en curso")
+                enviar_o_editar(chat, "⚠️ No hay servicios en curso", mensaje_id=msg_id)
         elif accion.startswith("SEL_"):
             sid = accion.split("_")[1]
-            enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid))
+            enviar_o_editar(chat, f"🔧 Servicio {sid}", mensaje_id=msg_id, botones=botones_estado(sid))
         elif accion.startswith("ESTADO_"):
             _, sid, estado = accion.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
-            enviar(chat, f"{sid}\n{msg}")
+            enviar_o_editar(chat, f"{sid}\n{msg}", mensaje_id=msg_id, botones=botones_generales())
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
             ok, msg = homeserve.aceptar_servicio(sid)
-            enviar(chat, msg)
+            enviar_o_editar(chat, msg, mensaje_id=msg_id, botones=botones_generales())
         elif accion.startswith("RECHAZAR_"):
             sid = accion.split("_")[1]
             ok, msg = homeserve.rechazar_servicio(sid)
-            enviar(chat, msg)
+            enviar_o_editar(chat, msg, mensaje_id=msg_id, botones=botones_generales())
+
     return jsonify(ok=True)
 
 # ---------------- INICIO ----------------
-# Enviar "Bot activo" solo a usuarios únicos cargados
 usuarios = obtener_usuarios()
-usuarios_enviados = set()
 for user in usuarios:
-    if user not in usuarios_enviados:
-        enviar(user, "🤖 Bot activo")
-        usuarios_enviados.add(user)
+    msg_id = enviar_o_editar(user, "🤖 Bot activo", botones_generales())
+    ULTIMO_MENSAJE[user] = msg_id
 
 threading.Thread(target=bot_loop, daemon=True).start()
 
