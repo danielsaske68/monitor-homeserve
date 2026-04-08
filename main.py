@@ -33,7 +33,7 @@ SERVICIOS_ACTUALES = {}
 app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
-DB_VOLUME_PATH = "/data/usuarios"  # Carpeta persistente en Railway
+DB_VOLUME_PATH = "/data/usuarios"  
 DB_PATH = os.path.join(DB_VOLUME_PATH, "usuarios.db")
 os.makedirs(DB_VOLUME_PATH, exist_ok=True)
 
@@ -44,7 +44,7 @@ def init_db():
         c.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 chat_id TEXT PRIMARY KEY,
-                last_msg_id TEXT
+                last_msg_id INTEGER
             )
         """)
         conn.commit()
@@ -57,11 +57,9 @@ def guardar_usuario(chat_id, msg_id=None):
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
         if msg_id:
-            c.execute("INSERT OR IGNORE INTO usuarios (chat_id, last_msg_id) VALUES (?, ?)", (str(chat_id), str(msg_id)))
-            c.execute("UPDATE usuarios SET last_msg_id=? WHERE chat_id=?", (str(msg_id), str(chat_id)))
-        else:
-            c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+            c.execute("UPDATE usuarios SET last_msg_id=? WHERE chat_id=?", (msg_id, str(chat_id)))
         conn.commit()
         conn.close()
         logger.info(f"👤 Usuario guardado: {chat_id} (msg_id={msg_id if msg_id else 'Ninguno'})")
@@ -77,7 +75,7 @@ def obtener_usuarios():
         conn.close()
         return usuarios
     except Exception as e:
-        logger.error(f"Error al obtener usuarios: {e}")
+        logger.error(f"Error obteniendo usuarios: {e}")
         return []
 
 init_db()
@@ -88,11 +86,12 @@ def enviar(chat, texto, botones=None, msg_id=None):
     if botones:
         data["reply_markup"] = botones
     try:
-        if msg_id:
+        if msg_id:  # editar mensaje existente
             data["message_id"] = msg_id
             resp = requests.post(TELEGRAM_API + "/editMessageText", json=data, timeout=10)
             if resp.status_code == 200:
                 return msg_id
+        # enviar nuevo mensaje
         resp = requests.post(TELEGRAM_API + "/sendMessage", json=data, timeout=10)
         if resp.status_code == 200:
             return resp.json()["result"]["message_id"]
@@ -237,8 +236,10 @@ def bot_loop():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
                     for user in obtener_usuarios():
-                        msg_id = enviar(user["chat_id"], f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid), user["last_msg_id"])
-                        if msg_id: guardar_usuario(user["chat_id"], msg_id)
+                        msg_id = user["last_msg_id"]
+                        new_id = enviar(user["chat_id"], f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid), msg_id)
+                        if new_id:
+                            guardar_usuario(user["chat_id"], new_id)
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -252,22 +253,25 @@ def telegram_webhook():
     data = request.json
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
-        usuarios = obtener_usuarios()
-        last_msg_id = next((u["last_msg_id"] for u in usuarios if u["chat_id"] == chat), None)
-        if text == "/start":
-            msg_id = enviar(chat, "👋 Hola, en qué puedo ayudar", botones_generales(), last_msg_id)
-            if msg_id: guardar_usuario(chat, msg_id)
+        guardar_usuario(chat)
+        if data["message"].get("text") == "/start":
+            usuarios = obtener_usuarios()
+            user = next((u for u in usuarios if u["chat_id"] == chat), None)
+            msg_id = user["last_msg_id"] if user else None
+            new_id = enviar(chat, "👋 Hola, En que puedo ayudar", botones_generales(), msg_id)
+            if new_id: guardar_usuario(chat, new_id)
 
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
         usuarios = obtener_usuarios()
-        last_msg_id = next((u["last_msg_id"] for u in usuarios if u["chat_id"] == chat), None)
+        user = next((u for u in usuarios if u["chat_id"] == chat), None)
+        last_msg_id = user["last_msg_id"] if user else None
 
         def enviar_y_guardar(texto, botones=None):
             msg_id = enviar(chat, texto, botones, last_msg_id)
             if msg_id: guardar_usuario(chat, msg_id)
+            return msg_id
 
         if accion == "LOGIN":
             ok = homeserve.login()
@@ -309,8 +313,8 @@ def telegram_webhook():
 # ---------------- INICIO ----------------
 usuarios = obtener_usuarios()
 for user in usuarios:
-    msg_id = enviar(user["chat_id"], "🤖 Bot activo", botones_generales(), user["last_msg_id"])
-    if msg_id: guardar_usuario(user["chat_id"], msg_id)
+    new_id = enviar(user["chat_id"], "🤖 Bot activo", botones_generales(), user["last_msg_id"])
+    if new_id: guardar_usuario(user["chat_id"], new_id)
 
 threading.Thread(target=bot_loop, daemon=True).start()
 
