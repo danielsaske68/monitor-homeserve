@@ -246,7 +246,15 @@ def telegram_webhook():
     if "message" in data:
         chat = data["message"]["chat"]["id"]
         msg = data["message"].get("text", "")
-        if msg.startswith("/start"):
+        entities = data["message"].get("entities", [])
+        es_start = False
+        for e in entities:
+            if e.get("type") == "bot_command":
+                comando = msg[e.get("offset"): e.get("offset")+e.get("length")]
+                if comando.startswith("/start"):
+                    es_start = True
+                    break
+        if es_start:
             enviar(chat, "👋 Hola, en qué puedo ayudar", menu_principal())
             guardar_usuario(chat, None)
         else:
@@ -265,10 +273,10 @@ def telegram_webhook():
         elif accion=="WEB":
             actuales = homeserve.obtener()
             if actuales:
-                texto = "\n".join([f"{s}" for s in actuales.values()])
+                for sid, s in actuales.items():
+                    enviar(chat, f"🆕 Servicio\n{s}", botones_servicio(sid))
             else:
-                texto = "No hay servicios"
-            enviar(chat, texto, menu_principal())
+                enviar(chat, "No hay servicios", menu_principal())
         elif accion=="CAMBIAR_ESTADO":
             curso = homeserve.obtener_curso()
             if curso:
