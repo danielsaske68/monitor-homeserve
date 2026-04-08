@@ -43,7 +43,8 @@ def init_db():
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
-                chat_id TEXT PRIMARY KEY
+                chat_id TEXT PRIMARY KEY,
+                last_msg_id TEXT
             )
         """)
         conn.commit()
@@ -52,14 +53,21 @@ def init_db():
     except Exception as e:
         logger.error(f"Error inicializando DB: {e}")
 
-def guardar_usuario(chat_id):
+def guardar_usuario(chat_id, message_id=None):
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+        if message_id:
+            c.execute("""
+                INSERT INTO usuarios (chat_id, last_msg_id)
+                VALUES (?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET last_msg_id=excluded.last_msg_id
+            """, (str(chat_id), str(message_id)))
+        else:
+            c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
         conn.commit()
         conn.close()
-        logger.info(f"👤 Usuario guardado: {chat_id}")
+        logger.info(f"👤 Usuario guardado: {chat_id} (msg_id={message_id})")
     except Exception as e:
         logger.error(f"Error guardando usuario: {e}")
 
@@ -67,8 +75,8 @@ def obtener_usuarios():
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT chat_id FROM usuarios")
-        usuarios = [row[0] for row in c.fetchall()]
+        c.execute("SELECT chat_id, last_msg_id FROM usuarios")
+        usuarios = c.fetchall()
         conn.close()
         return usuarios
     except Exception as e:
@@ -78,19 +86,22 @@ def obtener_usuarios():
 init_db()
 
 # ---------------- TELEGRAM ----------------
-ULTIMO_MENSAJE = {}  # Guardamos último message_id por usuario
-
-def enviar_o_editar(chat, texto, mensaje_id=None, botones=None):
-    data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
+def enviar(chat, texto, botones=None, message_id=None):
+    data = {"chat_id": chat, "parse_mode": "HTML"}
     if botones:
         data["reply_markup"] = botones
     try:
-        if mensaje_id:
-            data["message_id"] = mensaje_id
-            requests.post(TELEGRAM_API + "/editMessageText", json=data, timeout=10)
-        else:
-            r = requests.post(TELEGRAM_API + "/sendMessage", json=data, timeout=10)
-            return r.json().get("result", {}).get("message_id")
+        if message_id:  # editar mensaje existente
+            data["text"] = texto
+            data["message_id"] = message_id
+            resp = requests.post(TELEGRAM_API + "/editMessageText", json=data, timeout=10)
+        else:  # enviar mensaje nuevo
+            data["text"] = texto
+            resp = requests.post(TELEGRAM_API + "/sendMessage", json=data, timeout=10)
+            if resp.status_code == 200:
+                mid = resp.json().get("result", {}).get("message_id")
+                if mid:
+                    guardar_usuario(chat, mid)
     except Exception as e:
         logger.error(f"Error enviando/actualizando mensaje: {e}")
 
@@ -229,8 +240,8 @@ def bot_loop():
             for sid, servicio in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
-                    for user in obtener_usuarios():
-                        enviar_o_editar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones=botones_servicio_nuevo(sid))
+                    for user, msg_id in obtener_usuarios():
+                        enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid), message_id=msg_id)
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -246,58 +257,54 @@ def telegram_webhook():
         chat = data["message"]["chat"]["id"]
         guardar_usuario(chat)
         if data["message"].get("text") == "/start":
-            msg_id = enviar_o_editar(chat, "👋 Hola, en qué puedo ayudar", botones_generales())
-            ULTIMO_MENSAJE[chat] = msg_id
-
+            # Obtener message_id del último mensaje si existe
+            last_msg_id = obtener_usuarios()[0][1] if obtener_usuarios() else None
+            enviar(chat, "👋 Hola, en qué puedo ayudar", botones_generales(), message_id=last_msg_id)
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
-        mensaje_id = data["callback_query"]["message"]["message_id"]
-        guardar_usuario(chat)
-        msg_id = ULTIMO_MENSAJE.get(chat, mensaje_id)
-
+        last_msg_id = data["callback_query"]["message"]["message_id"]
+        guardar_usuario(chat, last_msg_id)
         if accion == "LOGIN":
             ok = homeserve.login()
-            enviar_o_editar(chat, "✅ Login OK" if ok else "❌ Error login", mensaje_id=msg_id, botones=botones_generales())
+            enviar(chat, "✅ Login OK" if ok else "❌ Error login", message_id=last_msg_id)
         elif accion == "REFRESH":
             homeserve.obtener()
-            enviar_o_editar(chat, "🔄 Actualizado", mensaje_id=msg_id, botones=botones_generales())
+            enviar(chat, "🔄 Actualizado", message_id=last_msg_id)
         elif accion == "WEB":
             actuales = homeserve.obtener()
             if not actuales:
-                enviar_o_editar(chat, "No hay servicios", mensaje_id=msg_id, botones=botones_generales())
+                enviar(chat, "No hay servicios", message_id=last_msg_id)
             else:
-                texto = "\n".join([f"📋 {s}" for s in actuales.values()])
-                enviar_o_editar(chat, texto, mensaje_id=msg_id, botones=botones_servicio_nuevo(list(actuales.keys())[0]))
+                for sid, servicio in actuales.items():
+                    enviar(chat, f"📋 {servicio}", botones_servicio_nuevo(sid))
         elif accion == "CAMBIAR_ESTADO":
             curso = homeserve.obtener_curso()
             if curso:
-                enviar_o_editar(chat, "🛠 Selecciona servicio:", mensaje_id=msg_id, botones=botones_lista_servicios(curso))
+                enviar(chat, "🛠 Selecciona servicio:", botones_lista_servicios(curso), message_id=last_msg_id)
             else:
-                enviar_o_editar(chat, "⚠️ No hay servicios en curso", mensaje_id=msg_id)
+                enviar(chat, "⚠️ No hay servicios en curso", message_id=last_msg_id)
         elif accion.startswith("SEL_"):
             sid = accion.split("_")[1]
-            enviar_o_editar(chat, f"🔧 Servicio {sid}", mensaje_id=msg_id, botones=botones_estado(sid))
+            enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid), message_id=last_msg_id)
         elif accion.startswith("ESTADO_"):
             _, sid, estado = accion.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
-            enviar_o_editar(chat, f"{sid}\n{msg}", mensaje_id=msg_id, botones=botones_generales())
+            enviar(chat, f"{sid}\n{msg}", message_id=last_msg_id)
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
             ok, msg = homeserve.aceptar_servicio(sid)
-            enviar_o_editar(chat, msg, mensaje_id=msg_id, botones=botones_generales())
+            enviar(chat, msg, message_id=last_msg_id)
         elif accion.startswith("RECHAZAR_"):
             sid = accion.split("_")[1]
             ok, msg = homeserve.rechazar_servicio(sid)
-            enviar_o_editar(chat, msg, mensaje_id=msg_id, botones=botones_generales())
-
+            enviar(chat, msg, message_id=last_msg_id)
     return jsonify(ok=True)
 
 # ---------------- INICIO ----------------
-usuarios = obtener_usuarios()
-for user in usuarios:
-    msg_id = enviar_o_editar(user, "🤖 Bot activo", botones_generales())
-    ULTIMO_MENSAJE[user] = msg_id
+# Enviar "Bot activo" a usuarios guardados
+for user, msg_id in obtener_usuarios():
+    enviar(user, "🤖 Bot activo", message_id=msg_id)
 
 threading.Thread(target=bot_loop, daemon=True).start()
 
