@@ -4,6 +4,7 @@ import threading
 import logging
 import re
 import requests
+import sqlite3
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
@@ -31,24 +32,42 @@ logger = logging.getLogger("main")
 SERVICIOS_ACTUALES = {}
 app = Flask(__name__)
 
-# ---------------- USUARIOS ----------------
+# ---------------- DATABASE ----------------
+def init_db():
+    conn = sqlite3.connect("usuarios.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            chat_id TEXT PRIMARY KEY
+        )
+    """)
+    conn.commit()
+    conn.close()
+
 def guardar_usuario(chat_id):
     try:
-        with open("usuarios.txt", "a+") as f:
-            f.seek(0)
-            usuarios = f.read().splitlines()
-            if str(chat_id) not in usuarios:
-                f.write(str(chat_id) + "\n")
-                logger.info(f"👤 Usuario guardado: {chat_id}")
+        conn = sqlite3.connect("usuarios.db")
+        c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+        conn.commit()
+        conn.close()
+        logger.info(f"👤 Usuario guardado: {chat_id}")
     except Exception as e:
         logger.error(f"Error guardando usuario: {e}")
 
 def obtener_usuarios():
     try:
-        with open("usuarios.txt", "r") as f:
-            return f.read().splitlines()
-    except:
+        conn = sqlite3.connect("usuarios.db")
+        c = conn.cursor()
+        c.execute("SELECT chat_id FROM usuarios")
+        usuarios = [row[0] for row in c.fetchall()]
+        conn.close()
+        return usuarios
+    except Exception as e:
+        logger.error(f"Error obteniendo usuarios: {e}")
         return []
+
+init_db()
 
 # ---------------- TELEGRAM ----------------
 def enviar(chat, texto, botones=None):
@@ -127,10 +146,6 @@ class HomeServe:
                     servicios[sid] = " ".join(b.split())
 
             logger.info(f"🔎 Revisando servicios... encontrados: {len(servicios)}")
-
-            if len(servicios) == 0:
-                logger.info("⚠️ No hay servicios disponibles")
-
             return servicios
 
         except Exception as e:
