@@ -156,7 +156,6 @@ class HomeServe:
             logger.error(f"Error servicios curso: {e}")
             return {}
 
-    # -------- ESTADO (FIX DEFINITIVO) --------
     def cambiar_estado(self, servicio_id, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
@@ -180,7 +179,6 @@ class HomeServe:
 
             r = self.session.post(BASE_URL, data=payload, timeout=10)
 
-            # 🔥 SOLUCIÓN: dejamos de depender del HTML
             if r.status_code == 200:
                 return True, f"✅ Estado {estado} aplicado correctamente"
             else:
@@ -189,7 +187,6 @@ class HomeServe:
         except Exception as e:
             return False, f"❌ Error: {e}"
 
-    # -------- ACEPTAR --------
     def aceptar_servicio(self, servicio_id):
         try:
             payload = {
@@ -207,7 +204,6 @@ class HomeServe:
         except Exception as e:
             return False, f"❌ Error: {e}"
 
-    # -------- RECHAZAR --------
     def rechazar_servicio(self, servicio_id):
         try:
             payload = {
@@ -245,11 +241,7 @@ def bot_loop():
                     logger.info(f"🆕 Nuevo servicio detectado: {sid}")
 
                     for user in obtener_usuarios():
-                        enviar(
-                            user,
-                            f"🆕 <b>Nuevo servicio</b>\n\n{servicio}",
-                            botones_servicio_nuevo(sid)
-                        )
+                        enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
 
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -266,14 +258,15 @@ def telegram_webhook():
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
+        guardar_usuario(chat)
 
         if data["message"].get("text") == "/start":
-            guardar_usuario(chat)
             enviar(chat, "👋 Bot activo", botones_generales())
 
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
+        guardar_usuario(chat)
 
         if accion == "LOGIN":
             ok = homeserve.login()
