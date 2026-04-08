@@ -31,9 +31,12 @@ logger = logging.getLogger("main")
 # ---------------- VARIABLES ----------------
 SERVICIOS_ACTUALES = {}
 app = Flask(__name__)
-DB_PATH = "/var/lib/containers/railwayapp/bind-mounts/vol_otk7v841omd3up84/usuarios.db"
 
 # ---------------- DATABASE ----------------
+DB_VOLUME_PATH = "/var/lib/containers/railwayapp/bind-mounts/vol_otk7v841omd3up84"
+DB_PATH = os.path.join(DB_VOLUME_PATH, "usuarios.db")
+os.makedirs(DB_VOLUME_PATH, exist_ok=True)
+
 class DB:
     def __init__(self, path):
         self.path = path
@@ -55,13 +58,21 @@ class DB:
 
     def guardar_usuario(self, chat_id):
         try:
+            nuevo_usuario = False
             with sqlite3.connect(self.path) as conn:
                 c = conn.cursor()
-                c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
-                conn.commit()
-            logger.info(f"👤 Usuario guardado: {chat_id}")
+                c.execute("SELECT 1 FROM usuarios WHERE chat_id = ?", (str(chat_id),))
+                if not c.fetchone():
+                    c.execute("INSERT INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+                    conn.commit()
+                    nuevo_usuario = True
+            if nuevo_usuario:
+                logger.info(f"👤 Usuario guardado: {chat_id}")
+                enviar(chat_id, "🤖 Bot activo")  # Mensaje automático al usuario nuevo
+            return nuevo_usuario
         except Exception as e:
             logger.error(f"Error guardando usuario: {e}")
+            return False
 
     def obtener_usuarios(self):
         try:
@@ -173,10 +184,8 @@ class HomeServe:
     def cambiar_estado(self, servicio_id, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
-            if fecha.weekday() == 5:
-                fecha += timedelta(days=2)
-            elif fecha.weekday() == 6:
-                fecha += timedelta(days=1)
+            if fecha.weekday() == 5: fecha += timedelta(days=2)
+            elif fecha.weekday() == 6: fecha += timedelta(days=1)
             obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional por confirmación del Siniestro"
             payload = {
                 "w3exec": "ver_servicioencurso",
@@ -197,11 +206,7 @@ class HomeServe:
 
     def aceptar_servicio(self, servicio_id):
         try:
-            payload = {
-                "w3exec": "prof_asignacion",
-                "servicio": servicio_id,
-                "ACEPTAR": "Aceptar"
-            }
+            payload = {"w3exec": "prof_asignacion","servicio": servicio_id,"ACEPTAR": "Aceptar"}
             r = self.session.post(BASE_URL, data=payload, timeout=10)
             if r.status_code == 200:
                 return True, f"✅ Servicio {servicio_id} aceptado"
@@ -211,11 +216,7 @@ class HomeServe:
 
     def rechazar_servicio(self, servicio_id):
         try:
-            payload = {
-                "w3exec": "prof_asignacion",
-                "servicio": servicio_id,
-                "RECHAZAR": "Rechazar"
-            }
+            payload = {"w3exec": "prof_asignacion","servicio": servicio_id,"RECHAZAR": "Rechazar"}
             r = self.session.post(BASE_URL, data=payload, timeout=10)
             if r.status_code == 200:
                 return True, f"❌ Servicio {servicio_id} rechazado"
@@ -252,7 +253,7 @@ def telegram_webhook():
     data = request.json
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        db.guardar_usuario(chat)
+        db.guardar_usuario(chat)  # Mensaje bot activo si es usuario nuevo
         if data["message"].get("text") == "/start":
             enviar(chat, "👋 Bot activo", botones_generales())
     if "callback_query" in data:
@@ -296,12 +297,11 @@ def telegram_webhook():
     return jsonify(ok=True)
 
 # ---------------- START ----------------
-# Enviar "bot activo" a todos los usuarios guardados al iniciar
-for user in db.obtener_usuarios():
-    enviar(user, "👋 Bot activo", botones_generales())
-
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
+    # Mensaje bot activo a todos los usuarios guardados al iniciar
+    for user in db.obtener_usuarios():
+        enviar(user, "🤖 Bot activo")
     logger.info("🚀 Bot iniciado correctamente")
     app.run(host="0.0.0.0", port=10000)
