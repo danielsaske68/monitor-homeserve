@@ -101,7 +101,7 @@ def botones_estado(servicio_id):
     return {
         "inline_keyboard": [
             [{"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
-             {"text": "🟢 En espera profesional", "callback_data": f"ESTADO_{servicio_id}_318"}]
+             {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{servicio_id}_318"}]
         ]
     }
 
@@ -239,7 +239,7 @@ def telegram_webhook():
         chat = data["message"]["chat"]["id"]
         guardar_usuario(chat)
         if data["message"].get("text") == "/start":
-            enviar(chat, "👋 Bot activo", botones_generales())
+            enviar(chat, "👋 Hola, En que puedo ayudar", botones_generales())
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
