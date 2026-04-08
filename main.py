@@ -88,7 +88,7 @@ init_db()
 obtener_usuarios()
 
 # ---------------- TELEGRAM ----------------
-def enviar(chat, texto, botones=None, mantener_menu=True):
+def enviar(chat, texto, botones=None):
     last_msg_id = USUARIOS.get(str(chat))
     data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
     if botones:
@@ -96,16 +96,14 @@ def enviar(chat, texto, botones=None, mantener_menu=True):
     try:
         if last_msg_id:
             data["message_id"] = int(last_msg_id)
-            resp = requests.post(f"{TELEGRAM_API}/editMessageText", json=data, timeout=10)
+            requests.post(f"{TELEGRAM_API}/editMessageText", json=data, timeout=10)
         else:
             resp = requests.post(f"{TELEGRAM_API}/sendMessage", json=data, timeout=10)
             if resp.ok:
                 msg_id = resp.json()["result"]["message_id"]
                 guardar_usuario(chat, msg_id)
-        return True
     except Exception as e:
         logger.error(f"Error enviando mensaje: {e}")
-        return False
 
 def menu_principal():
     return {
@@ -149,9 +147,7 @@ class HomeServe:
             payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
             self.session.get(LOGIN_URL, timeout=10)
             r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-            if "error" in r.text.lower():
-                return False
-            return True
+            return "error" not in r.text.lower()
         except:
             return False
 
@@ -223,20 +219,34 @@ class HomeServe:
 
 homeserve = HomeServe()
 
-# ---------------- LOOP ----------------
-SERVICIOS_ACTUALES = {}
-
+# ---------------- LOOP (ARREGLADO) ----------------
 def bot_loop():
     global SERVICIOS_ACTUALES
+
+    logger.info("🔥 Loop iniciado")
+
     if not homeserve.login():
         logger.error("❌ Login fallido en loop")
+
     while True:
-        actuales = homeserve.obtener()
-        for sid, s in actuales.items():
-            if sid not in SERVICIOS_ACTUALES:
-                for chat_id in USUARIOS:
-                    enviar(chat_id, f"🆕 Nuevo servicio\n{s}", botones_servicio(sid))
-        SERVICIOS_ACTUALES = actuales
+        try:
+            logger.info("🔁 Ejecutando revisión...")
+
+            actuales = homeserve.obtener()
+            logger.info(f"🔎 Servicios encontrados: {len(actuales)}")
+
+            for sid, s in actuales.items():
+                if sid not in SERVICIOS_ACTUALES:
+                    logger.info(f"🆕 Nuevo servicio detectado: {sid}")
+
+                    for chat_id in USUARIOS:
+                        enviar(chat_id, f"🆕 Nuevo servicio\n{s}", botones_servicio(sid))
+
+            SERVICIOS_ACTUALES = actuales
+
+        except Exception as e:
+            logger.error(f"❌ Error en loop: {e}")
+
         time.sleep(INTERVALO)
 
 # ---------------- WEBHOOK ----------------
@@ -248,42 +258,51 @@ def telegram_webhook():
         guardar_usuario(chat)
         if data["message"].get("text") == "/start":
             enviar(chat, "👋 Hola, en qué puedo ayudar", menu_principal())
+
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
         guardar_usuario(chat)
-        # ---------------- CALLBACKS ----------------
+
         if accion=="LOGIN":
             ok = homeserve.login()
             enviar(chat, "✅ Login OK" if ok else "❌ Error login", menu_principal())
+
         elif accion=="REFRESH":
             homeserve.obtener()
             enviar(chat, "🔄 Actualizado", menu_principal())
+
         elif accion=="WEB":
             actuales = homeserve.obtener()
             texto = "No hay servicios" if not actuales else "\n".join([f"{s}" for s in actuales.values()])
             enviar(chat, texto, menu_principal())
+
         elif accion=="CAMBIAR_ESTADO":
             curso = homeserve.obtener_curso()
             if curso:
                 enviar(chat, "🛠 Selecciona servicio en curso:", lista_servicios(curso))
             else:
                 enviar(chat, "⚠️ No hay servicios en curso", menu_principal())
+
         elif accion.startswith("SEL_"):
             sid = accion.split("_")[1]
             enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid))
+
         elif accion.startswith("ESTADO_"):
             _, sid, estado = accion.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
             enviar(chat, f"{msg}", menu_principal())
+
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
             ok, msg = homeserve.aceptar_servicio(sid)
             enviar(chat, msg, menu_principal())
+
         elif accion.startswith("RECHAZAR_"):
             sid = accion.split("_")[1]
             ok, msg = homeserve.rechazar_servicio(sid)
             enviar(chat, msg, menu_principal())
+
     return jsonify(ok=True)
 
 # ---------------- INICIO ----------------
