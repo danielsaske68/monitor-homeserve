@@ -30,7 +30,6 @@ logger = logging.getLogger("main")
 
 # ---------------- VARIABLES ----------------
 SERVICIOS_ACTUALES = {}
-USUARIOS = {}
 app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
@@ -41,67 +40,52 @@ os.makedirs(DB_VOLUME_PATH, exist_ok=True)
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            chat_id TEXT PRIMARY KEY,
-            last_msg_id TEXT
-        )
-    """)
+    c.execute("CREATE TABLE IF NOT EXISTS usuarios (chat_id TEXT PRIMARY KEY)")
     conn.commit()
     conn.close()
 
-def guardar_usuario(chat_id, msg_id=None):
+def guardar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    if msg_id:
-        c.execute("INSERT OR IGNORE INTO usuarios (chat_id, last_msg_id) VALUES (?, ?)", (str(chat_id), str(msg_id)))
-        c.execute("UPDATE usuarios SET last_msg_id=? WHERE chat_id=?", (str(msg_id), str(chat_id)))
-    else:
-        c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+    c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
     conn.commit()
     conn.close()
-    USUARIOS[str(chat_id)] = msg_id
 
 def obtener_usuarios():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT chat_id, last_msg_id FROM usuarios")
-    usuarios = [{"chat_id": row[0], "last_msg_id": row[1]} for row in c.fetchall()]
+    c.execute("SELECT chat_id FROM usuarios")
+    usuarios = [row[0] for row in c.fetchall()]
     conn.close()
-    for u in usuarios:
-        USUARIOS[u["chat_id"]] = u["last_msg_id"]
     return usuarios
 
 init_db()
-obtener_usuarios()
 
 # ---------------- TELEGRAM ----------------
-def enviar(chat, texto, botones=None, forzar_nuevo=False):
-    last_msg_id = USUARIOS.get(str(chat))
+def enviar(chat, texto, botones=None):
     data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
     if botones:
         data["reply_markup"] = botones
     try:
-        if last_msg_id and not forzar_nuevo:
-            data["message_id"] = int(last_msg_id)
-            requests.post(f"{TELEGRAM_API}/editMessageText", json=data, timeout=10)
-        else:
-            resp = requests.post(f"{TELEGRAM_API}/sendMessage", json=data, timeout=10)
-            if resp.ok:
-                msg_id = resp.json()["result"]["message_id"]
-                guardar_usuario(chat, msg_id)
-        return True
+        requests.post(TELEGRAM_API + "/sendMessage", json=data, timeout=10)
     except Exception as e:
         logger.error(f"Error enviando mensaje: {e}")
-        return False
 
-def menu_principal():
+def botones_generales():
     return {
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}],
             [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}]
+        ]
+    }
+
+def botones_estado(servicio_id):
+    return {
+        "inline_keyboard": [
+            [{"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
+             {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{servicio_id}_318"}]
         ]
     }
 
@@ -113,15 +97,7 @@ def botones_servicio(servicio_id):
         ]
     }
 
-def botones_estado(servicio_id):
-    return {
-        "inline_keyboard": [
-            [{"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
-             {"text": "🟢 En espera", "callback_data": f"ESTADO_{servicio_id}_318"}]
-        ]
-    }
-
-def lista_servicios(servicios):
+def botones_lista_servicios(servicios):
     return {"inline_keyboard": [[{"text": sid, "callback_data": f"SEL_{sid}"}] for sid in servicios]}
 
 # ---------------- HOMESERVE ----------------
@@ -131,7 +107,7 @@ class HomeServe:
 
     def login(self):
         try:
-            payload = {"CODIGO": USUARIO, "PASSW": PASSWORD}
+            payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
             self.session.get(LOGIN_URL, timeout=10)
             r = self.session.post(LOGIN_URL, data=payload, timeout=10)
             return "error" not in r.text.lower()
@@ -152,6 +128,28 @@ class HomeServe:
         except:
             return {}
 
+    def aceptar_servicio(self, servicio_id):
+        try:
+            r = self.session.post(BASE_URL, data={
+                "w3exec": "prof_asignacion",
+                "servicio": servicio_id,
+                "ACEPTAR": "Aceptar"
+            }, timeout=10)
+            return (r.status_code == 200, f"✅ Servicio {servicio_id} aceptado")
+        except Exception as e:
+            return False, f"❌ Error: {e}"
+
+    def rechazar_servicio(self, servicio_id):
+        try:
+            r = self.session.post(BASE_URL, data={
+                "w3exec": "prof_asignacion",
+                "servicio": servicio_id,
+                "RECHAZAR": "Rechazar"
+            }, timeout=10)
+            return (r.status_code == 200, f"❌ Servicio {servicio_id} rechazado")
+        except Exception as e:
+            return False, f"❌ Error: {e}"
+
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
@@ -162,8 +160,8 @@ def bot_loop():
         actuales = homeserve.obtener()
         for sid, s in actuales.items():
             if sid not in SERVICIOS_ACTUALES:
-                for chat_id in USUARIOS:
-                    enviar(chat_id, f"🆕 Nuevo servicio\n{s}", botones_servicio(sid), True)
+                for user in obtener_usuarios():
+                    enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{s}", botones_servicio(sid))
         SERVICIOS_ACTUALES = actuales
         time.sleep(INTERVALO)
 
@@ -174,50 +172,57 @@ def telegram_webhook():
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        msg = data["message"].get("text", "")
+        guardar_usuario(chat)
 
+        msg = data["message"].get("text", "")
         if msg.startswith("/start"):
-            enviar(chat, "👋 Hola, en qué puedo ayudar", menu_principal())
-            guardar_usuario(chat)
+            enviar(chat, "👋 Hola, En que puedo ayudar", botones_generales())
 
     if "callback_query" in data:
         accion = data["callback_query"]["data"]
         chat = data["callback_query"]["message"]["chat"]["id"]
+        guardar_usuario(chat)
 
-        if accion == "WEB":
-            actuales = homeserve.obtener()
-            for sid, s in actuales.items():
-                enviar(chat, f"🆕 Servicio\n{s}", botones_servicio(sid), True)
-
-        elif accion == "LOGIN":
+        if accion == "LOGIN":
             ok = homeserve.login()
-            enviar(chat, "✅ Login OK" if ok else "❌ Error", menu_principal())
+            enviar(chat, "✅ Login OK" if ok else "❌ Error login", botones_generales())
 
         elif accion == "REFRESH":
-            enviar(chat, "🔄 Actualizado", menu_principal())
+            enviar(chat, "🔄 Actualizado", botones_generales())
+
+        elif accion == "WEB":
+            actuales = homeserve.obtener()
+            if not actuales:
+                enviar(chat, "No hay servicios", botones_generales())
+            else:
+                for sid, servicio in actuales.items():
+                    enviar(chat, f"📋 {servicio}", botones_servicio(sid))
 
         elif accion.startswith("ACEPTAR_"):
             sid = accion.split("_")[1]
-            enviar(chat, f"✅ Servicio {sid} aceptado", menu_principal())
+            ok, msg = homeserve.aceptar_servicio(sid)
+            enviar(chat, msg, botones_generales())
 
         elif accion.startswith("RECHAZAR_"):
             sid = accion.split("_")[1]
-            enviar(chat, f"❌ Servicio {sid} rechazado", menu_principal())
+            ok, msg = homeserve.rechazar_servicio(sid)
+            enviar(chat, msg, botones_generales())
 
     return jsonify(ok=True)
 
 # ---------------- INICIO ----------------
 usuarios = obtener_usuarios()
 
-for u in usuarios:
-    enviar(u["chat_id"], "🤖 Bot activo", menu_principal())
+for user in usuarios:
+    enviar(user, "🤖 Bot activo", botones_generales())
 
 SERVICIOS_ACTUALES = homeserve.obtener()
 for sid, s in SERVICIOS_ACTUALES.items():
-    for u in usuarios:
-        enviar(u["chat_id"], f"🆕 Servicio\n{s}", botones_servicio(sid), True)
+    for user in usuarios:
+        enviar(user, f"🆕 {s}", botones_servicio(sid))
 
 threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
+    logger.info("🚀 Bot iniciado correctamente")
     app.run(host="0.0.0.0", port=10000)
