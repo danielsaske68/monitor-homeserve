@@ -99,8 +99,8 @@ def botones_servicio(sid):
 def botones_estado(sid):
     return {
         "inline_keyboard": [[
-            {"text": "🔴 348", "callback_data": f"ESTADO_{sid}_348"},
-            {"text": "🟢 318", "callback_data": f"ESTADO_{sid}_318"}
+            {"text": "🔴 En espera de localizar cliente", "callback_data": f"ESTADO_{sid}_348"},
+            {"text": "🟢 En espera de confirmacion", "callback_data": f"ESTADO_{sid}_318"}
         ]]
     }
 
