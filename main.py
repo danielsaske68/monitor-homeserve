@@ -30,7 +30,7 @@ logger = logging.getLogger("main")
 
 # ---------------- VARIABLES ----------------
 SERVICIOS_ACTUALES = {}
-PANEL = {}  # chat_id -> message_id
+PANEL = {}
 app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
@@ -88,14 +88,6 @@ def botones():
         ]
     }
 
-def botones_estado(sid):
-    return {
-        "inline_keyboard": [[
-            {"text": "🔴 348", "callback_data": f"ESTADO_{sid}_348"},
-            {"text": "🟢 318", "callback_data": f"ESTADO_{sid}_318"}
-        ]]
-    }
-
 def botones_servicio(sid):
     return {
         "inline_keyboard": [[
@@ -104,10 +96,16 @@ def botones_servicio(sid):
         ]]
     }
 
-def lista_servicios(servicios):
+def botones_estado(sid):
     return {
-        "inline_keyboard": [[{"text": sid, "callback_data": f"SEL_{sid}"}] for sid in servicios]
+        "inline_keyboard": [[
+            {"text": "🔴 348", "callback_data": f"ESTADO_{sid}_348"},
+            {"text": "🟢 318", "callback_data": f"ESTADO_{sid}_318"}
+        ]]
     }
+
+def lista_servicios(servicios):
+    return {"inline_keyboard": [[{"text": sid, "callback_data": f"SEL_{sid}"}] for sid in servicios]}
 
 # ---------------- HOMESERVE ----------------
 class HomeServe:
@@ -149,7 +147,6 @@ class HomeServe:
         except:
             return {}
 
-    # 🔥 ESTA ES LA PARTE ARREGLADA (igual a tu script bueno)
     def cambiar_estado(self, servicio_id, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
@@ -174,26 +171,17 @@ class HomeServe:
 
             r = self.session.post(BASE_URL, data=payload)
 
-            return (r.status_code == 200,
-                    f"✅ Estado {estado} aplicado correctamente")
+            return (r.status_code == 200, f"✅ Estado {estado} aplicado")
 
         except Exception as e:
             return False, f"❌ Error: {e}"
 
     def aceptar(self, sid):
-        r = self.session.post(BASE_URL, data={
-            "w3exec": "prof_asignacion",
-            "servicio": sid,
-            "ACEPTAR": "Aceptar"
-        })
+        r = self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"ACEPTAR":"Aceptar"})
         return r.status_code == 200, f"✅ Servicio {sid} aceptado"
 
     def rechazar(self, sid):
-        r = self.session.post(BASE_URL, data={
-            "w3exec": "prof_asignacion",
-            "servicio": sid,
-            "RECHAZAR": "Rechazar"
-        })
+        r = self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"RECHAZAR":"Rechazar"})
         return r.status_code == 200, f"❌ Servicio {sid} rechazado"
 
 homeserve = HomeServe()
@@ -201,7 +189,6 @@ homeserve = HomeServe()
 # ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
-
     homeserve.login()
 
     while True:
@@ -210,7 +197,7 @@ def loop():
         for sid, s in actuales.items():
             if sid not in SERVICIOS_ACTUALES:
                 for u in obtener_usuarios():
-                    enviar(u, f"🆕 <b>Nuevo servicio</b>\n\n{s}", botones_servicio(sid), editar=False)
+                    enviar(u, f"🆕 <b>Nuevo servicio</b>\n\n{s}", botones_servicio(sid), False)
 
         SERVICIOS_ACTUALES = actuales
         time.sleep(INTERVALO)
@@ -230,7 +217,6 @@ def webhook():
     if "callback_query" in data:
         chat = data["callback_query"]["message"]["chat"]["id"]
         accion = data["callback_query"]["data"]
-
         guardar_usuario(chat)
 
         if accion == "LOGIN":
@@ -239,12 +225,15 @@ def webhook():
 
         elif accion == "REFRESH":
             servicios = homeserve.obtener()
-            enviar(chat, f"🔄 {len(servicios)} servicios", botones(), True)
+            enviar(chat, f"🔄 {len(servicios)} servicios encontrados", botones(), True)
 
         elif accion == "WEB":
             actuales = homeserve.obtener()
-            for sid, s in actuales.items():
-                enviar(chat, f"📋 {s}", botones_servicio(sid), False)
+            if not actuales:
+                enviar(chat, "No hay servicios")
+            else:
+                for sid, s in actuales.items():
+                    enviar(chat, f"📋 {s}", botones_servicio(sid), False)
 
         elif accion == "CAMBIAR":
             curso = homeserve.obtener_curso()
