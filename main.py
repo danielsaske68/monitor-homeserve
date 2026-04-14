@@ -172,32 +172,29 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            r = self.session.post(BASE_URL, data=payload, timeout=10)
+            self.session.post(BASE_URL, data=payload, timeout=10)
             return True, f"✅ Estado {estado} aplicado"
 
         except Exception as e:
             return False, f"❌ Error: {e}"
 
     def aceptar(self, sid):
-        r = self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"ACEPTAR":"Aceptar"}, timeout=10)
+        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"ACEPTAR":"Aceptar"}, timeout=10)
         return True, f"✅ Servicio {sid} aceptado"
 
     def rechazar(self, sid):
-        r = self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"RECHAZAR":"Rechazar"}, timeout=10)
+        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"RECHAZAR":"Rechazar"}, timeout=10)
         return True, f"❌ Servicio {sid} rechazado"
 
 homeserve = HomeServe()
 
-# ---------------- LOOP (CON LOGS) ----------------
+# ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
 
-    logger.info("🔥 Iniciando monitor de servicios...")
+    logger.info("🔥 Iniciando monitor...")
 
-    if homeserve.login():
-        logger.info("✅ Login correcto")
-    else:
-        logger.error("❌ Error login inicial")
+    homeserve.login()
 
     while True:
         try:
@@ -213,18 +210,17 @@ def loop():
                     logger.info(f"🆕 Nuevo servicio: {sid}")
 
                     for u in obtener_usuarios():
-                        enviar(u, f"🆕 <b>Nuevo servicio</b>\n\n{s}", botones_servicio(sid), False)
+                        enviar(u, f"🆕 <b>Nuevo servicio</b>\n\n{s}", botones_servicio(sid))
 
             if nuevos == 0:
-                logger.info("😴 Sin servicios nuevos")
+                logger.info("😴 Sin nuevos")
 
             SERVICIOS_ACTUALES = actuales
 
             time.sleep(INTERVALO)
 
         except Exception as e:
-            logger.error(f"💥 Error en loop: {e}")
-            logger.info("🔄 Reintentando login...")
+            logger.error(f"💥 Error: {e}")
             homeserve.login()
             time.sleep(20)
 
@@ -238,7 +234,7 @@ def webhook():
         guardar_usuario(chat)
 
         if data["message"].get("text") == "/start":
-            enviar(chat, "👋 Hola, en que puedo ayudar?", botones())
+            enviar(chat, "🤖 Bot activo", botones())
 
     if "callback_query" in data:
         chat = data["callback_query"]["message"]["chat"]["id"]
@@ -259,7 +255,7 @@ def webhook():
                 enviar(chat, "No hay servicios")
             else:
                 for sid, s in actuales.items():
-                    enviar(chat, f"📋 {s}", botones_servicio(sid), False)
+                    enviar(chat, f"📋 {s}", botones_servicio(sid))
 
         elif accion == "CAMBIAR":
             curso = homeserve.obtener_curso()
@@ -287,9 +283,6 @@ def webhook():
     return jsonify(ok=True)
 
 # ---------------- INICIO ----------------
-for u in obtener_usuarios():
-    enviar(u, "🤖 Bot activo", botones())
-
 threading.Thread(target=loop, daemon=True).start()
 
 if __name__ == "__main__":
