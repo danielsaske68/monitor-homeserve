@@ -23,21 +23,19 @@ ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=pro
 BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
 
-WEBHOOK_URL = "https://monitor-homeserve-production.up.railway.app/telegram_webhook"
-
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
 # ---------------- VARIABLES ----------------
 SERVICIOS_ACTUALES = {}
+PANEL = {}
 app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
-DB_VOLUME_PATH = "/data/usuarios"
-DB_PATH = os.path.join(DB_VOLUME_PATH, "usuarios.db")
-os.makedirs(DB_VOLUME_PATH, exist_ok=True)
+DB_PATH = "/data/usuarios.db"
+os.makedirs("/data", exist_ok=True)
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -64,46 +62,54 @@ def obtener_usuarios():
 init_db()
 
 # ---------------- TELEGRAM ----------------
-def enviar(chat, texto, botones=None):
+def enviar(chat, texto, botones=None, editar=False, guardar_panel=False):
     data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
+
     if botones:
         data["reply_markup"] = botones
-    try:
-        requests.post(TELEGRAM_API + "/sendMessage", json=data, timeout=5)
-    except Exception as e:
-        logger.error(f"Error enviando mensaje: {e}")
 
-def botones_generales():
+    try:
+        if editar and chat in PANEL:
+            data["message_id"] = PANEL[chat]
+            requests.post(f"{TELEGRAM_API}/editMessageText", json=data, timeout=5)
+        else:
+            r = requests.post(f"{TELEGRAM_API}/sendMessage", json=data, timeout=5)
+
+            # SOLO guardar panel para menú principal
+            if guardar_panel and r.ok:
+                PANEL[chat] = r.json()["result"]["message_id"]
+
+    except Exception as e:
+        logger.error(e)
+
+def botones():
     return {
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}],
-            [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR_ESTADO"}]
+            [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR"}]
         ]
     }
 
-def botones_estado(servicio_id):
+def botones_servicio(sid):
     return {
-        "inline_keyboard": [
-            [{"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{servicio_id}_348"},
-             {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{servicio_id}_318"}]
-        ]
+        "inline_keyboard": [[
+            {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
+            {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}
+        ]]
     }
 
-def botones_servicio_nuevo(servicio_id):
+def botones_estado(sid):
     return {
-        "inline_keyboard": [
-            [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{servicio_id}"},
-             {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{servicio_id}"}]
-        ]
+        "inline_keyboard": [[
+            {"text": "🔴 348", "callback_data": f"ESTADO_{sid}_348"},
+            {"text": "🟢 318", "callback_data": f"ESTADO_{sid}_318"}
+        ]]
     }
 
-def botones_lista_servicios(servicios):
-    teclado = []
-    for sid in servicios:
-        teclado.append([{"text": sid, "callback_data": f"SEL_{sid}"}])
-    return {"inline_keyboard": teclado}
+def lista_servicios(servicios):
+    return {"inline_keyboard": [[{"text": sid, "callback_data": f"SEL_{sid}"}] for sid in servicios]}
 
 # ---------------- HOMESERVE ----------------
 class HomeServe:
@@ -111,33 +117,28 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
-        try:
-            payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
-            self.session.get(LOGIN_URL, timeout=10)
-            r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-            return "error" not in r.text.lower()
-        except:
-            return False
+        payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
+        self.session.get(LOGIN_URL)
+        r = self.session.post(LOGIN_URL, data=payload)
+        return "error" not in r.text.lower()
 
     def obtener(self):
         try:
-            r = self.session.get(ASIGNACION_URL, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            texto = soup.get_text("\n")
+            r = self.session.get(ASIGNACION_URL)
+            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
-                    sid = m.group(0)
-                    servicios[sid] = " ".join(b.split())
+                    servicios[m.group(0)] = " ".join(b.split())
             return servicios
         except:
             return {}
 
     def obtener_curso(self):
         try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
+            r = self.session.get(SERVICIOS_CURSO_URL)
             r.encoding = "latin-1"
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
@@ -153,12 +154,14 @@ class HomeServe:
     def cambiar_estado(self, servicio_id, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
+
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
-            obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional por confirmación del Siniestro"
+            obs = "Pendiente de localizar a asegurado" if estado == "348" else \
+                  "En espera de Profesional por confirmación del Siniestro"
 
             payload = {
                 "w3exec": "ver_servicioencurso",
@@ -170,142 +173,103 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            r = self.session.post(BASE_URL, data=payload, timeout=10)
-            return (r.status_code == 200, f"✅ Estado {estado} aplicado correctamente")
+            r = self.session.post(BASE_URL, data=payload)
+
+            return (r.status_code == 200, f"✅ Estado {estado} aplicado")
+
         except Exception as e:
             return False, f"❌ Error: {e}"
 
-    def aceptar_servicio(self, servicio_id):
-        try:
-            r = self.session.post(BASE_URL, data={
-                "w3exec": "prof_asignacion",
-                "servicio": servicio_id,
-                "ACEPTAR": "Aceptar"
-            }, timeout=10)
-            return (r.status_code == 200, f"✅ Servicio {servicio_id} aceptado")
-        except Exception as e:
-            return False, f"❌ Error: {e}"
+    def aceptar(self, sid):
+        r = self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"ACEPTAR":"Aceptar"})
+        return r.status_code == 200, f"✅ Servicio {sid} aceptado"
 
-    def rechazar_servicio(self, servicio_id):
-        try:
-            r = self.session.post(BASE_URL, data={
-                "w3exec": "prof_asignacion",
-                "servicio": servicio_id,
-                "RECHAZAR": "Rechazar"
-            }, timeout=10)
-            return (r.status_code == 200, f"❌ Servicio {servicio_id} rechazado")
-        except Exception as e:
-            return False, f"❌ Error: {e}"
+    def rechazar(self, sid):
+        r = self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"RECHAZAR":"Rechazar"})
+        return r.status_code == 200, f"❌ Servicio {sid} rechazado"
 
 homeserve = HomeServe()
 
-# ---------------- WEBHOOK AUTO ----------------
-def set_webhook():
-    try:
-        r = requests.get(f"{TELEGRAM_API}/setWebhook?url={WEBHOOK_URL}", timeout=10)
-        logger.info(f"🌐 Webhook configurado: {r.text}")
-    except Exception as e:
-        logger.error(f"❌ Error webhook: {e}")
-
 # ---------------- LOOP ----------------
-def bot_loop():
+def loop():
     global SERVICIOS_ACTUALES
-
-    logger.info("🔥 Iniciando loop...")
-
     homeserve.login()
 
     while True:
-        try:
-            actuales = homeserve.obtener()
+        actuales = homeserve.obtener()
 
-            logger.info(f"📊 Servicios detectados: {len(actuales)}")
+        for sid, s in actuales.items():
+            if sid not in SERVICIOS_ACTUALES:
+                for u in obtener_usuarios():
+                    enviar(u, f"🆕 <b>Nuevo servicio</b>\n\n{s}", botones_servicio(sid), False)
 
-            for sid, servicio in actuales.items():
-                if sid not in SERVICIOS_ACTUALES:
-                    logger.info(f"🆕 Nuevo servicio: {sid}")
-                    for user in obtener_usuarios():
-                        enviar(user, f"🆕 <b>Nuevo servicio</b>\n\n{servicio}", botones_servicio_nuevo(sid))
-
-            SERVICIOS_ACTUALES = actuales
-            time.sleep(INTERVALO)
-
-        except Exception as e:
-            logger.error(f"💥 Error loop: {e}")
-            homeserve.login()
-            time.sleep(20)
-
-# ---------------- PROCESADOR ----------------
-def procesar_update(data):
-    try:
-        if "message" in data:
-            chat = data["message"]["chat"]["id"]
-            guardar_usuario(chat)
-
-            if data["message"].get("text") == "/start":
-                enviar(chat, "👋 Hola, En que puedo ayudar", botones_generales())
-
-        if "callback_query" in data:
-            accion = data["callback_query"]["data"]
-            chat = data["callback_query"]["message"]["chat"]["id"]
-
-            if accion == "LOGIN":
-                ok = homeserve.login()
-                enviar(chat, "✅ Login OK" if ok else "❌ Error login")
-
-            elif accion == "REFRESH":
-                servicios = homeserve.obtener()
-                enviar(chat, f"🔄 Servicios actuales: {len(servicios)}")
-
-            elif accion == "WEB":
-                actuales = homeserve.obtener()
-                for sid, servicio in actuales.items():
-                    enviar(chat, f"📋 {servicio}", botones_servicio_nuevo(sid))
-
-            elif accion == "CAMBIAR_ESTADO":
-                curso = homeserve.obtener_curso()
-                enviar(chat, "🛠 Selecciona servicio:", botones_lista_servicios(curso))
-
-            elif accion.startswith("SEL_"):
-                sid = accion.split("_")[1]
-                enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid))
-
-            elif accion.startswith("ESTADO_"):
-                _, sid, estado = accion.split("_")
-                ok, msg = homeserve.cambiar_estado(sid, estado)
-                enviar(chat, f"{sid}\n{msg}")
-
-            elif accion.startswith("ACEPTAR_"):
-                sid = accion.split("_")[1]
-                ok, msg = homeserve.aceptar_servicio(sid)
-                enviar(chat, msg)
-
-            elif accion.startswith("RECHAZAR_"):
-                sid = accion.split("_")[1]
-                ok, msg = homeserve.rechazar_servicio(sid)
-                enviar(chat, msg)
-
-    except Exception as e:
-        logger.error(f"💥 Error update: {e}")
+        SERVICIOS_ACTUALES = actuales
+        time.sleep(INTERVALO)
 
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
-def telegram_webhook():
-    threading.Thread(target=procesar_update, args=(request.json,), daemon=True).start()
+def webhook():
+    data = request.json
+
+    if "message" in data:
+        chat = data["message"]["chat"]["id"]
+        guardar_usuario(chat)
+
+        if data["message"].get("text") == "/start":
+            enviar(chat, "👋 Hola", botones(), guardar_panel=True)
+
+    if "callback_query" in data:
+        chat = data["callback_query"]["message"]["chat"]["id"]
+        accion = data["callback_query"]["data"]
+        guardar_usuario(chat)
+
+        if accion == "LOGIN":
+            ok = homeserve.login()
+            enviar(chat, "✅ Login OK" if ok else "❌ Error", botones(), True)
+
+        elif accion == "REFRESH":
+            servicios = homeserve.obtener()
+            enviar(chat, f"🔄 {len(servicios)} servicios encontrados", botones(), True)
+
+        elif accion == "WEB":
+            actuales = homeserve.obtener()
+
+            if not actuales:
+                enviar(chat, "No hay servicios", botones(), True)
+            else:
+                for sid, s in actuales.items():
+                    enviar(chat, f"📋 {s}", botones_servicio(sid), False)
+
+        elif accion == "CAMBIAR":
+            curso = homeserve.obtener_curso()
+            enviar(chat, "Selecciona servicio", lista_servicios(curso), True)
+
+        elif accion.startswith("SEL_"):
+            sid = accion.split("_")[1]
+            enviar(chat, f"Servicio {sid}", botones_estado(sid), True)
+
+        elif accion.startswith("ESTADO_"):
+            _, sid, estado = accion.split("_")
+            ok, msg = homeserve.cambiar_estado(sid, estado)
+            enviar(chat, msg, botones(), True)
+
+        elif accion.startswith("ACEPTAR_"):
+            sid = accion.split("_")[1]
+            ok, msg = homeserve.aceptar(sid)
+            enviar(chat, msg, botones(), True)
+
+        elif accion.startswith("RECHAZAR_"):
+            sid = accion.split("_")[1]
+            ok, msg = homeserve.rechazar(sid)
+            enviar(chat, msg, botones(), True)
+
     return jsonify(ok=True)
 
-@app.route("/ping")
-def ping():
-    return "ok"
-
 # ---------------- INICIO ----------------
-set_webhook()
+for u in obtener_usuarios():
+    enviar(u, "🤖 Bot activo", botones(), guardar_panel=True)
 
-for user in obtener_usuarios():
-    enviar(user, "🤖 Bot activo")
-
-threading.Thread(target=bot_loop, daemon=True).start()
+threading.Thread(target=loop, daemon=True).start()
 
 if __name__ == "__main__":
-    logger.info("🚀 Bot iniciado")
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=10000)
