@@ -32,7 +32,7 @@ logger = logging.getLogger("bot")
 app = Flask(__name__)
 
 SERVICIOS_ACTUALES = {}
-USER_STATE = {}
+PANEL = {}
 
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
@@ -58,19 +58,6 @@ def obtener_usuarios():
     c.execute("SELECT chat_id FROM usuarios")
     return [r[0] for r in c.fetchall()]
 
-def contar_usuarios():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM usuarios")
-    return c.fetchone()[0]
-
-def eliminar_usuario(chat_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
-    conn.commit()
-    conn.close()
-
 init_db()
 
 # ---------------- TELEGRAM ----------------
@@ -91,10 +78,10 @@ def tg_edit(chat, msg_id, text, markup=None):
         payload["reply_markup"] = markup
     requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
 
-def tg_answer(cid):
+def tg_answer(callback_id):
     requests.post(
         f"{TELEGRAM_API}/answerCallbackQuery",
-        json={"callback_query_id": cid},
+        json={"callback_query_id": callback_id},
         timeout=10
     )
 
@@ -107,20 +94,11 @@ def botones():
                 {"text": "🔄 Refresh", "callback_data": "REFRESH"}
             ],
             [
-                {"text": "🌐 Web", "callback_data": "WEB"},
-                {"text": "👥 Usuarios", "callback_data": "USUARIOS"}
+                {"text": "🌐 Web", "callback_data": "WEB"}
             ],
-            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}]
-        ]
-    }
-
-def botones_usuarios():
-    return {
-        "inline_keyboard": [
-            [{"text": "➕ Agregar usuario", "callback_data": "ADD_USER"}],
-            [{"text": "📋 Listar usuarios", "callback_data": "LIST_USERS"}],
-            [{"text": "🗑 Eliminar usuario", "callback_data": "DEL_USER"}],
-            [{"text": "⬅ Volver", "callback_data": "BACK_MAIN"}]
+            [
+                {"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}
+            ]
         ]
     }
 
@@ -128,7 +106,7 @@ def botones_servicio(sid):
     return {
         "inline_keyboard": [
             [{"text": "⚙️ Cambiar estado", "callback_data": f"SEL_{sid}"}],
-            [{"text": "⬅ Volver", "callback_data": "BACK"}]
+            [{"text": "⬅ Volver", "callback_data": "CAMBIAR"}]
         ]
     }
 
@@ -139,7 +117,7 @@ def botones_estado(sid):
                 {"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"},
                 {"text": "🟢 En espera", "callback_data": f"ESTADO_{sid}_318"}
             ],
-            [{"text": "⬅ Volver", "callback_data": "BACK_TO_SERVICE"}]
+            [{"text": "⬅ Volver", "callback_data": f"SEL_{sid}"}]
         ]
     }
 
@@ -211,7 +189,7 @@ class HomeServe:
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
-            obs = "Pendiente cliente" if estado == "348" else "En espera confirmación"
+            obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional"
 
             payload = {
                 "w3exec": "ver_servicioencurso",
@@ -235,14 +213,10 @@ def loop():
     global SERVICIOS_ACTUALES
 
     logger.info("🔥 Monitor iniciado")
+    homeserve.login()
 
     while True:
         try:
-            if not homeserve.login():
-                logger.warning("Reintentando login...")
-                time.sleep(5)
-                continue
-
             actuales = homeserve.obtener()
 
             for sid, txt in actuales.items():
@@ -251,20 +225,12 @@ def loop():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
 
             SERVICIOS_ACTUALES = actuales
+            time.sleep(INTERVALO)
 
         except Exception as e:
             logger.error(f"Loop error: {e}")
-
-        time.sleep(INTERVALO)
-
-# ---------------- NOTIFICAR ARRANQUE ----------------
-def notificar_arranque():
-    try:
-        for u in obtener_usuarios():
-            tg_send(u, "🤖 <b>Bot iniciado correctamente</b>\n🔄 Monitor activo", botones())
-        logger.info("Bot iniciado notificado")
-    except Exception as e:
-        logger.error(e)
+            homeserve.login()
+            time.sleep(10)
 
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
@@ -276,24 +242,9 @@ def webhook():
         text = data["message"].get("text", "")
         guardar_usuario(chat)
 
-        if chat in USER_STATE:
-            st = USER_STATE[chat]
-
-            if st == "ADD_USER":
-                guardar_usuario(text)
-                tg_send(chat, f"✅ Usuario añadido: {text}")
-                USER_STATE.pop(chat)
-
-            elif st == "DEL_USER":
-                eliminar_usuario(text)
-                tg_send(chat, f"🗑 Usuario eliminado: {text}")
-                USER_STATE.pop(chat)
-
         if text == "/start":
-            tg_send(chat, "🤖 Bot activo", botones())
-
-        elif text == "/stats":
-            tg_send(chat, f"📊 Usuarios: {contar_usuarios()}")
+            msg = tg_send(chat, "🤖 Bot activo", botones())
+            PANEL[chat] = msg.json()["result"]["message_id"]
 
     if "callback_query" in data:
         cq = data["callback_query"]
@@ -303,46 +254,28 @@ def webhook():
         cid = cq["id"]
 
         tg_answer(cid)
+        guardar_usuario(chat)
 
+        # ---------------- MAIN ----------------
         if action == "LOGIN":
             ok = homeserve.login()
             tg_edit(chat, msg_id, "✅ Login OK" if ok else "❌ Error", botones())
 
         elif action == "REFRESH":
-            tg_edit(chat, msg_id, f"🔄 {len(homeserve.obtener())}", botones())
+            servicios = homeserve.obtener()
+            tg_edit(chat, msg_id, f"🔄 {len(servicios)} servicios", botones())
 
         elif action == "WEB":
-            tg_edit(chat, msg_id, "\n\n".join(homeserve.obtener().values()), botones())
-
-        elif action == "USUARIOS":
-            tg_edit(chat, msg_id, f"👥 {contar_usuarios()} usuarios", botones_usuarios())
-
-        elif action == "ADD_USER":
-            USER_STATE[chat] = "ADD_USER"
-            tg_edit(chat, msg_id, "✍️ Envía ID usuario", botones_usuarios())
-
-        elif action == "DEL_USER":
-            USER_STATE[chat] = "DEL_USER"
-            tg_edit(chat, msg_id, "🗑 Envía ID a eliminar", botones_usuarios())
-
-        elif action == "LIST_USERS":
-            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()), botones_usuarios())
-
-        elif action == "BACK_MAIN":
-            tg_edit(chat, msg_id, "🤖 Menú", botones())
+            actuales = homeserve.obtener()
+            text = "\n\n".join(actuales.values()) if actuales else "Sin servicios"
+            tg_edit(chat, msg_id, text, botones())
 
         elif action == "CAMBIAR":
-            tg_edit(chat, msg_id, "🛠 Servicios", lista_servicios(homeserve.obtener_curso()))
-
-        elif action == "BACK":
-            tg_edit(chat, msg_id, "🤖 Menú", botones())
-
-        elif action == "BACK_TO_SERVICE":
-            tg_edit(chat, msg_id, "🛠 Servicios", lista_servicios(homeserve.obtener_curso()))
+            curso = homeserve.obtener_curso()
+            tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(curso))
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
-            USER_STATE[chat] = sid
             tg_edit(chat, msg_id, f"📌 Servicio {sid}", botones_estado(sid))
 
         elif action.startswith("ESTADO_"):
@@ -354,8 +287,6 @@ def webhook():
 
 # ---------------- START ----------------
 threading.Thread(target=loop, daemon=True).start()
-homeserve.login()
-notificar_arranque()
 
 if __name__ == "__main__":
     logger.info("🚀 Bot iniciado")
