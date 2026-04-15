@@ -71,10 +71,7 @@ def tg_send(chat, text, markup=None):
     payload = {"chat_id": chat, "text": text, "parse_mode": "HTML"}
     if markup:
         payload["reply_markup"] = markup
-
-    r = requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-    if r.ok:
-        PANEL[chat] = r.json()["result"]["message_id"]
+    return requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
 
 def tg_edit(chat, msg_id, text, markup=None):
     payload = {
@@ -110,35 +107,31 @@ def botones():
 
 def botones_servicio(sid):
     return {
-        "inline_keyboard": [
-            [{"text": "⚙️ Cambiar estado", "callback_data": f"SEL_{sid}"}],
-            [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
-        ]
+        "inline_keyboard": [[
+            {"text": "⚙️ Cambiar estado", "callback_data": f"SEL_{sid}"}
+        ]]
     }
 
 def botones_estado(sid):
     return {
-        "inline_keyboard": [
-            [{"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"}],
-            [{"text": "🟢 En espera confirmación", "callback_data": f"ESTADO_{sid}_318"}],
-            [{"text": "⬅️ Volver", "callback_data": f"SEL_{sid}"}]
-        ]
+        "inline_keyboard": [[
+            {"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"},
+            {"text": "🟢 En espera confirmación", "callback_data": f"ESTADO_{sid}_318"}
+        ]]
     }
 
 def lista_servicios(servicios):
     return {
-        "inline_keyboard": [
-            [{"text": sid, "callback_data": f"SEL_{sid}"}]
-            for sid in servicios.keys()
-        ] + [
-            [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
-        ]
+        "inline_keyboard": [[
+            {"text": sid, "callback_data": f"SEL_{sid}"}
+        ] for sid in servicios]
     }
 
 # ---------------- HOMESERVE ----------------
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
+        self.logged = False
 
     def login(self):
         try:
@@ -149,7 +142,8 @@ class HomeServe:
                 "BTN": "Aceptar"
             }, timeout=10)
 
-            return "error" not in r.text.lower()
+            self.logged = "error" not in r.text.lower()
+            return self.logged
         except Exception as e:
             logger.error(f"Login error: {e}")
             return False
@@ -168,8 +162,25 @@ class HomeServe:
                     servicios[m.group(0)] = " ".join(b.split())
 
             return servicios
-        except Exception as e:
-            logger.error(f"Error obtener: {e}")
+        except:
+            return {}
+
+    def obtener_curso(self):
+        try:
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
+            r.encoding = "latin-1"
+            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+            servicios = {}
+
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+
+            return servicios
+        except:
             return {}
 
     def cambiar_estado(self, sid, estado):
@@ -198,7 +209,8 @@ class HomeServe:
             }
 
             self.session.post(BASE_URL, data=payload, timeout=10)
-            return True, "✅ Estado actualizado"
+            return True, f"✅ Estado {estado} aplicado"
+
         except Exception as e:
             return False, f"❌ Error: {e}"
 
@@ -235,12 +247,11 @@ def webhook():
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
-
         guardar_usuario(chat)
 
-        if text == "/start":
-            tg_send(chat, "🤖 Bot activo", botones())
+        if data["message"].get("text") == "/start":
+            msg = tg_send(chat, "🤖 Bot activo", botones())
+            PANEL[chat] = msg.json()["result"]["message_id"]
 
     if "callback_query" in data:
         cq = data["callback_query"]
@@ -252,40 +263,40 @@ def webhook():
         tg_answer(cid)
         guardar_usuario(chat)
 
-        # ---------------- MENU ----------------
-        if action == "BACK_MENU":
-            tg_edit(chat, msg_id, "🏠 Menú principal", botones())
-
-        elif action == "LOGIN":
+        if action == "LOGIN":
             ok = homeserve.login()
             tg_edit(chat, msg_id, "✅ Login OK" if ok else "❌ Error", botones())
 
         elif action == "REFRESH":
-            s = homeserve.obtener()
-            tg_edit(chat, msg_id, f"🔄 {len(s)} servicios", botones())
+            servicios = homeserve.obtener()
+            tg_edit(chat, msg_id, f"🔄 {len(servicios)} servicios", botones())
 
         elif action == "WEB":
-            s = homeserve.obtener()
-            txt = "\n\n".join(s.values()) if s else "Sin servicios"
-            tg_edit(chat, msg_id, txt, botones())
+            actuales = homeserve.obtener()
+            text = "\n\n".join(actuales.values()) if actuales else "Sin servicios"
+            tg_edit(chat, msg_id, text, botones())
 
         elif action == "CAMBIAR":
-            s = homeserve.obtener()
-            if not s:
-                tg_edit(chat, msg_id, "❌ Sin servicios", botones())
-            else:
-                tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(s))
+            if not homeserve.logged:
+                homeserve.login()
 
-        # ---------------- SERVICIO ----------------
+            curso = homeserve.obtener_curso()
+
+            if not curso:
+                tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
+            else:
+                tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(curso))
+
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
             tg_edit(chat, msg_id, f"📌 Servicio {sid}", botones_estado(sid))
 
-        # ---------------- ESTADO ----------------
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
-            tg_edit(chat, msg_id, msg, botones())
+            tg_edit(chat, msg_id, msg, botones_estado(sid))
+
+        return jsonify(ok=True)
 
     return jsonify(ok=True)
 
