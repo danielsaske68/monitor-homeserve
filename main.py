@@ -32,7 +32,6 @@ logger = logging.getLogger("bot")
 app = Flask(__name__)
 
 SERVICIOS_ACTUALES = {}
-PANEL = {}
 USER_STATE = {}
 
 # ---------------- DB ----------------
@@ -92,10 +91,10 @@ def tg_edit(chat, msg_id, text, markup=None):
         payload["reply_markup"] = markup
     requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
 
-def tg_answer(callback_id):
+def tg_answer(cid):
     requests.post(
         f"{TELEGRAM_API}/answerCallbackQuery",
-        json={"callback_query_id": callback_id},
+        json={"callback_query_id": cid},
         timeout=10
     )
 
@@ -236,10 +235,14 @@ def loop():
     global SERVICIOS_ACTUALES
 
     logger.info("🔥 Monitor iniciado")
-    homeserve.login()
 
     while True:
         try:
+            if not homeserve.login():
+                logger.warning("Reintentando login...")
+                time.sleep(5)
+                continue
+
             actuales = homeserve.obtener()
 
             for sid, txt in actuales.items():
@@ -248,12 +251,20 @@ def loop():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
 
             SERVICIOS_ACTUALES = actuales
-            time.sleep(INTERVALO)
 
         except Exception as e:
             logger.error(f"Loop error: {e}")
-            homeserve.login()
-            time.sleep(10)
+
+        time.sleep(INTERVALO)
+
+# ---------------- NOTIFICAR ARRANQUE ----------------
+def notificar_arranque():
+    try:
+        for u in obtener_usuarios():
+            tg_send(u, "🤖 <b>Bot iniciado correctamente</b>\n🔄 Monitor activo", botones())
+        logger.info("Bot iniciado notificado")
+    except Exception as e:
+        logger.error(e)
 
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
@@ -266,14 +277,14 @@ def webhook():
         guardar_usuario(chat)
 
         if chat in USER_STATE:
-            state = USER_STATE[chat]
+            st = USER_STATE[chat]
 
-            if state == "ADD_USER":
+            if st == "ADD_USER":
                 guardar_usuario(text)
                 tg_send(chat, f"✅ Usuario añadido: {text}")
                 USER_STATE.pop(chat)
 
-            elif state == "DEL_USER":
+            elif st == "DEL_USER":
                 eliminar_usuario(text)
                 tg_send(chat, f"🗑 Usuario eliminado: {text}")
                 USER_STATE.pop(chat)
@@ -343,6 +354,8 @@ def webhook():
 
 # ---------------- START ----------------
 threading.Thread(target=loop, daemon=True).start()
+homeserve.login()
+notificar_arranque()
 
 if __name__ == "__main__":
     logger.info("🚀 Bot iniciado")
