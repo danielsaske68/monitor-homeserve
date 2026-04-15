@@ -17,9 +17,8 @@ USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
-PUBLIC_URL = os.getenv("PUBLIC_URL")  # 🔥 IMPORTANTE EN RAILWAY
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+LOGIN_URL = "hhttps://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
@@ -56,7 +55,9 @@ def obtener_usuarios():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT chat_id FROM usuarios")
-    return [row[0] for row in c.fetchall()]
+    usuarios = [row[0] for row in c.fetchall()]
+    conn.close()
+    return usuarios
 
 init_db()
 
@@ -75,6 +76,7 @@ def enviar(chat, texto, botones=None, editar=False):
             r = requests.post(f"{TELEGRAM_API}/sendMessage", json=data, timeout=10)
             if r.ok:
                 PANEL[chat] = r.json()["result"]["message_id"]
+
     except Exception as e:
         logger.error(f"Telegram error: {e}")
 
@@ -127,6 +129,7 @@ class HomeServe:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
+
             servicios = {}
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
@@ -141,6 +144,7 @@ class HomeServe:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
@@ -154,6 +158,7 @@ class HomeServe:
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
+
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
@@ -174,6 +179,7 @@ class HomeServe:
 
             self.session.post(BASE_URL, data=payload, timeout=10)
             return True, f"✅ Estado {estado} aplicado"
+
         except Exception as e:
             return False, f"❌ Error: {e}"
 
@@ -186,22 +192,6 @@ class HomeServe:
         return True, f"❌ Servicio {sid} rechazado"
 
 homeserve = HomeServe()
-
-# ---------------- WEBHOOK FIX ----------------
-def reset_webhook():
-    try:
-        requests.get(f"{TELEGRAM_API}/deleteWebhook?drop_pending_updates=true", timeout=10)
-
-        if PUBLIC_URL:
-            r = requests.post(f"{TELEGRAM_API}/setWebhook", json={
-                "url": f"{PUBLIC_URL}/telegram_webhook",
-                "allowed_updates": ["message", "callback_query"]
-            }, timeout=10)
-
-            logger.info(f"🌐 Webhook: {r.text}")
-
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
 
 # ---------------- LOOP ----------------
 def loop():
@@ -229,32 +219,41 @@ def loop():
             time.sleep(INTERVALO)
 
         except Exception as e:
-            logger.error(f"Loop error: {e}")
+            logger.error(f"💥 Error loop: {e}")
             homeserve.login()
             time.sleep(20)
 
-# ---------------- FLASK ----------------
+# ---------------- WEBHOOK (ARREGLADO) ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
-    data = request.get_json(force=True)
+    try:
+        data = request.get_json(force=True, silent=True)
 
-    logger.info(f"📩 UPDATE: {data}")
+        if not data:
+            logger.error("❌ UPDATE vacío")
+            return jsonify(ok=True)
 
-    if "message" in data:
-        chat = data["message"]["chat"]["id"]
-        guardar_usuario(chat)
+        logger.info(f"📩 UPDATE: {data}")
 
-        if data["message"].get("text") == "/start":
-            enviar(chat, "🤖 Bot activo", botones())
+        # ---------------- MESSAGE ----------------
+        if "message" in data:
+            chat = data["message"]["chat"]["id"]
+            guardar_usuario(chat)
 
-    elif "callback_query" in data:
-        try:
+            text = data["message"].get("text", "")
+
+            if text == "/start":
+                logger.info(f"👤 /start {chat}")
+                enviar(chat, "👋 Hola, en que puedo ayudar?", botones())
+
+        # ---------------- CALLBACK ----------------
+        elif "callback_query" in data:
             chat = data["callback_query"]["message"]["chat"]["id"]
             accion = data["callback_query"]["data"]
 
-            guardar_usuario(chat)
-
             logger.info(f"🔘 BOTÓN: {accion}")
+
+            guardar_usuario(chat)
 
             if accion == "LOGIN":
                 ok = homeserve.login()
@@ -266,8 +265,11 @@ def webhook():
 
             elif accion == "WEB":
                 actuales = homeserve.obtener()
-                for sid, s in actuales.items():
-                    enviar(chat, f"📋 {s}", botones_servicio(sid))
+                if not actuales:
+                    enviar(chat, "No hay servicios")
+                else:
+                    for sid, s in actuales.items():
+                        enviar(chat, f"📋 {s}", botones_servicio(sid))
 
             elif accion.startswith("ACEPTAR_"):
                 sid = accion.split("_")[1]
@@ -284,7 +286,7 @@ def webhook():
                 ok, msg = homeserve.cambiar_estado(sid, estado)
                 enviar(chat, msg, botones(), True)
 
-            elif accion.startswith("CAMBIAR"):
+            elif accion == "CAMBIAR":
                 curso = homeserve.obtener_curso()
                 enviar(chat, "Selecciona servicio", lista_servicios(curso), True)
 
@@ -292,14 +294,13 @@ def webhook():
                 sid = accion.split("_")[1]
                 enviar(chat, f"Servicio {sid}", botones_estado(sid), True)
 
-        except Exception as e:
-            logger.error(f"Callback error: {e}")
+        return jsonify(ok=True)
 
-    return jsonify(ok=True)
+    except Exception as e:
+        logger.error(f"💥 WEBHOOK ERROR: {e}")
+        return jsonify(ok=True)
 
 # ---------------- START ----------------
-reset_webhook()
-
 for u in obtener_usuarios():
     enviar(u, "🤖 Bot activo", botones())
 
