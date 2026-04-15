@@ -119,16 +119,16 @@ def botones_servicio(sid):
         ]]
     }
 
-def botones_estado(servicios):
-    if not servicios:
-        return {"inline_keyboard": [[{"text": "⚠️ Sin servicios", "callback_data": "NONE"}]]}
-
+def botones_estado(sid):
     return {
-        "inline_keyboard": [
-            [{"text": sid, "callback_data": f"SEL_{sid}"}]
-            for sid in servicios.keys()
-        ]
+        "inline_keyboard": [[
+            {"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"},
+            {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{sid}_318"}
+        ]]
     }
+
+def lista_servicios(servicios):
+    return {"inline_keyboard": [[{"text": sid, "callback_data": f"SEL_{sid}"}] for sid in servicios]}
 
 # ---------------- HOMESERVE ----------------
 class HomeServe:
