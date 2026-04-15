@@ -30,7 +30,9 @@ logger = logging.getLogger("bot")
 
 # ---------------- APP ----------------
 app = Flask(__name__)
-
+@app.route("/test", methods=["GET"])
+def test():
+    return "OK BOT ACTIVO"
 SERVICIOS_ACTUALES = {}
 PANEL = {}
 
