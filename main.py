@@ -114,77 +114,37 @@ class HomeServe:
 
     def login(self):
         try:
+            logger.info("🔐 Haciendo login...")
             payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
             self.session.get(LOGIN_URL, timeout=10)
             r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-            return "error" not in r.text.lower()
-        except:
+            ok = "error" not in r.text.lower()
+            logger.info("✅ Login correcto" if ok else "❌ Login fallido")
+            return ok
+        except Exception as e:
+            logger.error(f"❌ Error login: {e}")
             return False
 
     def obtener(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
+            # 🔥 DETECTAR SESIÓN MUERTA
+            if "login" in texto.lower() or "password" in texto.lower():
+                logger.warning("⚠️ Sesión expirada detectada")
+                return None
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
+
             return servicios
         except:
-            return {}
-
-    def obtener_curso(self):
-        try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
-            r.encoding = "latin-1"
-            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
-            servicios = {}
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    servicios[m.group(0)] = " ".join(b.split())
-            return servicios
-        except:
-            return {}
-
-    def cambiar_estado(self, sid, estado):
-        try:
-            fecha = datetime.now() + timedelta(days=3)
-
-            if fecha.weekday() == 5:
-                fecha += timedelta(days=2)
-            elif fecha.weekday() == 6:
-                fecha += timedelta(days=1)
-
-            obs = "Pendiente de localizar a asegurado" if estado == "348" else \
-                  "En espera de Profesional por confirmación del Siniestro"
-
-            payload = {
-                "w3exec": "ver_servicioencurso",
-                "Servicio": sid,
-                "ESTADO": estado,
-                "FECSIG": fecha.strftime("%d/%m/%Y"),
-                "INFORMO": "on",
-                "Observaciones": obs,
-                "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            }
-
-            self.session.post(BASE_URL, data=payload, timeout=10)
-            return True, f"✅ Estado {estado} aplicado"
-
-        except Exception as e:
-            return False, f"❌ Error: {e}"
-
-    def aceptar(self, sid):
-        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"ACEPTAR":"Aceptar"}, timeout=10)
-        return True, f"✅ Servicio {sid} aceptado"
-
-    def rechazar(self, sid):
-        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"RECHAZAR":"Rechazar"}, timeout=10)
-        return True, f"❌ Servicio {sid} rechazado"
+            return None
 
 homeserve = HomeServe()
 
@@ -199,6 +159,13 @@ def loop():
     while True:
         try:
             actuales = homeserve.obtener()
+
+            # 🔥 SI SESIÓN MUERTA → RELOGIN
+            if actuales is None:
+                logger.warning("🔄 Re-login automático...")
+                homeserve.login()
+                time.sleep(5)
+                continue
 
             logger.info(f"📊 Servicios detectados: {len(actuales)}")
 
@@ -246,11 +213,11 @@ def webhook():
             enviar(chat, "✅ Login OK" if ok else "❌ Error", botones(), True)
 
         elif accion == "REFRESH":
-            servicios = homeserve.obtener()
+            servicios = homeserve.obtener() or {}
             enviar(chat, f"🔄 {len(servicios)} servicios encontrados", botones(), True)
 
         elif accion == "WEB":
-            actuales = homeserve.obtener()
+            actuales = homeserve.obtener() or {}
             if not actuales:
                 enviar(chat, "No hay servicios")
             else:
