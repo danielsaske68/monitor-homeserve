@@ -16,8 +16,9 @@ load_dotenv()
 USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
+
+BASE_WEBHOOK_URL = "https://monitor-homeserve-production.up.railway.app/telegram_webhook"
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
@@ -31,7 +32,6 @@ logger = logging.getLogger("main")
 
 # ---------------- VARIABLES ----------------
 SERVICIOS_ACTUALES = {}
-PANEL = {}
 app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
@@ -63,19 +63,13 @@ def obtener_usuarios():
 init_db()
 
 # ---------------- TELEGRAM ----------------
-def enviar(chat, texto, botones=None, editar=False):
+def enviar(chat, texto, botones=None):
     data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
     if botones:
         data["reply_markup"] = botones
 
     try:
-        if editar and chat in PANEL:
-            data["message_id"] = PANEL[chat]
-            requests.post(f"{TELEGRAM_API}/editMessageText", json=data, timeout=10)
-        else:
-            r = requests.post(f"{TELEGRAM_API}/sendMessage", json=data, timeout=10)
-            if r.ok:
-                PANEL[chat] = r.json()["result"]["message_id"]
+        requests.post(f"{TELEGRAM_API}/sendMessage", json=data, timeout=10)
     except Exception as e:
         logger.error(f"Error enviando mensaje: {e}")
 
@@ -97,120 +91,63 @@ def botones_servicio(sid):
         ]]
     }
 
-def botones_estado(sid):
-    return {
-        "inline_keyboard": [[
-            {"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"},
-            {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{sid}_318"}
-        ]]
-    }
-
-def lista_servicios(servicios):
-    return {"inline_keyboard": [[{"text": sid, "callback_data": f"SEL_{sid}"}] for sid in servicios]}
-
-# ---------------- WEBHOOK AUTO ----------------
-def set_webhook():
-    try:
-        url = f"{TELEGRAM_API}/setWebhook?url={WEBHOOK_URL}"
-        r = requests.get(url, timeout=10)
-        logger.info(f"🌐 Webhook configurado: {r.text}")
-    except Exception as e:
-        logger.error(f"❌ Error webhook: {e}")
-
-def mantener_webhook():
-    while True:
-        try:
-            set_webhook()
-            logger.info("♻️ Webhook refrescado")
-            time.sleep(300)
-        except Exception as e:
-            logger.error(f"Error webhook loop: {e}")
-            time.sleep(60)
-
 # ---------------- HOMESERVE ----------------
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
+        self.last_login = 0
 
     def login(self):
         try:
-            logger.info("🔐 Login HomeServe...")
             payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
             self.session.get(LOGIN_URL, timeout=10)
             r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-            return "error" not in r.text.lower()
-        except:
+
+            if "error" in r.text.lower():
+                logger.error("❌ Login falló")
+                return False
+
+            self.last_login = time.time()
+            logger.info("✅ Login OK")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error login: {e}")
             return False
+
+    def asegurar_login(self):
+        # Re-login cada 10 minutos
+        if time.time() - self.last_login > 600:
+            logger.info("🔄 Renovando sesión...")
+            return self.login()
+        return True
 
     def obtener(self):
         try:
+            self.asegurar_login()
+
             r = self.session.get(ASIGNACION_URL, timeout=15)
-            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
 
-            # detectar sesión muerta
-            if "login" in texto.lower() or "password" in texto.lower():
+            # 🔥 detectar sesión caída
+            if "login" in r.text.lower():
                 logger.warning("⚠️ Sesión expirada")
-                return None
+                self.login()
+                return {}
 
-            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
-            servicios = {}
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    servicios[m.group(0)] = " ".join(b.split())
-            return servicios
-        except:
-            return None
-
-    def obtener_curso(self):
-        try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
-            r.encoding = "latin-1"
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
+
             servicios = {}
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
+
             return servicios
-        except:
-            return {}
-
-    def cambiar_estado(self, sid, estado):
-        try:
-            fecha = datetime.now() + timedelta(days=3)
-            if fecha.weekday() == 5:
-                fecha += timedelta(days=2)
-            elif fecha.weekday() == 6:
-                fecha += timedelta(days=1)
-
-            obs = "Pendiente de localizar a asegurado" if estado == "348" else \
-                  "En espera de Profesional por confirmación del Siniestro"
-
-            payload = {
-                "w3exec": "ver_servicioencurso",
-                "Servicio": sid,
-                "ESTADO": estado,
-                "FECSIG": fecha.strftime("%d/%m/%Y"),
-                "INFORMO": "on",
-                "Observaciones": obs,
-                "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            }
-
-            self.session.post(BASE_URL, data=payload, timeout=10)
-            return True, f"✅ Estado {estado} aplicado"
 
         except Exception as e:
-            return False, f"❌ Error: {e}"
-
-    def aceptar(self, sid):
-        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"ACEPTAR":"Aceptar"}, timeout=10)
-        return True, f"✅ Servicio {sid} aceptado"
-
-    def rechazar(self, sid):
-        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"RECHAZAR":"Rechazar"}, timeout=10)
-        return True, f"❌ Servicio {sid} rechazado"
+            logger.error(f"💥 Error obteniendo servicios: {e}")
+            return {}
 
 homeserve = HomeServe()
 
@@ -219,17 +156,12 @@ def loop():
     global SERVICIOS_ACTUALES
 
     logger.info("🔥 Monitor iniciado")
+
     homeserve.login()
 
     while True:
         try:
             actuales = homeserve.obtener()
-
-            if actuales is None:
-                logger.warning("🔄 Re-login automático")
-                homeserve.login()
-                time.sleep(5)
-                continue
 
             logger.info(f"📊 Servicios detectados: {len(actuales)}")
 
@@ -270,54 +202,38 @@ def webhook():
     if "callback_query" in data:
         chat = data["callback_query"]["message"]["chat"]["id"]
         accion = data["callback_query"]["data"]
-        guardar_usuario(chat)
 
         if accion == "LOGIN":
             ok = homeserve.login()
-            enviar(chat, "✅ Login OK" if ok else "❌ Error", botones(), True)
+            enviar(chat, "✅ Login OK" if ok else "❌ Error", botones())
 
         elif accion == "REFRESH":
-            servicios = homeserve.obtener() or {}
-            enviar(chat, f"🔄 {len(servicios)} servicios encontrados", botones(), True)
+            servicios = homeserve.obtener()
+            enviar(chat, f"🔄 {len(servicios)} servicios encontrados", botones())
 
         elif accion == "WEB":
-            actuales = homeserve.obtener() or {}
+            actuales = homeserve.obtener()
             if not actuales:
                 enviar(chat, "No hay servicios")
             else:
                 for sid, s in actuales.items():
                     enviar(chat, f"📋 {s}", botones_servicio(sid))
 
-        elif accion == "CAMBIAR":
-            curso = homeserve.obtener_curso()
-            enviar(chat, "Selecciona servicio", lista_servicios(curso), True)
-
-        elif accion.startswith("SEL_"):
-            sid = accion.split("_")[1]
-            enviar(chat, f"Servicio {sid}", botones_estado(sid), True)
-
-        elif accion.startswith("ESTADO_"):
-            _, sid, estado = accion.split("_")
-            ok, msg = homeserve.cambiar_estado(sid, estado)
-            enviar(chat, msg, botones(), True)
-
-        elif accion.startswith("ACEPTAR_"):
-            sid = accion.split("_")[1]
-            ok, msg = homeserve.aceptar(sid)
-            enviar(chat, msg, botones(), True)
-
-        elif accion.startswith("RECHAZAR_"):
-            sid = accion.split("_")[1]
-            ok, msg = homeserve.rechazar(sid)
-            enviar(chat, msg, botones(), True)
-
     return jsonify(ok=True)
 
+# ---------------- CONFIG WEBHOOK ----------------
+def configurar_webhook():
+    try:
+        url = f"{TELEGRAM_API}/setWebhook?url={BASE_WEBHOOK_URL}"
+        r = requests.get(url)
+        logger.info(f"🌐 Webhook configurado: {r.text}")
+    except Exception as e:
+        logger.error(f"Error configurando webhook: {e}")
+
 # ---------------- INICIO ----------------
-set_webhook()
+configurar_webhook()
 
 threading.Thread(target=loop, daemon=True).start()
-threading.Thread(target=mantener_webhook, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
