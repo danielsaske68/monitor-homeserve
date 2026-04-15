@@ -33,7 +33,6 @@ app = Flask(__name__)
 
 SERVICIOS_ACTUALES = {}
 USER_STATE = {}
-SERVICIOS_CURSO_CACHE = {}
 
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
@@ -118,6 +117,9 @@ def botones():
 def botones_usuarios():
     return {
         "inline_keyboard": [
+            [{"text": "➕ Agregar usuario", "callback_data": "ADD_USER"}],
+            [{"text": "📋 Listar usuarios", "callback_data": "LIST_USERS"}],
+            [{"text": "🗑 Eliminar usuario", "callback_data": "DEL_USER"}],
             [{"text": "⬅ Volver", "callback_data": "BACK_MAIN"}]
         ]
     }
@@ -126,7 +128,7 @@ def botones_servicio(sid):
     return {
         "inline_keyboard": [
             [{"text": "⚙️ Cambiar estado", "callback_data": f"SEL_{sid}"}],
-            [{"text": "⬅ Volver", "callback_data": "BACK"}]
+            [{"text": "⬅ Volver", "callback_data": "CAMBIAR"}]
         ]
     }
 
@@ -137,7 +139,7 @@ def botones_estado(sid):
                 {"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"},
                 {"text": "🟢 En espera", "callback_data": f"ESTADO_{sid}_318"}
             ],
-            [{"text": "⬅ Volver", "callback_data": "BACK_TO_SERVICE"}]
+            [{"text": "⬅ Volver", "callback_data": f"SEL_{sid}"}]
         ]
     }
 
@@ -233,13 +235,10 @@ def loop():
     global SERVICIOS_ACTUALES
 
     logger.info("🔥 Monitor iniciado")
+    homeserve.login()
 
     while True:
         try:
-            if not homeserve.login():
-                time.sleep(5)
-                continue
-
             actuales = homeserve.obtener()
 
             for sid, txt in actuales.items():
@@ -248,17 +247,16 @@ def loop():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
 
             SERVICIOS_ACTUALES = actuales
+            time.sleep(INTERVALO)
 
         except Exception as e:
             logger.error(f"Loop error: {e}")
-
-        time.sleep(INTERVALO)
+            homeserve.login()
+            time.sleep(10)
 
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
-    global SERVICIOS_CURSO_CACHE
-
     data = request.json
 
     if "message" in data:
@@ -272,9 +270,6 @@ def webhook():
         elif text == "/stats":
             tg_send(chat, f"📊 Usuarios: {contar_usuarios()}")
 
-        elif text == "/users":
-            tg_send(chat, "\n".join(obtener_usuarios()))
-
     if "callback_query" in data:
         cq = data["callback_query"]
         chat = cq["message"]["chat"]["id"]
@@ -284,30 +279,44 @@ def webhook():
 
         tg_answer(cid)
 
-        if action == "CAMBIAR":
-            SERVICIOS_CURSO_CACHE = homeserve.obtener_curso()
-            tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(SERVICIOS_CURSO_CACHE))
+        if action == "LOGIN":
+            ok = homeserve.login()
+            tg_edit(chat, msg_id, "✅ Login OK" if ok else "❌ Error", botones())
 
-        elif action == "BACK_TO_SERVICE":
-            if not SERVICIOS_CURSO_CACHE:
-                SERVICIOS_CURSO_CACHE = homeserve.obtener_curso()
+        elif action == "REFRESH":
+            tg_edit(chat, msg_id, f"🔄 {len(homeserve.obtener())}", botones())
 
-            tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(SERVICIOS_CURSO_CACHE))
+        elif action == "WEB":
+            tg_edit(chat, msg_id, "\n\n".join(homeserve.obtener().values()) or "Sin datos", botones())
+
+        elif action == "USUARIOS":
+            tg_edit(chat, msg_id, f"👥 {contar_usuarios()} usuarios", botones_usuarios())
+
+        elif action == "BACK_MAIN":
+            tg_edit(chat, msg_id, "🤖 Menú principal", botones())
+
+        elif action == "ADD_USER":
+            USER_STATE[chat] = "ADD_USER"
+            tg_send(chat, "Envía ID a agregar")
+
+        elif action == "DEL_USER":
+            USER_STATE[chat] = "DEL_USER"
+            tg_send(chat, "Envía ID a eliminar")
+
+        elif action == "LIST_USERS":
+            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()), botones_usuarios())
+
+        elif action == "CAMBIAR":
+            tg_edit(chat, msg_id, "🛠 Servicios", lista_servicios(homeserve.obtener_curso()))
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
-            tg_edit(chat, msg_id, f"📌 Servicio {sid}", botones_estado(sid))
+            tg_edit(chat, msg_id, f"📌 {sid}", botones_estado(sid))
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
             tg_edit(chat, msg_id, msg, botones_estado(sid))
-
-        elif action == "BACK":
-            tg_edit(chat, msg_id, "🤖 Menú", botones())
-
-        elif action == "USUARIOS":
-            tg_edit(chat, msg_id, f"👥 Usuarios: {contar_usuarios()}", botones_usuarios())
 
     return jsonify(ok=True)
 
