@@ -155,55 +155,79 @@ def loop():
 
 # ---------------- WEBHOOK (FIX REAL) ----------------
 @app.route("/telegram_webhook", methods=["POST"])
-def webhook():
-    try:
-        data = request.get_json(force=True, silent=True)
+def telegram_webhook():
+    data = request.get_json(force=True, silent=True)
 
-        if not data:
-            logger.warning("Webhook vacío")
-            return jsonify(ok=True)
+    if not data:
+        return jsonify(ok=True)
 
-        # ---------------- CALLBACK BUTTONS ----------------
-        if "callback_query" in data:
-            cq = data["callback_query"]
-            chat = cq["message"]["chat"]["id"]
-            accion = cq["data"]
+    # ---------------- MESSAGE ----------------
+    if "message" in data:
+        chat = data["message"]["chat"]["id"]
+        guardar_usuario(chat)
 
-            # IMPORTANTÍSIMO: responder callback (ARREGLA BOTONES MUERTOS)
-            requests.post(
-                f"{TELEGRAM_API}/answerCallbackQuery",
-                json={"callback_query_id": cq["id"]},
-                timeout=5
-            )
+        if data["message"].get("text") == "/start":
+            enviar(chat, "👋 Hola, en qué puedo ayudar", botones_generales())
 
-            guardar_usuario(chat)
+    # ---------------- CALLBACK BUTTONS ----------------
+    if "callback_query" in data:
+        cq = data["callback_query"]
+        accion = cq["data"]
+        chat = cq["message"]["chat"]["id"]
 
-            logger.info(f"🎯 Botón recibido: {accion}")
+        # ⭐⭐⭐ ESTO ES LO QUE TE FALTABA (CRÍTICO)
+        requests.post(
+            f"{TELEGRAM_API}/answerCallbackQuery",
+            json={"callback_query_id": cq["id"]},
+            timeout=5
+        )
 
-            if accion == "LOGIN":
-                ok = homeserve.login()
-                enviar(chat, "✅ Login OK" if ok else "❌ Error", botones(), True)
+        guardar_usuario(chat)
 
-            elif accion == "REFRESH":
-                servicios = homeserve.obtener()
-                enviar(chat, f"🔄 {len(servicios)} servicios", botones(), True)
+        last_msg_id = cq["message"]["message_id"]
 
-            elif accion == "WEB":
-                actuales = homeserve.obtener()
-                for sid, s in actuales.items():
-                    enviar(chat, f"📋 {s}", botones_servicio(sid))
+        logger.info(f"🔘 Botón recibido: {accion}")
 
-            elif accion == "CAMBIAR":
-                curso = homeserve.obtener()
-                enviar(chat, "Selecciona servicio", lista_servicios(curso), True)
+        if accion == "LOGIN":
+            ok = homeserve.login()
+            enviar(chat, "✅ Login OK" if ok else "❌ Error login", last_msg_id=last_msg_id)
 
-            elif accion.startswith("ACEPTAR_"):
-                sid = accion.split("_")[1]
-                enviar(chat, f"OK {sid}", botones(), True)
+        elif accion == "REFRESH":
+            actuales = homeserve.obtener()
+            enviar(chat, f"🔄 Servicios: {len(actuales)}", last_msg_id=last_msg_id)
 
-            elif accion.startswith("RECHAZAR_"):
-                sid = accion.split("_")[1]
-                enviar(chat, f"RECHAZADO {sid}", botones(), True)
+        elif accion == "WEB":
+            actuales = homeserve.obtener()
+            if not actuales:
+                enviar(chat, "No hay servicios", last_msg_id=last_msg_id)
+            else:
+                for sid, servicio in actuales.items():
+                    enviar(chat, f"📋 {servicio}", botones_servicio_nuevo(sid))
+
+        elif accion == "CAMBIAR_ESTADO":
+            curso = homeserve.obtener_curso()
+            enviar(chat, "🛠 Selecciona servicio:", botones_lista_servicios(curso), last_msg_id=last_msg_id)
+
+        elif accion.startswith("SEL_"):
+            sid = accion.split("_")[1]
+            enviar(chat, f"🔧 Servicio {sid}", botones_estado(sid), last_msg_id=last_msg_id)
+
+        elif accion.startswith("ESTADO_"):
+            _, sid, estado = accion.split("_")
+            ok, msg = homeserve.cambiar_estado(sid, estado)
+            enviar(chat, msg, last_msg_id=last_msg_id)
+
+        elif accion.startswith("ACEPTAR_"):
+            sid = accion.split("_")[1]
+            ok, msg = homeserve.aceptar_servicio(sid)
+            enviar(chat, msg, last_msg_id=last_msg_id)
+
+        elif accion.startswith("RECHAZAR_"):
+            sid = accion.split("_")[1]
+            ok, msg = homeserve.rechazar_servicio(sid)
+            enviar(chat, msg, last_msg_id=last_msg_id)
+
+    return jsonify(ok=True)
 
         # ---------------- /START ----------------
         elif "message" in data:
