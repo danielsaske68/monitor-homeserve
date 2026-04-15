@@ -35,10 +35,6 @@ SERVICIOS_ACTUALES = {}
 PANEL = {}
 USER_STATE = {}
 
-@app.route("/test", methods=["GET"])
-def test():
-    return "OK BOT ACTIVO"
-
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
@@ -122,13 +118,10 @@ def botones():
 def botones_usuarios():
     return {
         "inline_keyboard": [
-            [
-                {"text": "📋 Ver lista", "callback_data": "USR_LIST"},
-                {"text": "🗑 Eliminar", "callback_data": "USR_DEL"}
-            ],
-            [
-                {"text": "⬅ Volver", "callback_data": "BACK"}
-            ]
+            [{"text": "➕ Agregar usuario", "callback_data": "ADD_USER"}],
+            [{"text": "📋 Listar usuarios", "callback_data": "LIST_USERS"}],
+            [{"text": "🗑 Eliminar usuario", "callback_data": "DEL_USER"}],
+            [{"text": "⬅ Volver", "callback_data": "BACK_MAIN"}]
         ]
     }
 
@@ -147,7 +140,7 @@ def botones_estado(sid):
                 {"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"},
                 {"text": "🟢 En espera", "callback_data": f"ESTADO_{sid}_318"}
             ],
-            [{"text": "⬅ Volver", "callback_data": f"SEL_{sid}"}]
+            [{"text": "⬅ Volver", "callback_data": "BACK_TO_SERVICE"}]
         ]
     }
 
@@ -219,7 +212,7 @@ class HomeServe:
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
-            obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional"
+            obs = "Pendiente cliente" if estado == "348" else "En espera confirmación"
 
             payload = {
                 "w3exec": "ver_servicioencurso",
@@ -272,23 +265,24 @@ def webhook():
         text = data["message"].get("text", "")
         guardar_usuario(chat)
 
+        if chat in USER_STATE:
+            state = USER_STATE[chat]
+
+            if state == "ADD_USER":
+                guardar_usuario(text)
+                tg_send(chat, f"✅ Usuario añadido: {text}")
+                USER_STATE.pop(chat)
+
+            elif state == "DEL_USER":
+                eliminar_usuario(text)
+                tg_send(chat, f"🗑 Usuario eliminado: {text}")
+                USER_STATE.pop(chat)
+
         if text == "/start":
             tg_send(chat, "🤖 Bot activo", botones())
 
         elif text == "/stats":
             tg_send(chat, f"📊 Usuarios: {contar_usuarios()}")
-
-        elif text == "/users":
-            users = obtener_usuarios()
-            tg_send(chat, "👥 Usuarios:\n" + "\n".join(users[:50]))
-
-        elif text.startswith("/deluser"):
-            try:
-                uid = text.split(" ")[1]
-                eliminar_usuario(uid)
-                tg_send(chat, f"🗑 Usuario eliminado {uid}")
-            except:
-                tg_send(chat, "❌ Uso: /deluser ID")
 
     if "callback_query" in data:
         cq = data["callback_query"]
@@ -304,48 +298,46 @@ def webhook():
             tg_edit(chat, msg_id, "✅ Login OK" if ok else "❌ Error", botones())
 
         elif action == "REFRESH":
-            tg_edit(chat, msg_id, f"🔄 {len(homeserve.obtener())} servicios", botones())
+            tg_edit(chat, msg_id, f"🔄 {len(homeserve.obtener())}", botones())
 
         elif action == "WEB":
-            servicios = homeserve.obtener()
-            tg_edit(chat, msg_id, "\n\n".join(servicios.values()) or "Sin servicios", botones())
+            tg_edit(chat, msg_id, "\n\n".join(homeserve.obtener().values()), botones())
 
         elif action == "USUARIOS":
-            tg_edit(chat, msg_id, f"👥 Total usuarios: {contar_usuarios()}", botones_usuarios())
+            tg_edit(chat, msg_id, f"👥 {contar_usuarios()} usuarios", botones_usuarios())
 
-        elif action == "USR_LIST":
-            users = obtener_usuarios()
-            tg_edit(chat, msg_id, "👥 Lista:\n" + "\n".join(users[:50]), botones_usuarios())
+        elif action == "ADD_USER":
+            USER_STATE[chat] = "ADD_USER"
+            tg_edit(chat, msg_id, "✍️ Envía ID usuario", botones_usuarios())
 
-        elif action == "USR_DEL":
-            users = obtener_usuarios()
-            keyboard = {
-                "inline_keyboard": [[
-                    {"text": u, "callback_data": f"DEL_{u}"}
-                ] for u in users[:30]] + [[{"text": "⬅ Volver", "callback_data": "USUARIOS"}]]
-            }
-            tg_edit(chat, msg_id, "🗑 Selecciona usuario:", keyboard)
+        elif action == "DEL_USER":
+            USER_STATE[chat] = "DEL_USER"
+            tg_edit(chat, msg_id, "🗑 Envía ID a eliminar", botones_usuarios())
 
-        elif action.startswith("DEL_"):
-            uid = action.replace("DEL_", "")
-            eliminar_usuario(uid)
-            tg_edit(chat, msg_id, f"🗑 Eliminado {uid}", botones_usuarios())
+        elif action == "LIST_USERS":
+            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()), botones_usuarios())
+
+        elif action == "BACK_MAIN":
+            tg_edit(chat, msg_id, "🤖 Menú", botones())
 
         elif action == "CAMBIAR":
-            curso = homeserve.obtener_curso()
-            tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(curso))
+            tg_edit(chat, msg_id, "🛠 Servicios", lista_servicios(homeserve.obtener_curso()))
+
+        elif action == "BACK":
+            tg_edit(chat, msg_id, "🤖 Menú", botones())
+
+        elif action == "BACK_TO_SERVICE":
+            tg_edit(chat, msg_id, "🛠 Servicios", lista_servicios(homeserve.obtener_curso()))
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
+            USER_STATE[chat] = sid
             tg_edit(chat, msg_id, f"📌 Servicio {sid}", botones_estado(sid))
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
             tg_edit(chat, msg_id, msg, botones_estado(sid))
-
-        elif action == "BACK":
-            tg_edit(chat, msg_id, "🤖 Menú principal", botones())
 
     return jsonify(ok=True)
 
