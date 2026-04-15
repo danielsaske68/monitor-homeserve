@@ -34,10 +34,7 @@ app = Flask(__name__)
 SERVICIOS_ACTUALES = {}
 WEB_CACHE = {}
 WEB_INDEX = {}
-
-@app.route("/test", methods=["GET"])
-def test():
-    return "OK BOT ACTIVO"
+USER_STATE = {}
 
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
@@ -54,6 +51,13 @@ def guardar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+    conn.commit()
+    conn.close()
+
+def eliminar_usuario(chat_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
     conn.commit()
     conn.close()
 
@@ -100,12 +104,25 @@ def botones():
                 {"text": "🔐 Login", "callback_data": "LOGIN"},
                 {"text": "🔄 Refresh", "callback_data": "REFRESH"}
             ],
-            [{"text": "🌐 Web", "callback_data": "WEB"}],
+            [
+                {"text": "🌐 Web", "callback_data": "WEB"},
+                {"text": "👥 Usuarios", "callback_data": "USUARIOS"}
+            ],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}]
         ]
     }
 
-def botones_servicio(sid, idx, total):
+def botones_usuarios():
+    return {
+        "inline_keyboard": [
+            [{"text": "➕ Agregar usuario", "callback_data": "ADD_USER"}],
+            [{"text": "📋 Listar usuarios", "callback_data": "LIST_USERS"}],
+            [{"text": "🗑 Eliminar usuario", "callback_data": "DEL_USER"}],
+            [{"text": "⬅ Volver", "callback_data": "BACK_MENU"}]
+        ]
+    }
+
+def botones_servicio(sid):
     return {
         "inline_keyboard": [
             [
@@ -236,7 +253,7 @@ def loop():
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}")
+                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
 
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -253,9 +270,21 @@ def webhook():
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
         guardar_usuario(chat)
 
-        if data["message"].get("text") == "/start":
+        if chat in USER_STATE:
+            if USER_STATE[chat] == "ADD_USER":
+                guardar_usuario(text)
+                tg_send(chat, f"✅ Usuario añadido: {text}")
+                USER_STATE.pop(chat)
+
+            elif USER_STATE[chat] == "DEL_USER":
+                eliminar_usuario(text)
+                tg_send(chat, f"🗑 Usuario eliminado: {text}")
+                USER_STATE.pop(chat)
+
+        if text == "/start":
             tg_send(chat, "🤖 Bot activo", botones())
 
     if "callback_query" in data:
@@ -283,26 +312,34 @@ def webhook():
                 tg_edit(chat, msg_id, "Sin servicios", botones())
             else:
                 sid, txt = WEB_CACHE[chat][0]
-                tg_edit(chat, msg_id, txt, botones_servicio(sid, 0, len(WEB_CACHE[chat])))
+                tg_edit(chat, msg_id, txt, botones_servicio(sid))
 
         elif action == "WEB_NEXT":
-            WEB_INDEX[chat] += 1
-            if WEB_INDEX[chat] >= len(WEB_CACHE[chat]):
-                WEB_INDEX[chat] = 0
-
+            WEB_INDEX[chat] = (WEB_INDEX[chat] + 1) % len(WEB_CACHE[chat])
             sid, txt = WEB_CACHE[chat][WEB_INDEX[chat]]
-            tg_edit(chat, msg_id, txt, botones_servicio(sid, 0, 0))
+            tg_edit(chat, msg_id, txt, botones_servicio(sid))
 
         elif action == "WEB_PREV":
-            WEB_INDEX[chat] -= 1
-            if WEB_INDEX[chat] < 0:
-                WEB_INDEX[chat] = len(WEB_CACHE[chat]) - 1
-
+            WEB_INDEX[chat] = (WEB_INDEX[chat] - 1) % len(WEB_CACHE[chat])
             sid, txt = WEB_CACHE[chat][WEB_INDEX[chat]]
-            tg_edit(chat, msg_id, txt, botones_servicio(sid, 0, 0))
+            tg_edit(chat, msg_id, txt, botones_servicio(sid))
 
         elif action == "BACK_MENU":
             tg_edit(chat, msg_id, "Menú", botones())
+
+        elif action == "USUARIOS":
+            tg_edit(chat, msg_id, "👥 Panel de usuarios", botones_usuarios())
+
+        elif action == "ADD_USER":
+            USER_STATE[chat] = "ADD_USER"
+            tg_send(chat, "✍️ Envía el ID del usuario")
+
+        elif action == "DEL_USER":
+            USER_STATE[chat] = "DEL_USER"
+            tg_send(chat, "🗑 Envía el ID a eliminar")
+
+        elif action == "LIST_USERS":
+            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()) or "Sin usuarios", botones_usuarios())
 
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
