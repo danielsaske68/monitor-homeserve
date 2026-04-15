@@ -30,9 +30,11 @@ logger = logging.getLogger("bot")
 
 # ---------------- APP ----------------
 app = Flask(__name__)
+
 @app.route("/test", methods=["GET"])
 def test():
     return "OK BOT ACTIVO"
+
 SERVICIOS_ACTUALES = {}
 PANEL = {}
 
@@ -105,7 +107,7 @@ def botones():
                 {"text": "🔄 Refresh", "callback_data": "REFRESH"}
             ],
             [{"text": "🌐 Web", "callback_data": "WEB"}],
-            [{"text": "🛠 Estado", "callback_data": "CAMBIAR"}]
+            [{"text": "🛠 Cambiar Estado", "callback_data": "CAMBIAR"}]
         ]
     }
 
@@ -115,6 +117,17 @@ def botones_servicio(sid):
             {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
             {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}
         ]]
+    }
+
+def botones_estado(servicios):
+    if not servicios:
+        return {"inline_keyboard": [[{"text": "⚠️ Sin servicios", "callback_data": "NONE"}]]}
+
+    return {
+        "inline_keyboard": [
+            [{"text": sid, "callback_data": f"SEL_{sid}"}]
+            for sid in servicios.keys()
+        ]
     }
 
 # ---------------- HOMESERVE ----------------
@@ -154,6 +167,25 @@ class HomeServe:
             logger.error(f"Error obtener: {e}")
             return {}
 
+    def obtener_curso(self):
+        try:
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
+            r.encoding = "latin-1"
+            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+            servicios = {}
+
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+
+            return servicios
+        except Exception as e:
+            logger.error(f"Error curso: {e}")
+            return {}
+
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
@@ -188,7 +220,7 @@ def loop():
 def webhook():
     data = request.json
 
-    # IMPORTANTÍSIMO: responder callback siempre
+    # CALLBACKS
     if "callback_query" in data:
         cq = data["callback_query"]
         chat = cq["message"]["chat"]["id"]
@@ -212,8 +244,14 @@ def webhook():
             text = "\n\n".join(servicios.values()) if servicios else "Sin servicios"
             tg_edit(chat, msg_id, text, botones())
 
+        # ✅ FIX REAL CAMBIAR ESTADO
         elif action == "CAMBIAR":
-            tg_edit(chat, msg_id, "🛠 Función en uso", botones())
+            servicios = homeserve.obtener_curso()
+            tg_edit(chat, msg_id, "🛠 Selecciona servicio:", botones_estado(servicios), botones())
+
+        elif action.startswith("SEL_"):
+            sid = action.split("_")[1]
+            tg_edit(chat, msg_id, f"🔧 Servicio {sid}", botones_servicio(sid))
 
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
@@ -225,6 +263,7 @@ def webhook():
 
         return jsonify(ok=True)
 
+    # START
     if "message" in data:
         chat = data["message"]["chat"]["id"]
         guardar_usuario(chat)
