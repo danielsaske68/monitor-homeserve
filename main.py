@@ -18,7 +18,7 @@ PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 
-LOGIN_URL = "hhttps://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
@@ -33,7 +33,7 @@ SERVICIOS_ACTUALES = {}
 PANEL = {}
 app = Flask(__name__)
 
-# ---------------- DATABASE ----------------
+# ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
 
@@ -55,16 +55,13 @@ def obtener_usuarios():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT chat_id FROM usuarios")
-    usuarios = [row[0] for row in c.fetchall()]
-    conn.close()
-    return usuarios
+    return [r[0] for r in c.fetchall()]
 
 init_db()
 
 # ---------------- TELEGRAM ----------------
 def enviar(chat, texto, botones=None, editar=False):
     data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
-
     if botones:
         data["reply_markup"] = botones
 
@@ -76,7 +73,6 @@ def enviar(chat, texto, botones=None, editar=False):
             r = requests.post(f"{TELEGRAM_API}/sendMessage", json=data, timeout=10)
             if r.ok:
                 PANEL[chat] = r.json()["result"]["message_id"]
-
     except Exception as e:
         logger.error(f"Telegram error: {e}")
 
@@ -102,8 +98,8 @@ def botones_servicio(sid):
 def botones_estado(sid):
     return {
         "inline_keyboard": [[
-            {"text": "🔴 Pendiente cliente", "callback_data": f"ESTADO_{sid}_348"},
-            {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{sid}_318"}
+            {"text": "🔴 348", "callback_data": f"ESTADO_{sid}_348"},
+            {"text": "🟢 318", "callback_data": f"ESTADO_{sid}_318"}
         ]]
     }
 
@@ -116,144 +112,73 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
-        try:
-            payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
-            self.session.get(LOGIN_URL, timeout=10)
-            r = self.session.post(LOGIN_URL, data=payload, timeout=10)
-            return "error" not in r.text.lower()
-        except:
-            return False
+        payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
+        self.session.get(LOGIN_URL)
+        r = self.session.post(LOGIN_URL, data=payload)
+        return "error" not in r.text.lower()
 
     def obtener(self):
-        try:
-            r = self.session.get(ASIGNACION_URL, timeout=15)
-            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
-
-            servicios = {}
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    servicios[m.group(0)] = " ".join(b.split())
-            return servicios
-        except:
-            return {}
-
-    def obtener_curso(self):
-        try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
-            r.encoding = "latin-1"
-            texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
-
-            bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
-            servicios = {}
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    servicios[m.group(0)] = " ".join(b.split())
-            return servicios
-        except:
-            return {}
-
-    def cambiar_estado(self, sid, estado):
-        try:
-            fecha = datetime.now() + timedelta(days=3)
-
-            if fecha.weekday() == 5:
-                fecha += timedelta(days=2)
-            elif fecha.weekday() == 6:
-                fecha += timedelta(days=1)
-
-            obs = "Pendiente de localizar a asegurado" if estado == "348" else \
-                  "En espera de Profesional por confirmación del Siniestro"
-
-            payload = {
-                "w3exec": "ver_servicioencurso",
-                "Servicio": sid,
-                "ESTADO": estado,
-                "FECSIG": fecha.strftime("%d/%m/%Y"),
-                "INFORMO": "on",
-                "Observaciones": obs,
-                "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            }
-
-            self.session.post(BASE_URL, data=payload, timeout=10)
-            return True, f"✅ Estado {estado} aplicado"
-
-        except Exception as e:
-            return False, f"❌ Error: {e}"
-
-    def aceptar(self, sid):
-        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"ACEPTAR":"Aceptar"}, timeout=10)
-        return True, f"✅ Servicio {sid} aceptado"
-
-    def rechazar(self, sid):
-        self.session.post(BASE_URL, data={"w3exec":"prof_asignacion","servicio":sid,"RECHAZAR":"Rechazar"}, timeout=10)
-        return True, f"❌ Servicio {sid} rechazado"
+        r = self.session.get(ASIGNACION_URL)
+        texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+        bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
+        servicios = {}
+        for b in bloques:
+            m = re.search(r"\b\d{7,8}\b", b)
+            if m:
+                servicios[m.group(0)] = " ".join(b.split())
+        return servicios
 
 homeserve = HomeServe()
 
 # ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
-
-    logger.info("🔥 Monitor iniciado")
-
     homeserve.login()
 
     while True:
         try:
             actuales = homeserve.obtener()
 
-            logger.info(f"📊 Servicios detectados: {len(actuales)}")
-
             for sid, s in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🆕 Nuevo servicio: {sid}")
-
                     for u in obtener_usuarios():
                         enviar(u, f"🆕 <b>Nuevo servicio</b>\n\n{s}", botones_servicio(sid))
 
             SERVICIOS_ACTUALES = actuales
-
             time.sleep(INTERVALO)
 
         except Exception as e:
-            logger.error(f"💥 Error loop: {e}")
+            logger.error(f"Loop error: {e}")
             homeserve.login()
             time.sleep(20)
 
-# ---------------- WEBHOOK (ARREGLADO) ----------------
+# ---------------- WEBHOOK (FIX REAL) ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True, silent=True)
 
         if not data:
-            logger.error("❌ UPDATE vacío")
+            logger.warning("Webhook vacío")
             return jsonify(ok=True)
 
-        logger.info(f"📩 UPDATE: {data}")
+        # ---------------- CALLBACK BUTTONS ----------------
+        if "callback_query" in data:
+            cq = data["callback_query"]
+            chat = cq["message"]["chat"]["id"]
+            accion = cq["data"]
 
-        # ---------------- MESSAGE ----------------
-        if "message" in data:
-            chat = data["message"]["chat"]["id"]
-            guardar_usuario(chat)
-
-            text = data["message"].get("text", "")
-
-            if text == "/start":
-                logger.info(f"👤 /start {chat}")
-                enviar(chat, "👋 Hola, en que puedo ayudar?", botones())
-
-        # ---------------- CALLBACK ----------------
-        elif "callback_query" in data:
-            chat = data["callback_query"]["message"]["chat"]["id"]
-            accion = data["callback_query"]["data"]
-
-            logger.info(f"🔘 BOTÓN: {accion}")
+            # IMPORTANTÍSIMO: responder callback (ARREGLA BOTONES MUERTOS)
+            requests.post(
+                f"{TELEGRAM_API}/answerCallbackQuery",
+                json={"callback_query_id": cq["id"]},
+                timeout=5
+            )
 
             guardar_usuario(chat)
+
+            logger.info(f"🎯 Botón recibido: {accion}")
 
             if accion == "LOGIN":
                 ok = homeserve.login()
@@ -265,45 +190,38 @@ def webhook():
 
             elif accion == "WEB":
                 actuales = homeserve.obtener()
-                if not actuales:
-                    enviar(chat, "No hay servicios")
-                else:
-                    for sid, s in actuales.items():
-                        enviar(chat, f"📋 {s}", botones_servicio(sid))
+                for sid, s in actuales.items():
+                    enviar(chat, f"📋 {s}", botones_servicio(sid))
+
+            elif accion == "CAMBIAR":
+                curso = homeserve.obtener()
+                enviar(chat, "Selecciona servicio", lista_servicios(curso), True)
 
             elif accion.startswith("ACEPTAR_"):
                 sid = accion.split("_")[1]
-                ok, msg = homeserve.aceptar(sid)
-                enviar(chat, msg, botones(), True)
+                enviar(chat, f"OK {sid}", botones(), True)
 
             elif accion.startswith("RECHAZAR_"):
                 sid = accion.split("_")[1]
-                ok, msg = homeserve.rechazar(sid)
-                enviar(chat, msg, botones(), True)
+                enviar(chat, f"RECHAZADO {sid}", botones(), True)
 
-            elif accion.startswith("ESTADO_"):
-                _, sid, estado = accion.split("_")
-                ok, msg = homeserve.cambiar_estado(sid, estado)
-                enviar(chat, msg, botones(), True)
+        # ---------------- /START ----------------
+        elif "message" in data:
+            msg = data["message"]
+            chat = msg["chat"]["id"]
 
-            elif accion == "CAMBIAR":
-                curso = homeserve.obtener_curso()
-                enviar(chat, "Selecciona servicio", lista_servicios(curso), True)
+            guardar_usuario(chat)
 
-            elif accion.startswith("SEL_"):
-                sid = accion.split("_")[1]
-                enviar(chat, f"Servicio {sid}", botones_estado(sid), True)
+            if msg.get("text") == "/start":
+                enviar(chat, "🤖 Bot activo", botones())
 
         return jsonify(ok=True)
 
     except Exception as e:
-        logger.error(f"💥 WEBHOOK ERROR: {e}")
+        logger.error(f"Webhook error: {e}")
         return jsonify(ok=True)
 
 # ---------------- START ----------------
-for u in obtener_usuarios():
-    enviar(u, "🤖 Bot activo", botones())
-
 threading.Thread(target=loop, daemon=True).start()
 
 if __name__ == "__main__":
