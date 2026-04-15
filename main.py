@@ -33,6 +33,7 @@ app = Flask(__name__)
 
 SERVICIOS_ACTUALES = {}
 PANEL = {}
+USER_STATE = {}
 
 @app.route("/test", methods=["GET"])
 def test():
@@ -115,6 +116,19 @@ def botones():
                 {"text": "👥 Usuarios", "callback_data": "USUARIOS"}
             ],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}]
+        ]
+    }
+
+def botones_usuarios():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📋 Ver lista", "callback_data": "USR_LIST"},
+                {"text": "🗑 Eliminar", "callback_data": "USR_DEL"}
+            ],
+            [
+                {"text": "⬅ Volver", "callback_data": "BACK"}
+            ]
         ]
     }
 
@@ -205,11 +219,7 @@ class HomeServe:
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
-            obs = (
-                "Pendiente de localizar a asegurado"
-                if estado == "348"
-                else "En espera de Profesional por confirmación"
-            )
+            obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional"
 
             payload = {
                 "w3exec": "ver_servicioencurso",
@@ -289,24 +299,38 @@ def webhook():
 
         tg_answer(cid)
 
-        # ---------------- MAIN MENU ----------------
         if action == "LOGIN":
             ok = homeserve.login()
             tg_edit(chat, msg_id, "✅ Login OK" if ok else "❌ Error", botones())
 
         elif action == "REFRESH":
-            servicios = homeserve.obtener()
-            tg_edit(chat, msg_id, f"🔄 {len(servicios)} servicios", botones())
+            tg_edit(chat, msg_id, f"🔄 {len(homeserve.obtener())} servicios", botones())
 
         elif action == "WEB":
             servicios = homeserve.obtener()
-            text = "\n\n".join(servicios.values()) if servicios else "Sin servicios"
-            tg_edit(chat, msg_id, text, botones())
+            tg_edit(chat, msg_id, "\n\n".join(servicios.values()) or "Sin servicios", botones())
 
         elif action == "USUARIOS":
-            tg_edit(chat, msg_id, f"👥 Total usuarios: {contar_usuarios()}", botones())
+            tg_edit(chat, msg_id, f"👥 Total usuarios: {contar_usuarios()}", botones_usuarios())
 
-        # ---------------- CAMBIAR ESTADO ----------------
+        elif action == "USR_LIST":
+            users = obtener_usuarios()
+            tg_edit(chat, msg_id, "👥 Lista:\n" + "\n".join(users[:50]), botones_usuarios())
+
+        elif action == "USR_DEL":
+            users = obtener_usuarios()
+            keyboard = {
+                "inline_keyboard": [[
+                    {"text": u, "callback_data": f"DEL_{u}"}
+                ] for u in users[:30]] + [[{"text": "⬅ Volver", "callback_data": "USUARIOS"}]]
+            }
+            tg_edit(chat, msg_id, "🗑 Selecciona usuario:", keyboard)
+
+        elif action.startswith("DEL_"):
+            uid = action.replace("DEL_", "")
+            eliminar_usuario(uid)
+            tg_edit(chat, msg_id, f"🗑 Eliminado {uid}", botones_usuarios())
+
         elif action == "CAMBIAR":
             curso = homeserve.obtener_curso()
             tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(curso))
