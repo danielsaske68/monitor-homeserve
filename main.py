@@ -16,6 +16,7 @@ load_dotenv()
 USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
@@ -107,6 +108,25 @@ def botones_estado(sid):
 def lista_servicios(servicios):
     return {"inline_keyboard": [[{"text": sid, "callback_data": f"SEL_{sid}"}] for sid in servicios]}
 
+# ---------------- WEBHOOK AUTO ----------------
+def set_webhook():
+    try:
+        url = f"{TELEGRAM_API}/setWebhook?url={WEBHOOK_URL}"
+        r = requests.get(url, timeout=10)
+        logger.info(f"🌐 Webhook configurado: {r.text}")
+    except Exception as e:
+        logger.error(f"❌ Error webhook: {e}")
+
+def mantener_webhook():
+    while True:
+        try:
+            set_webhook()
+            logger.info("♻️ Webhook refrescado")
+            time.sleep(300)
+        except Exception as e:
+            logger.error(f"Error webhook loop: {e}")
+            time.sleep(60)
+
 # ---------------- HOMESERVE ----------------
 class HomeServe:
     def __init__(self):
@@ -114,6 +134,7 @@ class HomeServe:
 
     def login(self):
         try:
+            logger.info("🔐 Login HomeServe...")
             payload = {"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"}
             self.session.get(LOGIN_URL, timeout=10)
             r = self.session.post(LOGIN_URL, data=payload, timeout=10)
@@ -125,6 +146,12 @@ class HomeServe:
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             texto = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
+            # detectar sesión muerta
+            if "login" in texto.lower() or "password" in texto.lower():
+                logger.warning("⚠️ Sesión expirada")
+                return None
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", texto)
             servicios = {}
             for b in bloques:
@@ -133,7 +160,7 @@ class HomeServe:
                     servicios[m.group(0)] = " ".join(b.split())
             return servicios
         except:
-            return {}
+            return None
 
     def obtener_curso(self):
         try:
@@ -153,7 +180,6 @@ class HomeServe:
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
-
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
@@ -192,13 +218,18 @@ homeserve = HomeServe()
 def loop():
     global SERVICIOS_ACTUALES
 
-    logger.info("🔥 Iniciando monitor...")
-
+    logger.info("🔥 Monitor iniciado")
     homeserve.login()
 
     while True:
         try:
             actuales = homeserve.obtener()
+
+            if actuales is None:
+                logger.warning("🔄 Re-login automático")
+                homeserve.login()
+                time.sleep(5)
+                continue
 
             logger.info(f"📊 Servicios detectados: {len(actuales)}")
 
@@ -220,7 +251,7 @@ def loop():
             time.sleep(INTERVALO)
 
         except Exception as e:
-            logger.error(f"💥 Error: {e}")
+            logger.error(f"💥 Error loop: {e}")
             homeserve.login()
             time.sleep(20)
 
@@ -246,11 +277,11 @@ def webhook():
             enviar(chat, "✅ Login OK" if ok else "❌ Error", botones(), True)
 
         elif accion == "REFRESH":
-            servicios = homeserve.obtener()
+            servicios = homeserve.obtener() or {}
             enviar(chat, f"🔄 {len(servicios)} servicios encontrados", botones(), True)
 
         elif accion == "WEB":
-            actuales = homeserve.obtener()
+            actuales = homeserve.obtener() or {}
             if not actuales:
                 enviar(chat, "No hay servicios")
             else:
@@ -283,7 +314,10 @@ def webhook():
     return jsonify(ok=True)
 
 # ---------------- INICIO ----------------
+set_webhook()
+
 threading.Thread(target=loop, daemon=True).start()
+threading.Thread(target=mantener_webhook, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
