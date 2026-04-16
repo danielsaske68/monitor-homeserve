@@ -17,8 +17,6 @@ USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
-
-# 🔥 IMPORTANTE (pon esto en Railway variables)
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
@@ -31,7 +29,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("main")
 
-# 🔥 sesión reutilizable (MUCHO más rápido)
+# 🔥 sesión reutilizable (mejora velocidad)
 http = requests.Session()
 
 # ---------------- VARIABLES ----------------
@@ -82,6 +80,16 @@ def set_webhook():
         logger.error(f"Error webhook: {e}")
 
 # ---------------- TELEGRAM ----------------
+def responder_callback(callback_id):
+    try:
+        http.post(
+            f"{TELEGRAM_API}/answerCallbackQuery",
+            json={"callback_query_id": callback_id},
+            timeout=5
+        )
+    except:
+        pass
+
 def enviar(chat, texto, botones=None, editar=False):
     data = {"chat_id": chat, "text": texto, "parse_mode": "HTML"}
 
@@ -250,8 +258,12 @@ def webhook():
             enviar(chat, "👋 Hola, en que puedo ayudar?", botones())
 
     if "callback_query" in data:
-        chat = data["callback_query"]["message"]["chat"]["id"]
-        accion = data["callback_query"]["data"]
+        cq = data["callback_query"]
+        chat = cq["message"]["chat"]["id"]
+        accion = cq["data"]
+
+        responder_callback(cq["id"])  # 🔥 FIX BOTONES
+
         guardar_usuario(chat)
 
         if accion == "LOGIN":
@@ -291,8 +303,7 @@ def webhook():
 
 # ---------------- START ----------------
 set_webhook()
-
 threading.Thread(target=loop, daemon=True).start()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
