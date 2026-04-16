@@ -282,23 +282,20 @@ def set_webhook():
 def webhook():
     data = request.json
 
+    logger.info(f"📩 UPDATE RECIBIDO: {data}")  # 👈 DEBUG GLOBAL
+
     if "message" in data:
         chat = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
         guardar_usuario(chat)
 
-        if chat in USER_STATE:
-            if USER_STATE[chat] == "ADD_USER":
-                guardar_usuario(text)
-                tg_send(chat, f"✅ Usuario añadido: {text}")
-                USER_STATE.pop(chat)
+        logger.info(f"💬 MENSAJE: chat={chat} text={text}")  # 👈 DEBUG
 
-            elif USER_STATE[chat] == "DEL_USER":
-                eliminar_usuario(text)
-                tg_send(chat, f"🗑 Usuario eliminado: {text}")
-                USER_STATE.pop(chat)
+        if chat in USER_STATE:
+            logger.info(f"🧠 USER_STATE[{chat}] = {USER_STATE[chat]}")
 
         if text == "/start":
+            logger.info(f"🚀 /start recibido de {chat}")
             tg_send(chat, "🤖 Bot activo", botones())
 
     if "callback_query" in data:
@@ -307,19 +304,29 @@ def webhook():
         msg_id = cq["message"]["message_id"]
         action = cq["data"]
 
+        logger.info(f"🔥 CALLBACK: chat={chat} action={action}")  # 👈 CRÍTICO
+
         tg_answer(cq["id"])
         guardar_usuario(chat)
 
+        # ---------------- LOGIN ----------------
         if action == "LOGIN":
+            logger.info("🔐 LOGIN pulsado")
             ok = homeserve.login()
             tg_edit(chat, msg_id, "✅ Login OK" if ok else "❌ Error", botones())
 
         elif action == "REFRESH":
-            tg_edit(chat, msg_id, f"🔄 {len(homeserve.obtener())} servicios", botones())
+            logger.info("🔄 REFRESH pulsado")
+            servicios = homeserve.obtener()
+            logger.info(f"📊 servicios encontrados: {len(servicios)}")
+            tg_edit(chat, msg_id, f"🔄 {len(servicios)} servicios", botones())
 
         elif action == "WEB":
-            servicios = homeserve.obtener()
-            WEB_CACHE[chat] = list(servicios.items())
+            logger.info("🌐 WEB pulsado")
+            actuales = homeserve.obtener()
+            logger.info(f"📦 WEB servicios: {len(actuales)}")
+
+            WEB_CACHE[chat] = list(actuales.items())
             WEB_INDEX[chat] = 0
 
             if not WEB_CACHE[chat]:
@@ -329,52 +336,61 @@ def webhook():
                 tg_edit(chat, msg_id, txt, botones_servicio(sid))
 
         elif action == "WEB_NEXT":
+            logger.info("➡ NEXT")
             WEB_INDEX[chat] = (WEB_INDEX[chat] + 1) % len(WEB_CACHE[chat])
             sid, txt = WEB_CACHE[chat][WEB_INDEX[chat]]
             tg_edit(chat, msg_id, txt, botones_servicio(sid))
 
         elif action == "WEB_PREV":
+            logger.info("⬅ PREV")
             WEB_INDEX[chat] = (WEB_INDEX[chat] - 1) % len(WEB_CACHE[chat])
             sid, txt = WEB_CACHE[chat][WEB_INDEX[chat]]
             tg_edit(chat, msg_id, txt, botones_servicio(sid))
 
         elif action == "BACK_MENU":
+            logger.info("🏠 BACK MENU")
             tg_edit(chat, msg_id, "Menú", botones())
 
         elif action == "USUARIOS":
+            logger.info("👥 USUARIOS")
             tg_edit(chat, msg_id, "👥 Panel de usuarios", botones_usuarios())
 
         elif action == "ADD_USER":
+            logger.info("➕ ADD USER")
             USER_STATE[chat] = "ADD_USER"
             tg_send(chat, "✍️ Envía el ID del usuario")
 
         elif action == "DEL_USER":
+            logger.info("🗑 DEL USER")
             USER_STATE[chat] = "DEL_USER"
             tg_send(chat, "🗑 Envía el ID a eliminar")
 
-        elif action == "LIST_USERS":
-            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()) or "Sin usuarios", botones_usuarios())
-
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
-            ok, msg = homeserve.cambiar_estado(sid, "318")
-            tg_edit(chat, msg_id, f"✅ {msg}", botones())
+            logger.info(f"✅ ACEPTAR {sid}")
+            ok, msg = homeserve.aceptar(sid)
+            tg_edit(chat, msg_id, msg, botones())
 
         elif action.startswith("RECHAZAR_"):
             sid = action.split("_")[1]
-            ok, msg = homeserve.cambiar_estado(sid, "348")
-            tg_edit(chat, msg_id, f"❌ {msg}", botones())
+            logger.info(f"❌ RECHAZAR {sid}")
+            ok, msg = homeserve.rechazar(sid)
+            tg_edit(chat, msg_id, msg, botones())
 
         elif action == "CAMBIAR":
+            logger.info("🛠 CAMBIAR ESTADO")
             curso = homeserve.obtener_curso()
+            logger.info(f"📌 curso servicios: {len(curso)}")
             tg_edit(chat, msg_id, "🛠 Selecciona servicio:", lista_servicios(curso))
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
+            logger.info(f"📍 SELECT {sid}")
             tg_edit(chat, msg_id, f"📌 Servicio {sid}", botones_estado(sid))
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
+            logger.info(f"⚙️ ESTADO {sid} -> {estado}")
             ok, msg = homeserve.cambiar_estado(sid, estado)
             tg_edit(chat, msg_id, msg, botones_estado(sid))
 
