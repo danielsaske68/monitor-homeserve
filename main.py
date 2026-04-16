@@ -130,8 +130,8 @@ def botones_estado(sid):
     return {
         "inline_keyboard": [
             [
-                {"text": "🔴 Cliente", "callback_data": f"ESTADO_{sid}_348"},
-                {"text": "🟢 Espera", "callback_data": f"ESTADO_{sid}_318"}
+                {"text": "🔴 En espera de cliente", "callback_data": f"ESTADO_{sid}_348"},
+                {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{sid}_318"}
             ],
             [{"text": "⬅ Volver", "callback_data": "CAMBIAR"}]
         ]
@@ -277,7 +277,7 @@ def webhook():
 
         if action == "LOGIN":
             ok = homeserve.login()
-            tg_edit(chat, msg_id, "Login OK" if ok else "Error", botones())
+            tg_edit(chat, msg_id, "✅ Login OK" if ok else "Error", botones())
 
         elif action == "REFRESH":
             tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
