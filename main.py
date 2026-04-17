@@ -25,7 +25,7 @@ SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exe
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
 app = Flask(__name__)
@@ -111,7 +111,7 @@ def botones_usuarios():
             [{"text": "➕ Agregar", "callback_data": "ADD_USER"}],
             [{"text": "🗑 Eliminar", "callback_data": "DEL_USER"}],
             [{"text": "📋 Listar", "callback_data": "LIST_USERS"}],
-            [{"text": "⬅ Volver", "callback_data": "BACK_MENU"}]
+            [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
         ]
     }
 
@@ -122,7 +122,7 @@ def botones_servicio(sid):
                 {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
                 {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}
             ],
-            [{"text": "⬅ Volver", "callback_data": "WEB"}]
+            [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
 
@@ -130,10 +130,10 @@ def botones_estado(sid):
     return {
         "inline_keyboard": [
             [
-                {"text": "🔴 En espera de cliente", "callback_data": f"ESTADO_{sid}_348"},
-                {"text": "🟢 En espera por confirmar", "callback_data": f"ESTADO_{sid}_318"}
+                {"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"},
+                {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}
             ],
-            [{"text": "⬅ Volver", "callback_data": "CAMBIAR"}]
+            [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
         ]
     }
 
@@ -201,21 +201,38 @@ class HomeServe:
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
-            obs = "Pendiente cliente" if estado == "348" else "En espera"
+            fecha_str = fecha.strftime("%d/%m/%Y")
 
-            self.session.post(BASE_URL, data={
+            if estado == "348":
+                obs = "Pendiente de localizar a asegurado"
+            else:
+                obs = "En espera de Profesional por confirmación del Siniestro"
+
+            payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": sid,
+                "Pag": "1",  # 🔥 FIX CLAVE
                 "ESTADO": estado,
-                "FECSIG": fecha.strftime("%d/%m/%Y"),
+                "FECSIG": fecha_str,
                 "INFORMO": "on",
                 "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            }, timeout=10)
+            }
 
-            return True, f"Estado {estado} aplicado"
+            r = self.session.post(BASE_URL, data=payload, timeout=10)
+            text = r.text.lower()
+
+            if obs.lower() in text:
+                return True, f"✅ Estado {estado} aplicado ({fecha_str})"
+            elif "estado actual" in text:
+                return True, f"✅ Estado cambiado ({fecha_str})"
+            elif "illegal command" in text:
+                return False, "❌ Error comando ilegal"
+            else:
+                return False, "⚠️ No confirmado"
+
         except Exception as e:
-            return False, str(e)
+            return False, f"❌ Error: {e}"
 
 homeserve = HomeServe()
 
@@ -293,18 +310,6 @@ def webhook():
             else:
                 tg_edit(chat, msg_id, "Sin servicios", botones())
 
-        elif action == "WEB_NEXT":
-            if chat in WEB_CACHE:
-                WEB_INDEX[chat] = (WEB_INDEX[chat] + 1) % len(WEB_CACHE[chat])
-                sid, txt = WEB_CACHE[chat][WEB_INDEX[chat]]
-                tg_edit(chat, msg_id, txt, botones_servicio(sid))
-
-        elif action == "WEB_PREV":
-            if chat in WEB_CACHE:
-                WEB_INDEX[chat] = (WEB_INDEX[chat] - 1) % len(WEB_CACHE[chat])
-                sid, txt = WEB_CACHE[chat][WEB_INDEX[chat]]
-                tg_edit(chat, msg_id, txt, botones_servicio(sid))
-
         elif action == "BACK_MENU":
             tg_edit(chat, msg_id, "Menú", botones())
 
@@ -325,12 +330,12 @@ def webhook():
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
             homeserve.cambiar_estado(sid, "318")
-            tg_edit(chat, msg_id, "Aceptado", botones())
+            tg_edit(chat, msg_id, "✅ Aceptado", botones())
 
         elif action.startswith("RECHAZAR_"):
             sid = action.split("_")[1]
             homeserve.cambiar_estado(sid, "348")
-            tg_edit(chat, msg_id, "Rechazado", botones())
+            tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
         elif action == "CAMBIAR":
             curso = homeserve.obtener_curso()
@@ -342,8 +347,8 @@ def webhook():
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
-            homeserve.cambiar_estado(sid, estado)
-            tg_edit(chat, msg_id, "Estado actualizado", botones_estado(sid))
+            ok, msg = homeserve.cambiar_estado(sid, estado)
+            tg_edit(chat, msg_id, msg, botones_estado(sid))
 
     return jsonify(ok=True)
 
