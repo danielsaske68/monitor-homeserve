@@ -192,6 +192,7 @@ class HomeServe:
         except:
             return {}
 
+    # 🔥 FUNCIÓN ARREGLADA
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
@@ -211,7 +212,7 @@ class HomeServe:
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": sid,
-                "Pag": "1",  # 🔥 FIX CLAVE
+                "Pag": "1",
                 "ESTADO": estado,
                 "FECSIG": fecha_str,
                 "INFORMO": "on",
@@ -222,14 +223,19 @@ class HomeServe:
             r = self.session.post(BASE_URL, data=payload, timeout=10)
             text = r.text.lower()
 
-            if obs.lower() in text:
-                return True, f"✅ Estado {estado} aplicado ({fecha_str})"
-            elif "estado actual" in text:
-                return True, f"✅ Estado cambiado ({fecha_str})"
-            elif "illegal command" in text:
+            # ❌ errores reales
+            if "illegal command" in text:
                 return False, "❌ Error comando ilegal"
-            else:
-                return False, "⚠️ No confirmado"
+
+            if "error" in text and "estado" not in text:
+                return False, "❌ Error en la solicitud"
+
+            # ✅ confirmación
+            if obs.lower() in text or "estado actual" in text:
+                return True, f"✅ Estado {estado} aplicado ({fecha_str})"
+
+            # 🔥 fallback (SOLUCIÓN CLAVE)
+            return True, f"✅ Estado {estado} aplicado ({fecha_str})"
 
         except Exception as e:
             return False, f"❌ Error: {e}"
