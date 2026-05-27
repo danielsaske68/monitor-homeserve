@@ -36,6 +36,9 @@ WEB_CACHE = {}
 WEB_INDEX = {}
 USER_STATE = {}
 
+# 👉 NUEVO STATE (captura manual de servicios)
+CAPTURA_STATE = {}
+
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
@@ -101,7 +104,8 @@ def botones():
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
             [{"text": "🌐 Web", "callback_data": "WEB"},
              {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
-            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}]
+            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"},
+             {"text": "➕ Capturar servicios", "callback_data": "CAPTURAR"}]
         ]
     }
 
@@ -256,6 +260,20 @@ def loop():
 
 threading.Thread(target=loop, daemon=True).start()
 
+# ---------------- NUEVA FUNCIÓN (CAPTURA MANUAL) ----------------
+def iniciar_captura(chat):
+    CAPTURA_STATE[chat] = True
+    tg_send(chat, "✍️ Envía servicios uno por uno. Escribe TERMINAR para finalizar.")
+
+def procesar_captura(chat, text):
+    if text.upper() == "TERMINAR":
+        CAPTURA_STATE.pop(chat, None)
+        tg_send(chat, "✅ Captura finalizada")
+    else:
+        with open(f"/data/captura_{chat}.txt", "a") as f:
+            f.write(text + "\n")
+        tg_send(chat, "➕ Guardado")
+
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
@@ -266,19 +284,13 @@ def webhook():
         text = data["message"].get("text", "")
         guardar_usuario(chat)
 
+        # 👉 NUEVO FLUJO CAPTURA
+        if chat in CAPTURA_STATE:
+            procesar_captura(chat, text)
+            return jsonify(ok=True)
+
         if text == "/start":
             tg_send(chat, "🤖 Bot activo", botones())
-
-        if chat in USER_STATE:
-            if USER_STATE[chat] == "ADD_USER":
-                guardar_usuario(text)
-                tg_send(chat, "✅ Usuario añadido")
-                USER_STATE.pop(chat)
-
-            elif USER_STATE[chat] == "DEL_USER":
-                eliminar_usuario(text)
-                tg_send(chat, "🗑 Usuario eliminado")
-                USER_STATE.pop(chat)
 
     if "callback_query" in data:
         cq = data["callback_query"]
@@ -291,7 +303,7 @@ def webhook():
 
         if action == "LOGIN":
             ok = homeserve.login()
-            tg_edit(chat, msg_id, "✅ Login OK" if ok else "Error", botones())
+            tg_edit(chat, msg_id, "Login OK" if ok else "Error", botones())
 
         elif action == "REFRESH":
             tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
@@ -304,26 +316,17 @@ def webhook():
             else:
                 tg_edit(chat, msg_id, "Sin servicios", botones())
 
+        elif action == "CAPTURAR":
+            iniciar_captura(chat)
+
         elif action == "BACK_MENU":
             tg_edit(chat, msg_id, "Menú", botones())
 
         elif action == "USUARIOS":
             tg_edit(chat, msg_id, "Usuarios", botones_usuarios())
 
-        elif action == "ADD_USER":
-            USER_STATE[chat] = "ADD_USER"
-            tg_send(chat, "Envía ID")
-
-        elif action == "DEL_USER":
-            USER_STATE[chat] = "DEL_USER"
-            tg_send(chat, "Envía ID")
-
-        elif action == "LIST_USERS":
-            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()) or "Vacío", botones_usuarios())
-
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
-
             try:
                 url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
                 r = homeserve.session.get(url, timeout=15)
