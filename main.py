@@ -36,8 +36,8 @@ WEB_CACHE = {}
 WEB_INDEX = {}
 USER_STATE = {}
 
-# NUEVO STATE
-SERV_STATE = {}  # control agregar servicios en texto
+# NUEVO STATE (SERVICIOS TXT)
+SERV_STATE = {}
 
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
@@ -208,6 +208,8 @@ class HomeServe:
         except:
             return {}
 
+homeserve = HomeServe()
+
 # ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
@@ -231,8 +233,6 @@ def loop():
             homeserve.login()
             time.sleep(10)
 
-homeserve = HomeServe()
-
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
@@ -245,6 +245,7 @@ def webhook():
 
         guardar_usuario(chat)
 
+        # -------- SERVICIOS TXT CONTROL --------
         if chat in SERV_STATE:
             if text.upper() == "TERMINAR":
                 SERV_STATE.pop(chat, None)
