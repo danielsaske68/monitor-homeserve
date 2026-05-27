@@ -36,67 +36,70 @@ WEB_CACHE = {}
 WEB_INDEX = {}
 USER_STATE = {}
 
-# ---------------- TXT STATE ----------------
-TXT_PATH = "/data/servicios.txt"
-TXT_STATE = {}
+# NUEVO STATE
+SERV_STATE = {}  # control agregar servicios en texto
 
+# ---------------- DB ----------------
+DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
 
-def init_txt():
-    if not os.path.exists(TXT_PATH):
-        with open(TXT_PATH, "w") as f:
-            f.write("")
-
-def leer_txt():
-    with open(TXT_PATH, "r") as f:
-        return [x.strip() for x in f.readlines() if x.strip()]
-
-def agregar_txt(valor):
-    with open(TXT_PATH, "a") as f:
-        f.write(str(valor) + "\n")
-
-def limpiar_txt():
-    with open(TXT_PATH, "w") as f:
-        f.write("")
-
 def init_db():
-    conn = sqlite3.connect("/data/usuarios.db")
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS usuarios (chat_id TEXT PRIMARY KEY)")
     conn.commit()
     conn.close()
 
 def guardar_usuario(chat_id):
-    conn = sqlite3.connect("/data/usuarios.db")
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
     conn.commit()
     conn.close()
 
 def obtener_usuarios():
-    conn = sqlite3.connect("/data/usuarios.db")
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT chat_id FROM usuarios")
     return [r[0] for r in c.fetchall()]
 
 def eliminar_usuario(chat_id):
-    conn = sqlite3.connect("/data/usuarios.db")
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
     conn.commit()
     conn.close()
 
 init_db()
-init_txt()
+
+# ---------------- FILE SERVICES ----------------
+def file_path(chat):
+    return f"/data/servicios_{chat}.txt"
+
+def add_service(chat, text):
+    with open(file_path(chat), "a", encoding="utf-8") as f:
+        f.write(text + "\n")
+
+def read_services(chat):
+    try:
+        with open(file_path(chat), "r", encoding="utf-8") as f:
+            return f.read()
+    except:
+        return ""
+
+def clear_services(chat):
+    open(file_path(chat), "w").close()
 
 # ---------------- TELEGRAM ----------------
 def tg_send(chat, text, markup=None):
+    logger.info(f"SEND -> {chat}: {text}")
     payload = {"chat_id": chat, "text": text, "parse_mode": "HTML"}
     if markup:
         payload["reply_markup"] = markup
     requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
 
 def tg_edit(chat, msg_id, text, markup=None):
+    logger.info(f"EDIT -> {chat}: {text}")
     payload = {
         "chat_id": chat,
         "message_id": msg_id,
@@ -107,8 +110,11 @@ def tg_edit(chat, msg_id, text, markup=None):
     requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
 
 def tg_answer(callback_id):
-    requests.post(f"{TELEGRAM_API}/answerCallbackQuery",
-                  json={"callback_query_id": callback_id}, timeout=10)
+    requests.post(
+        f"{TELEGRAM_API}/answerCallbackQuery",
+        json={"callback_query_id": callback_id},
+        timeout=10
+    )
 
 # ---------------- BOTONES ----------------
 def botones():
@@ -119,18 +125,50 @@ def botones():
             [{"text": "🌐 Web", "callback_data": "WEB"},
              {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "📦 Número de servicios", "callback_data": "MENU_TXT"}]
+            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}]
         ]
     }
 
-def botones_txt():
+def botones_num_serv():
     return {
         "inline_keyboard": [
-            [{"text": "➕ Agregar servicio", "callback_data": "ADD_TXT"}],
-            [{"text": "🗑 Eliminar todo", "callback_data": "DEL_TXT"}],
-            [{"text": "📄 Ver servicios", "callback_data": "VIEW_TXT"}],
-            [{"text": "⬇️ Descargar TXT", "callback_data": "DOWN_TXT"}],
+            [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
+            [{"text": "🗑 Eliminar archivo", "callback_data": "DEL_SERV"}],
+            [{"text": "📥 Descargar", "callback_data": "DOWN_SERV"}],
+            [{"text": "👁 Ver", "callback_data": "VIEW_SERV"}],
             [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+        ]
+    }
+
+def botones_usuarios():
+    return {
+        "inline_keyboard": [
+            [{"text": "➕ Agregar", "callback_data": "ADD_USER"}],
+            [{"text": "🗑 Eliminar", "callback_data": "DEL_USER"}],
+            [{"text": "📋 Listar", "callback_data": "LIST_USERS"}],
+            [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+        ]
+    }
+
+def botones_servicio(sid):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
+                {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}
+            ],
+            [{"text": "⬅️ Volver", "callback_data": "WEB"}]
+        ]
+    }
+
+def botones_estado(sid):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"},
+                {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}
+            ],
+            [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
         ]
     }
 
@@ -147,8 +185,10 @@ class HomeServe:
                 "PASSW": PASSWORD,
                 "BTN": "Aceptar"
             }, timeout=10)
+            logger.info("LOGIN OK" if "error" not in r.text.lower() else "LOGIN FAIL")
             return "error" not in r.text.lower()
-        except:
+        except Exception as e:
+            logger.error(e)
             return False
 
     def obtener(self):
@@ -162,15 +202,16 @@ class HomeServe:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
+
+            logger.info(f"SERVICIOS: {len(servicios)}")
             return servicios
         except:
             return {}
 
-homeserve = HomeServe()
-
 # ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
+
     homeserve.login()
 
     while True:
@@ -180,34 +221,37 @@ def loop():
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", None)
+                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
 
             SERVICIOS_ACTUALES = actuales
+            time.sleep(INTERVALO)
 
         except Exception as e:
             logger.error(e)
             homeserve.login()
+            time.sleep(10)
 
-        time.sleep(INTERVALO)
+homeserve = HomeServe()
 
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
     data = request.json
+    logger.info(f"UPDATE: {data}")
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
+
         guardar_usuario(chat)
 
-        # ➕ input TXT
-        if chat in TXT_STATE:
-            if TXT_STATE[chat] == "ADD":
-                agregar_txt(text)
-                tg_send(chat, "✅ agregado. Escribe otro o /done para terminar")
-            if text == "/done":
-                TXT_STATE.pop(chat, None)
-                tg_send(chat, "✔️ terminado")
+        if chat in SERV_STATE:
+            if text.upper() == "TERMINAR":
+                SERV_STATE.pop(chat, None)
+                tg_send(chat, "✅ Finalizado")
+            else:
+                add_service(chat, text)
+                tg_send(chat, "➕ añadido")
 
         if text == "/start":
             tg_send(chat, "🤖 Bot activo", botones())
@@ -220,26 +264,26 @@ def webhook():
 
         tg_answer(cq["id"])
 
-        if action == "MENU_TXT":
-            tg_edit(chat, msg_id, "📦 Menú servicios TXT", botones_txt())
+        if action == "NUM_SERV":
+            tg_edit(chat, msg_id, "📦 Servicios", botones_num_serv())
 
-        elif action == "ADD_TXT":
-            TXT_STATE[chat] = "ADD"
-            tg_send(chat, "✏️ envía números uno por uno")
+        elif action == "ADD_SERV":
+            SERV_STATE[chat] = True
+            tg_send(chat, "Escribe servicios, termina con TERMINAR")
 
-        elif action == "DEL_TXT":
-            limpiar_txt()
-            tg_edit(chat, msg_id, "🗑 eliminado", botones_txt())
+        elif action == "DEL_SERV":
+            clear_services(chat)
+            tg_send(chat, "🗑 Eliminado")
 
-        elif action == "VIEW_TXT":
-            data = "\n".join(leer_txt()) or "vacío"
-            tg_edit(chat, msg_id, f"📄\n{data}", botones_txt())
+        elif action == "VIEW_SERV":
+            tg_send(chat, read_services(chat) or "Vacío")
 
-        elif action == "DOWN_TXT":
+        elif action == "DOWN_SERV":
+            path = file_path(chat)
             requests.post(
                 f"{TELEGRAM_API}/sendDocument",
                 data={"chat_id": chat},
-                files={"document": open(TXT_PATH, "rb")}
+                files={"document": open(path, "rb")}
             )
 
         elif action == "BACK_MENU":
