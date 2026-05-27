@@ -42,6 +42,8 @@ SERV_STATE = {}
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
+logger.info(f"DB PATH: {DB_PATH}")
+logger.info(f"DATA EXISTS: {os.path.exists('/data')}")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
