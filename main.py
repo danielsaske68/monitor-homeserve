@@ -333,7 +333,7 @@ def webhook():
         elif action == "LIST_USERS":
             tg_edit(chat, msg_id, "\n".join(obtener_usuarios()) or "Vacío", botones_usuarios())
 
-        elif action.startswith("ACEPTAR_"):
+    elif action.startswith("ACEPTAR_"):
 
     sid = action.split("_")[1]
 
