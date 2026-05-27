@@ -384,7 +384,22 @@ def webhook():
 
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
-            tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado", botones())
+            url = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion&servicio={sid}"
+
+            try:
+                r = homeserve.session.get(url, timeout=15)
+                html = r.text.lower()
+
+                errores = ["error", "illegal", "denegado", "caducada", "no autorizado"]
+                fallo = any(e in html for e in errores)
+
+                if fallo:
+                    tg_edit(chat, msg_id, "❌ Error al aceptar", botones())
+                else:
+                    tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado", botones())
+
+            except Exception as e:
+                tg_edit(chat, msg_id, f"❌ {e}", botones())
 
         elif action.startswith("RECHAZAR_"):
             sid = action.split("_")[1]
