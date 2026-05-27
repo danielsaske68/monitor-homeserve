@@ -36,7 +36,7 @@ WEB_CACHE = {}
 WEB_INDEX = {}
 USER_STATE = {}
 
-# 🔥 NUEVO STATE (NUMERO DE SERVICIOS)
+# 🔥 NUM SERV STATE
 SERV_STATE = {}
 
 # ---------------- DB ----------------
@@ -72,7 +72,7 @@ def eliminar_usuario(chat_id):
 
 init_db()
 
-# ---------------- FILE SYSTEM (NUM SERVICIOS) ----------------
+# ---------------- FILE SYSTEM ----------------
 def file_path(chat):
     return f"/data/servicios_{chat}.txt"
 
@@ -127,8 +127,7 @@ def botones():
         ]
     }
 
-# 🔥 NUEVO MENU SERVICIOS TXT
-def botones_num_serv():
+def botones_num_serv(chat):
     return {
         "inline_keyboard": [
             [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
@@ -167,7 +166,7 @@ def botones_estado(sid):
                 {"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"},
                 {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}
             ],
-            [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
+            [{"text": "⬅️ Volver", "callback_data": "BACK_CAMBIAR"}]
         ]
     }
 
@@ -248,8 +247,6 @@ class HomeServe:
             }
 
             r = self.session.post(BASE_URL, data=payload, timeout=10)
-            text = r.text.lower()
-
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
 
         except Exception as e:
@@ -260,21 +257,17 @@ homeserve = HomeServe()
 # ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
-
     homeserve.login()
 
     while True:
         try:
             actuales = homeserve.obtener()
-
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     for u in obtener_usuarios():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
-
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
-
         except Exception as e:
             logger.error(e)
             homeserve.login()
@@ -292,14 +285,14 @@ def webhook():
         text = data["message"].get("text", "")
         guardar_usuario(chat)
 
-        # 🔥 CONTROL NUM SERV
+        # 🔥 NUM SERV LOGIC (SIN SPAM)
         if chat in SERV_STATE:
             if text.upper() == "TERMINAR":
                 SERV_STATE.pop(chat)
-                tg_send(chat, "✅ Finalizado")
+                tg_send(chat, "✅ ✔️ Finalizado")
             else:
                 add_service(chat, text)
-                tg_send(chat, "✅ Guardado ✔️")
+                tg_send(chat, "✔️ OK")
             return jsonify(ok=True)
 
         if text == "/start":
@@ -333,7 +326,7 @@ def webhook():
             tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
 
         elif action == "NUM_SERV":
-            tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
+            tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv(chat))
 
         elif action == "ADD_SERV":
             SERV_STATE[chat] = True
@@ -341,55 +334,25 @@ def webhook():
 
         elif action == "DEL_SERV":
             clear_services(chat)
-            tg_edit(chat, msg_id, "🗑 Archivo eliminado", botones_num_serv())
+            tg_edit(chat, msg_id, "🗑 Eliminado", botones_num_serv(chat))
 
         elif action == "VIEW_SERV":
-            tg_edit(chat, msg_id, read_services(chat) or "Vacío", botones_num_serv())
+            tg_edit(chat, msg_id, read_services(chat) or "Vacío", botones_num_serv(chat))
 
         elif action == "DOWN_SERV":
             path = file_path(chat)
-            requests.post(
-                f"{TELEGRAM_API}/sendDocument",
-                data={"chat_id": chat},
-                files={"document": open(path, "rb")}
-            )
+            with open(path, "rb") as f:
+                requests.post(
+                    f"{TELEGRAM_API}/sendDocument",
+                    data={"chat_id": chat},
+                    files={"document": f}
+                )
 
         elif action == "BACK_NUM_SERV":
             tg_edit(chat, msg_id, "Menú", botones())
 
-        elif action == "WEB":
-            servicios = homeserve.obtener()
-            if servicios:
-                sid, txt = list(servicios.items())[0]
-                tg_edit(chat, msg_id, txt, botones_servicio(sid))
-            else:
-                tg_edit(chat, msg_id, "Sin servicios", botones())
-
-        elif action == "BACK_MENU":
-            tg_edit(chat, msg_id, "Menú", botones())
-
-        elif action == "USUARIOS":
-            tg_edit(chat, msg_id, "Usuarios", botones_usuarios())
-
-        elif action == "ADD_USER":
-            USER_STATE[chat] = "ADD_USER"
-            tg_send(chat, "Envía ID")
-
-        elif action == "DEL_USER":
-            USER_STATE[chat] = "DEL_USER"
-            tg_send(chat, "Envía ID")
-
-        elif action == "LIST_USERS":
-            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()) or "Vacío", botones_usuarios())
-
-        elif action.startswith("ACEPTAR_"):
-            sid = action.split("_")[1]
-            tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado", botones())
-
-        elif action.startswith("RECHAZAR_"):
-            sid = action.split("_")[1]
-            homeserve.cambiar_estado(sid, "348")
-            tg_edit(chat, msg_id, "❌ Rechazado", botones())
+        elif action == "BACK_CAMBIAR":
+            tg_edit(chat, msg_id, "Cambiar estado", botones())
 
         elif action == "CAMBIAR":
             curso = homeserve.obtener_curso()
