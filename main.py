@@ -254,6 +254,8 @@ def loop():
             homeserve.login()
             time.sleep(10)
 
+threading.Thread(target=loop, daemon=True).start()
+
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
@@ -262,7 +264,6 @@ def webhook():
     if "message" in data:
         chat = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
-
         guardar_usuario(chat)
 
         if text == "/start":
@@ -297,11 +298,8 @@ def webhook():
 
         elif action == "WEB":
             servicios = homeserve.obtener()
-            WEB_CACHE[chat] = list(servicios.items())
-            WEB_INDEX[chat] = 0
-
             if servicios:
-                sid, txt = WEB_CACHE[chat][0]
+                sid, txt = list(servicios.items())[0]
                 tg_edit(chat, msg_id, txt, botones_servicio(sid))
             else:
                 tg_edit(chat, msg_id, "Sin servicios", botones())
@@ -325,9 +323,9 @@ def webhook():
 
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
-            url = f"https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion&servicio={sid}"
 
             try:
+                url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
                 r = homeserve.session.get(url, timeout=15)
                 html = r.text.lower()
 
@@ -361,9 +359,3 @@ def webhook():
             tg_edit(chat, msg_id, msg, botones_estado(sid))
 
     return jsonify(ok=True)
-
-# ---------------- START ----------------
-threading.Thread(target=loop, daemon=True).start()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
