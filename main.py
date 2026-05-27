@@ -335,20 +335,19 @@ def webhook():
 
         elif action.startswith("ACEPTAR_"):
 
-        sid = action.split("_")[1]
+    sid = action.split("_")[1]
 
-        url = (
+    url = (
         "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
         f"?w3exec=prof_asignacion&servicio={sid}"
-        )
+    )
 
-        try:
+    try:
 
         r = homeserve.session.get(url, timeout=15)
 
         html = r.text.lower()
 
-        # comprobar si salió error
         errores = [
             "error",
             "illegal",
@@ -366,7 +365,7 @@ def webhook():
 
     except Exception as e:
         tg_edit(chat, msg_id, f"❌ {e}", botones())
-
+        
         elif action.startswith("RECHAZAR_"):
             sid = action.split("_")[1]
             homeserve.cambiar_estado(sid, "348")
