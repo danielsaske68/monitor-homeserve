@@ -245,45 +245,45 @@ class HomeServe:
             return servicios
         except:
             return {}
+            
+    def detalle_servicio(self, sid):
+        try:
+            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+            r = self.session.get(url, timeout=15)
+            r.encoding = "latin-1"
+            soup = BeautifulSoup(r.text, "html.parser")
 
-   def detalle_servicio(self, sid):
-    try:
-        url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-        r = self.session.get(url, timeout=15)
-        r.encoding = "latin-1"
-        soup = BeautifulSoup(r.text, "html.parser")
+            rows = soup.find_all("tr")
 
-        rows = soup.find_all("tr")
+            data = {
+                "servicio": sid,
+                "direccion": "",
+                "poblacion": "",
+                "comentarios": ""
+            }
 
-        data = {
-            "servicio": sid,
-            "direccion": "",
-            "poblacion": "",
-            "comentarios": ""
-        }
+            for row in rows:
+                tds = row.find_all("td")
+                if len(tds) < 2:
+                    continue
 
-        for row in rows:
-            tds = row.find_all("td")
-            if len(tds) < 2:
-                continue
+                key = tds[0].get_text(" ", strip=True).upper()
+                val = tds[1].get_text(" ", strip=True)
 
-            key = tds[0].get_text(" ", strip=True).upper()
-            val = tds[1].get_text(" ", strip=True)
+                if "DOMICILIO" in key:
+                    data["direccion"] = val
 
-            if "DOMICILIO" in key:
-                data["direccion"] = val
+                if "POBLACION" in key:
+                    data["poblacion"] = val
 
-            if "POBLACION" in key:
-                data["poblacion"] = val
+                if "COMENTARIOS" in key:
+                    txt = tds[1].get_text("\n", strip=True)
+                    data["comentarios"] = "\n".join(txt.split("\n")[:5])
 
-            if "COMENTARIOS" in key:
-                txt = tds[1].get_text("\n", strip=True)
-                data["comentarios"] = "\n".join(txt.split("\n")[:5])
+            return data
 
-        return data
-
-    except:
-        return None
+        except:
+            return None
 
     def cambiar_estado(self, sid, estado):
         try:
@@ -490,10 +490,19 @@ def webhook():
     sid = action.split("_", 1)[1]
     data = homeserve.detalle_servicio(sid)
 
-        elif action.startswith("ESTADO_"):
-            _, sid, estado = action.split("_")
-            ok, msg = homeserve.cambiar_estado(sid, estado)
-            tg_edit(chat, msg_id, msg, botones_estado(sid))
+    if not data:
+        tg_edit(chat, msg_id, "Error", botones())
+    else:
+        texto = (
+            f"📌 {data['servicio']}\n"
+            f"📍 {data['direccion']}\n"
+            f"📍 {data['poblacion']}\n\n"
+            f"📝 COMENTARIOS:\n{data['comentarios']}"
+        )
+
+        tg_edit(chat, msg_id, texto, {
+            "inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "CURSO"}]]
+        })
 
     return jsonify(ok=True)
 
