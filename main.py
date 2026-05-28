@@ -825,7 +825,6 @@ def webhook():
         poblacion = datos.get("POBLACION-PROVINCIA", "")
         comentarios = datos.get("COMENTARIOS", "")
 
-        # solo primeras 5 líneas
         lineas = comentarios.splitlines()
         comentarios = "\n".join(lineas[:5])
 
