@@ -792,14 +792,81 @@ def webhook():
 
         elif action.startswith("SEL_"):
 
-            sid = action.split("_")[1]
+    sid = action.split("_")[1]
 
-            tg_edit(
-                chat,
-                msg_id,
-                f"📌 Servicio:\n\n<b>{sid}</b>",
-                botones_estado(sid)
-            )
+    try:
+
+        url = (
+            f"{BASE_URL}"
+            f"?w3exec=ver_servicioencurso"
+            f"&Servicio={sid}"
+            f"&Pag=1"
+        )
+
+        r = homeserve.session.get(url, timeout=15)
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        datos = {}
+
+        filas = soup.find_all("tr")
+
+        for fila in filas:
+
+            tds = fila.find_all("td")
+
+            if len(tds) >= 2:
+
+                clave = tds[0].get_text(" ", strip=True)
+                valor = tds[1].get_text(" ", strip=True)
+
+                clave = clave.replace(":", "").strip()
+
+                datos[clave] = valor
+
+        servicio = datos.get("SERVICIO", sid)
+        domicilio = datos.get("DOMICILIO", "No encontrado")
+        poblacion = datos.get("POBLACION-PROVINCIA", "No encontrado")
+
+        comentarios = datos.get("COMENTARIOS", "Sin comentarios")
+
+        comentarios = comentarios.strip()
+
+        lineas = comentarios.splitlines()
+
+        comentarios = "\n".join(lineas[:5])
+
+        texto = (
+            f"📋 <b>SERVICIO:</b> {servicio}\n\n"
+            f"🏠 <b>DOMICILIO:</b>\n{domicilio}\n\n"
+            f"📍 <b>POBLACION-PROVINCIA:</b>\n{poblacion}\n\n"
+            f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
+        )
+
+        tg_edit(
+            chat,
+            msg_id,
+            texto,
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "⬅️ Volver",
+                            "callback_data": "CURSO"
+                        }
+                    ]
+                ]
+            }
+        )
+
+    except Exception as e:
+
+        tg_edit(
+            chat,
+            msg_id,
+            f"❌ Error obteniendo servicio:\n\n{e}",
+            botones()
+        )
 
         # =================================================
         # CAMBIAR ESTADO REAL
