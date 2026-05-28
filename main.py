@@ -18,7 +18,7 @@ PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS"
+LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
 BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
@@ -32,12 +32,17 @@ app = Flask(__name__)
 
 # ---------------- STATE ----------------
 SERVICIOS_ACTUALES = {}
+WEB_CACHE = {}
+WEB_INDEX = {}
 USER_STATE = {}
 SERV_STATE = {}
 
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
+
+logger.info(f"DB PATH: {DB_PATH}")
+logger.info(f"DATA EXISTS: {os.path.exists('/data')}")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -49,7 +54,10 @@ def init_db():
 def guardar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+    c.execute(
+        "INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)",
+        (str(chat_id),)
+    )
     conn.commit()
     conn.close()
 
@@ -57,7 +65,9 @@ def obtener_usuarios():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT chat_id FROM usuarios")
-    return [r[0] for r in c.fetchall()]
+    usuarios = [r[0] for r in c.fetchall()]
+    conn.close()
+    return usuarios
 
 def eliminar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
@@ -68,7 +78,7 @@ def eliminar_usuario(chat_id):
 
 init_db()
 
-# ---------------- FILE ----------------
+# ---------------- FILE SYSTEM ----------------
 def file_path(chat):
     return f"/data/servicios_{chat}.txt"
 
@@ -78,7 +88,8 @@ def add_service(chat, text):
 
 def read_services(chat):
     try:
-        return open(file_path(chat), "r", encoding="utf-8").read()
+        with open(file_path(chat), "r", encoding="utf-8") as f:
+            return f.read()
     except:
         return ""
 
@@ -87,10 +98,15 @@ def clear_services(chat):
 
 # ---------------- TELEGRAM ----------------
 def tg_send(chat, text, markup=None):
-    payload = {"chat_id": chat, "text": text, "parse_mode": "HTML"}
+    payload = {
+        "chat_id": chat,
+        "text": text,
+        "parse_mode": "HTML"
+    }
     if markup:
         payload["reply_markup"] = markup
-    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload)
+
+    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
 
 def tg_edit(chat, msg_id, text, markup=None):
     payload = {
@@ -101,10 +117,15 @@ def tg_edit(chat, msg_id, text, markup=None):
     }
     if markup:
         payload["reply_markup"] = markup
-    requests.post(f"{TELEGRAM_API}/editMessageText", json=payload)
 
-def tg_answer(cid):
-    requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cid})
+    requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
+
+def tg_answer(callback_id):
+    requests.post(
+        f"{TELEGRAM_API}/answerCallbackQuery",
+        json={"callback_query_id": callback_id},
+        timeout=10
+    )
 
 # ---------------- BOTONES ----------------
 def botones():
@@ -112,28 +133,61 @@ def botones():
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
-            [{"text": "🌐 Web", "callback_data": "WEB"}],
-            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}]
+            [{"text": "🌐 Web", "callback_data": "WEB"},
+             {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
+            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
+            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}],
+            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}]
+        ]
+    }
+
+def botones_num_serv():
+    return {
+        "inline_keyboard": [
+            [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
+            [{"text": "🗑 Eliminar archivo", "callback_data": "DEL_SERV"}],
+            [{"text": "📥 Descargar", "callback_data": "DOWN_SERV"}],
+            [{"text": "👁 Ver", "callback_data": "VIEW_SERV"}],
+            [{"text": "⬅️ Volver", "callback_data": "BACK_NUM_SERV"}]
+        ]
+    }
+
+def botones_usuarios():
+    return {
+        "inline_keyboard": [
+            [{"text": "➕ Agregar", "callback_data": "ADD_USER"}],
+            [{"text": "🗑 Eliminar", "callback_data": "DEL_USER"}],
+            [{"text": "📋 Listar", "callback_data": "LIST_USERS"}],
+            [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+        ]
+    }
+
+def botones_servicio(sid):
+    return {
+        "inline_keyboard": [
+            [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
+             {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
+            [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
 
 def botones_estado(sid):
     return {
         "inline_keyboard": [
-            [
-                {"text": "🔴 348", "callback_data": f"ESTADO_{sid}_348"},
-                {"text": "🟢 318", "callback_data": f"ESTADO_{sid}_318"}
-            ],
-            [
-                {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
-                {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}
-            ],
+            [{"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"},
+             {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}],
             [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
         ]
     }
 
 def lista_servicios(servicios):
-    return {"inline_keyboard": [[{"text": s, "callback_data": f"SEL_{s}"}] for s in servicios]}
+    botones_lista = [
+        [{"text": sid, "callback_data": f"SEL_{sid}"}]
+        for sid in servicios
+    ]
+    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+
+    return {"inline_keyboard": botones_lista}
 
 # ---------------- HOMESERVE ----------------
 class HomeServe:
@@ -142,51 +196,118 @@ class HomeServe:
 
     def login(self):
         try:
-            self.session.get(LOGIN_URL)
-            r = self.session.post(LOGIN_URL, data={
-                "CODIGO": USUARIO,
-                "PASSW": PASSWORD,
-                "BTN": "Aceptar"
-            })
+            self.session.get(LOGIN_URL, timeout=10)
+            r = self.session.post(
+                LOGIN_URL,
+                data={
+                    "CODIGO": USUARIO,
+                    "PASSW": PASSWORD,
+                    "BTN": "Aceptar"
+                },
+                timeout=10
+            )
             return "error" not in r.text.lower()
         except:
             return False
 
     def obtener(self):
         try:
-            r = self.session.get(ASIGNACION_URL)
+            r = self.session.get(ASIGNACION_URL, timeout=15)
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", text)
-            out = {}
+            servicios = {}
+
             for b in bloques:
-                m = re.search(r"\d{7,8}", b)
+                m = re.search(r"\b\d{7,8}\b", b)
                 if m:
-                    out[m.group()] = " ".join(b.split())
-            return out
+                    servicios[m.group(0)] = " ".join(b.split())
+
+            return servicios
         except:
             return {}
+
+    def obtener_curso(self):
+        try:
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
+            r.encoding = "latin-1"
+            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+            servicios = {}
+
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+
+            return servicios
+        except:
+            return {}
+
+    def obtener_servicios_curso(self):
+        try:
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
+            r.encoding = "latin-1"
+            soup = BeautifulSoup(r.text, "html.parser")
+            filas = soup.find_all("tr")
+
+            servicios = []
+
+            for fila in filas[1:]:
+                columnas = fila.find_all("td")
+                if len(columnas) >= 6:
+                    try:
+                        servicio_raw = columnas[0].get_text(" ", strip=True)
+                        match = re.search(r"\d{7,8}", servicio_raw)
+                        if not match:
+                            continue
+
+                        servicios.append({
+                            "servicio": match.group(0),
+                            "direccion": columnas[2].get_text(" ", strip=True),
+                            "fec_caduca": columnas[5].get_text(" ", strip=True)
+                        })
+                    except:
+                        pass
+
+            return servicios
+        except Exception as e:
+            logger.error(e)
+            return []
 
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
+            if fecha.weekday() == 5:
+                fecha += timedelta(days=2)
+            elif fecha.weekday() == 6:
+                fecha += timedelta(days=1)
+
             fecha_str = fecha.strftime("%d/%m/%Y")
+
+            obs = (
+                "Pendiente de localizar a asegurado"
+                if estado == "348"
+                else "En espera de Profesional por confirmación del Siniestro"
+            )
 
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": sid,
+                "Pag": "1",
                 "ESTADO": estado,
                 "FECSIG": fecha_str,
+                "INFORMO": "on",
+                "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            self.session.post(BASE_URL, data=payload)
-            return True, f"✅ Estado {estado} aplicado"
+            self.session.post(BASE_URL, data=payload, timeout=10)
+            return True, f"✅ Estado {estado} aplicado ({fecha_str})"
         except Exception as e:
-            return False, str(e)
+            return False, f"❌ Error: {e}"
 
 homeserve = HomeServe()
 
-# ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
     homeserve.login()
@@ -194,15 +315,22 @@ def loop():
     while True:
         try:
             actuales = homeserve.obtener()
+
+            for sid, txt in actuales.items():
+                if sid not in SERVICIOS_ACTUALES:
+                    for u in obtener_usuarios():
+                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
+
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
-        except:
+
+        except Exception as e:
+            logger.error(e)
             homeserve.login()
-            time.sleep(5)
+            time.sleep(10)
 
 threading.Thread(target=loop, daemon=True).start()
 
-# ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -404,6 +532,7 @@ def webhook():
                 tg_edit(chat, msg_id, "❌ Error estado inválido", botones())
 
     return jsonify(ok=True)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
