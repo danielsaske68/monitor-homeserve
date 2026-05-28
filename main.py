@@ -524,14 +524,19 @@ def webhook():
                         
                         
                 servicio = datos.get("SERVICIO", sid)
+                telefonos = datos.get("TELEFONOS", "")
+                cliente = datos.get("CLIENTE", "")
                 domicilio = datos.get("DOMICILIO", "")
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 comentarios = datos.get("COMENTARIOS", "")
+                
                 
                 comentarios = "\n".join(comentarios.splitlines()[:5])
                 
                 texto = (
                     f"📋 <b>SERVICIO:</b> {servicio}\n\n"
+                    f"📞 <b>TELEFONOS:</b>\n{telefonos}\n\n"
+                    f"👤 <b>CLIENTE:</b>\n{cliente}\n\n"
                     f"🏠 <b>DOMICILIO:</b>\n{domicilio}\n\n"
                     f"📍 <b>POBLACION-PROVINCIA:</b>\n{poblacion}\n\n"
                     f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
