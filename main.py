@@ -789,8 +789,7 @@ def webhook():
         # =================================================
         # SELECCIONAR SERVICIO
         # =================================================
-
-        elif action.startswith("SEL_"):
+elif action.startswith("SEL_"):
 
     sid = action.split("_")[1]
 
@@ -825,6 +824,7 @@ def webhook():
         poblacion = datos.get("POBLACION-PROVINCIA", "")
         comentarios = datos.get("COMENTARIOS", "")
 
+        # solo primeras 5 líneas
         lineas = comentarios.splitlines()
         comentarios = "\n".join(lineas[:5])
 
@@ -859,7 +859,7 @@ def webhook():
             f"❌ Error obteniendo servicio:\n{e}",
             botones()
         )
-
+        
         # =================================================
         # CAMBIAR ESTADO REAL
         # =================================================
