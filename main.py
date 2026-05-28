@@ -35,57 +35,84 @@ SERVICIOS_ACTUALES = {}
 WEB_CACHE = {}
 WEB_INDEX = {}
 USER_STATE = {}
-
-# 🔥 NUEVO STATE (NUMERO DE SERVICIOS)
 SERV_STATE = {}
 
 # ---------------- DB ----------------
 DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
+
 logger.info(f"DB PATH: {DB_PATH}")
 logger.info(f"DATA EXISTS: {os.path.exists('/data')}")
 
 def init_db():
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS usuarios (chat_id TEXT PRIMARY KEY)")
+
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS usuarios (chat_id TEXT PRIMARY KEY)"
+    )
+
     conn.commit()
     conn.close()
 
 def guardar_usuario(chat_id):
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+
+    c.execute(
+        "INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)",
+        (str(chat_id),)
+    )
+
     conn.commit()
     conn.close()
 
 def obtener_usuarios():
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
     c.execute("SELECT chat_id FROM usuarios")
-    return [r[0] for r in c.fetchall()]
+
+    usuarios = [r[0] for r in c.fetchall()]
+
+    conn.close()
+
+    return usuarios
 
 def eliminar_usuario(chat_id):
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
+
+    c.execute(
+        "DELETE FROM usuarios WHERE chat_id=?",
+        (str(chat_id),)
+    )
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# ---------------- FILE SYSTEM (NUM SERVICIOS) ----------------
+# ---------------- FILE SYSTEM ----------------
 def file_path(chat):
     return f"/data/servicios_{chat}.txt"
 
 def add_service(chat, text):
+
     with open(file_path(chat), "a", encoding="utf-8") as f:
         f.write(text + "\n")
 
 def read_services(chat):
+
     try:
+
         with open(file_path(chat), "r", encoding="utf-8") as f:
             return f.read()
+
     except:
         return ""
 
@@ -94,6 +121,7 @@ def clear_services(chat):
 
 # ---------------- TELEGRAM ----------------
 def tg_send(chat, text, markup=None):
+
     payload = {
         "chat_id": chat,
         "text": text,
@@ -110,6 +138,7 @@ def tg_send(chat, text, markup=None):
     )
 
 def tg_edit(chat, msg_id, text, markup=None):
+
     payload = {
         "chat_id": chat,
         "message_id": msg_id,
@@ -127,6 +156,7 @@ def tg_edit(chat, msg_id, text, markup=None):
     )
 
 def tg_answer(callback_id):
+
     requests.post(
         f"{TELEGRAM_API}/answerCallbackQuery",
         json={"callback_query_id": callback_id},
@@ -135,6 +165,7 @@ def tg_answer(callback_id):
 
 # ---------------- BOTONES ----------------
 def botones():
+
     return {
         "inline_keyboard": [
             [
@@ -150,12 +181,16 @@ def botones():
             ],
             [
                 {"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}
+            ],
+            [
+                {"text": "📋 Servicios en curso", "callback_data": "CURSO"}
             ]
         ]
     }
 
 # ---------------- MENU TXT ----------------
 def botones_num_serv():
+
     return {
         "inline_keyboard": [
             [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
@@ -167,6 +202,7 @@ def botones_num_serv():
     }
 
 def botones_usuarios():
+
     return {
         "inline_keyboard": [
             [{"text": "➕ Agregar", "callback_data": "ADD_USER"}],
@@ -177,6 +213,7 @@ def botones_usuarios():
     }
 
 def botones_servicio(sid):
+
     return {
         "inline_keyboard": [
             [
@@ -190,6 +227,7 @@ def botones_servicio(sid):
     }
 
 def botones_estado(sid):
+
     return {
         "inline_keyboard": [
             [
@@ -202,7 +240,7 @@ def botones_estado(sid):
         ]
     }
 
-# 🔥 LISTA CON BOTON ATRAS
+# ---------------- LISTA ----------------
 def lista_servicios(servicios):
 
     botones_lista = [
@@ -225,9 +263,13 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
+
         try:
 
-            self.session.get(LOGIN_URL, timeout=10)
+            self.session.get(
+                LOGIN_URL,
+                timeout=10
+            )
 
             r = self.session.post(
                 LOGIN_URL,
@@ -248,7 +290,10 @@ class HomeServe:
 
         try:
 
-            r = self.session.get(ASIGNACION_URL, timeout=15)
+            r = self.session.get(
+                ASIGNACION_URL,
+                timeout=15
+            )
 
             text = BeautifulSoup(
                 r.text,
@@ -264,7 +309,10 @@ class HomeServe:
 
             for b in bloques:
 
-                m = re.search(r"\b\d{7,8}\b", b)
+                m = re.search(
+                    r"\b\d{7,8}\b",
+                    b
+                )
 
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
@@ -299,7 +347,10 @@ class HomeServe:
 
             for b in bloques:
 
-                m = re.search(r"\b\d{7,8}\b", b)
+                m = re.search(
+                    r"\b\d{7,8}\b",
+                    b
+                )
 
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
@@ -308,6 +359,77 @@ class HomeServe:
 
         except:
             return {}
+
+    # ---------------- NUEVA FUNCION ----------------
+    def obtener_servicios_curso(self):
+
+        try:
+
+            r = self.session.get(
+                SERVICIOS_CURSO_URL,
+                timeout=15
+            )
+
+            r.encoding = "latin-1"
+
+            soup = BeautifulSoup(
+                r.text,
+                "html.parser"
+            )
+
+            filas = soup.find_all("tr")
+
+            servicios = []
+
+            for fila in filas[1:]:
+
+                columnas = fila.find_all("td")
+
+                if len(columnas) >= 6:
+
+                    try:
+
+                        servicio_raw = columnas[0].get_text(
+                            " ",
+                            strip=True
+                        )
+
+                        match = re.search(
+                            r"\d{7,8}",
+                            servicio_raw
+                        )
+
+                        if not match:
+                            continue
+
+                        servicio = match.group(0)
+
+                        direccion = columnas[2].get_text(
+                            " ",
+                            strip=True
+                        )
+
+                        fec_caduca = columnas[5].get_text(
+                            " ",
+                            strip=True
+                        )
+
+                        servicios.append({
+                            "servicio": servicio,
+                            "direccion": direccion,
+                            "fec_caduca": fec_caduca
+                        })
+
+                    except:
+                        pass
+
+            return servicios
+
+        except Exception as e:
+
+            logger.error(e)
+
+            return []
 
     def cambiar_estado(self, sid, estado):
 
@@ -392,7 +514,10 @@ def loop():
 
             time.sleep(10)
 
-threading.Thread(target=loop, daemon=True).start()
+threading.Thread(
+    target=loop,
+    daemon=True
+).start()
 
 # ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
@@ -408,7 +533,6 @@ def webhook():
 
         guardar_usuario(chat)
 
-        # 🔥 CONTROL NUM SERV SIN SPAM
         if chat in SERV_STATE:
 
             data_serv = SERV_STATE[chat]
@@ -500,6 +624,42 @@ def webhook():
                 f"{len(homeserve.obtener())} servicios",
                 botones()
             )
+
+        # ---------------- CURSO ----------------
+        elif action == "CURSO":
+
+            servicios = homeserve.obtener_servicios_curso()
+
+            if not servicios:
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "❌ No hay servicios en curso",
+                    botones()
+                )
+
+            else:
+
+                texto = "📋 <b>Servicios en curso</b>\n\n"
+
+                for s in servicios:
+
+                    texto += (
+                        f"🔹 <b>Servicio:</b> {s['servicio']}\n"
+                        f"📍 <b>Dirección:</b> {s['direccion']}\n"
+                        f"📅 <b>Caduca:</b> {s['fec_caduca']}\n\n"
+                    )
+
+                if len(texto) > 3500:
+                    texto = texto[:3500] + "\n\n⚠️ Texto truncado..."
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    texto,
+                    botones()
+                )
 
         # ---------------- NUM SERV ----------------
         elif action == "NUM_SERV":
