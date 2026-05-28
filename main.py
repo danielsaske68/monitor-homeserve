@@ -41,6 +41,9 @@ SERV_STATE = {}
 DB_PATH = "/data/usuarios.db"
 os.makedirs("/data", exist_ok=True)
 
+logger.info(f"DB PATH: {DB_PATH}")
+logger.info(f"DATA EXISTS: {os.path.exists('/data')}")
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -51,7 +54,10 @@ def init_db():
 def guardar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+    c.execute(
+        "INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)",
+        (str(chat_id),)
+    )
     conn.commit()
     conn.close()
 
@@ -59,7 +65,9 @@ def obtener_usuarios():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT chat_id FROM usuarios")
-    return [r[0] for r in c.fetchall()]
+    usuarios = [r[0] for r in c.fetchall()]
+    conn.close()
+    return usuarios
 
 def eliminar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
@@ -90,9 +98,14 @@ def clear_services(chat):
 
 # ---------------- TELEGRAM ----------------
 def tg_send(chat, text, markup=None):
-    payload = {"chat_id": chat, "text": text, "parse_mode": "HTML"}
+    payload = {
+        "chat_id": chat,
+        "text": text,
+        "parse_mode": "HTML"
+    }
     if markup:
         payload["reply_markup"] = markup
+
     requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
 
 def tg_edit(chat, msg_id, text, markup=None):
@@ -100,9 +113,11 @@ def tg_edit(chat, msg_id, text, markup=None):
         "chat_id": chat,
         "message_id": msg_id,
         "text": text,
-        "parse_mode": "HTML",
-        "reply_markup": markup
+        "parse_mode": "HTML"
     }
+    if markup:
+        payload["reply_markup"] = markup
+
     requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
 
 def tg_answer(callback_id):
@@ -121,7 +136,8 @@ def botones():
             [{"text": "🌐 Web", "callback_data": "WEB"},
              {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}]
+            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}],
+            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}]
         ]
     }
 
@@ -165,12 +181,13 @@ def botones_estado(sid):
     }
 
 def lista_servicios(servicios):
-    return {
-        "inline_keyboard": [
-            [{"text": sid, "callback_data": f"SEL_{sid}"}]
-            for sid in servicios
-        ]
-    }
+    botones_lista = [
+        [{"text": sid, "callback_data": f"SEL_{sid}"}]
+        for sid in servicios
+    ]
+    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+
+    return {"inline_keyboard": botones_lista}
 
 # ---------------- HOMESERVE ----------------
 class HomeServe:
@@ -180,11 +197,15 @@ class HomeServe:
     def login(self):
         try:
             self.session.get(LOGIN_URL, timeout=10)
-            r = self.session.post(LOGIN_URL, data={
-                "CODIGO": USUARIO,
-                "PASSW": PASSWORD,
-                "BTN": "Aceptar"
-            }, timeout=10)
+            r = self.session.post(
+                LOGIN_URL,
+                data={
+                    "CODIGO": USUARIO,
+                    "PASSW": PASSWORD,
+                    "BTN": "Aceptar"
+                },
+                timeout=10
+            )
             return "error" not in r.text.lower()
         except:
             return False
@@ -205,10 +226,57 @@ class HomeServe:
         except:
             return {}
 
+    def obtener_curso(self):
+        try:
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
+            r.encoding = "latin-1"
+            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+            servicios = {}
+
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+
+            return servicios
+        except:
+            return {}
+
+    def obtener_servicios_curso(self):
+        try:
+            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
+            r.encoding = "latin-1"
+            soup = BeautifulSoup(r.text, "html.parser")
+            filas = soup.find_all("tr")
+
+            servicios = []
+
+            for fila in filas[1:]:
+                columnas = fila.find_all("td")
+                if len(columnas) >= 6:
+                    try:
+                        servicio_raw = columnas[0].get_text(" ", strip=True)
+                        match = re.search(r"\d{7,8}", servicio_raw)
+                        if not match:
+                            continue
+
+                        servicios.append({
+                            "servicio": match.group(0),
+                            "direccion": columnas[2].get_text(" ", strip=True),
+                            "fec_caduca": columnas[5].get_text(" ", strip=True)
+                        })
+                    except:
+                        pass
+
+            return servicios
+        except Exception as e:
+            logger.error(e)
+            return []
+
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
-
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
@@ -216,11 +284,16 @@ class HomeServe:
 
             fecha_str = fecha.strftime("%d/%m/%Y")
 
-            obs = "Pendiente de localizar a asegurado" if estado == "348" else "En espera de Profesional"
+            obs = (
+                "Pendiente de localizar a asegurado"
+                if estado == "348"
+                else "En espera de Profesional por confirmación del Siniestro"
+            )
 
             payload = {
                 "w3exec": "ver_servicioencurso",
                 "Servicio": sid,
+                "Pag": "1",
                 "ESTADO": estado,
                 "FECSIG": fecha_str,
                 "INFORMO": "on",
@@ -235,7 +308,6 @@ class HomeServe:
 
 homeserve = HomeServe()
 
-# ---------------- LOOP ----------------
 def loop():
     global SERVICIOS_ACTUALES
     homeserve.login()
@@ -259,7 +331,6 @@ def loop():
 
 threading.Thread(target=loop, daemon=True).start()
 
-# ---------------- WEBHOOK ----------------
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -269,6 +340,20 @@ def webhook():
         text = data["message"].get("text", "")
 
         guardar_usuario(chat)
+
+        if chat in SERV_STATE:
+            data_serv = SERV_STATE[chat]
+            msg_edit = data_serv["msg_id"]
+
+            if text.upper() == "TERMINAR":
+                SERV_STATE.pop(chat)
+                tg_edit(chat, msg_edit, "✅ Servicios guardados correctamente", botones_num_serv())
+            else:
+                add_service(chat, text)
+                actual = read_services(chat)
+                tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
+
+            return jsonify(ok=True)
 
         if text == "/start":
             tg_send(chat, "🤖 Bot activo", botones())
@@ -300,8 +385,43 @@ def webhook():
         elif action == "REFRESH":
             tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
 
+        elif action == "CURSO":
+            servicios = homeserve.obtener_servicios_curso()
+            if not servicios:
+                tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
+            else:
+                texto = "📋 <b>Servicios en curso</b>\n\n"
+                for s in servicios:
+                    texto += f"🔹 <b>Servicio:</b> {s['servicio']}\n📍 <b>Dirección:</b> {s['direccion']}\n📅 <b>Caduca:</b> {s['fec_caduca']}\n\n"
+                if len(texto) > 3500:
+                    texto = texto[:3500] + "\n\n⚠️ Texto truncado..."
+                tg_edit(chat, msg_id, texto, botones())
+
         elif action == "NUM_SERV":
             tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
+
+        elif action == "ADD_SERV":
+            SERV_STATE[chat] = {"msg_id": msg_id}
+            tg_edit(chat, msg_id, "✍️ Escribe servicios.\n\nCuando acabes escribe:\nTERMINAR", botones_num_serv())
+
+        elif action == "DEL_SERV":
+            clear_services(chat)
+            tg_edit(chat, msg_id, "🗑 Archivo eliminado", botones_num_serv())
+
+        elif action == "VIEW_SERV":
+            contenido = read_services(chat)
+            tg_edit(chat, msg_id, contenido if contenido else "Vacío", botones_num_serv())
+
+        elif action == "DOWN_SERV":
+            path = file_path(chat)
+            requests.post(
+                f"{TELEGRAM_API}/sendDocument",
+                data={"chat_id": chat},
+                files={"document": open(path, "rb")}
+            )
+
+        elif action == "BACK_NUM_SERV":
+            tg_edit(chat, msg_id, "Menú", botones())
 
         elif action == "WEB":
             servicios = homeserve.obtener()
@@ -310,6 +430,9 @@ def webhook():
                 tg_edit(chat, msg_id, txt, botones_servicio(sid))
             else:
                 tg_edit(chat, msg_id, "Sin servicios", botones())
+
+        elif action == "BACK_MENU":
+            tg_edit(chat, msg_id, "Menú", botones())
 
         elif action == "USUARIOS":
             tg_edit(chat, msg_id, "Usuarios", botones_usuarios())
@@ -332,13 +455,16 @@ def webhook():
                 r = homeserve.session.get(url, timeout=15)
                 html = r.text.lower()
 
-                errores = ["error", "illegal", "denegado", "caducada", "no autorizado"]
+                errores = ["error","illegal","denegado","caducada","no autorizado","acceso inválido"]
                 fallo = any(e in html for e in errores)
+                ok_visual = ("<table" in html or "<form" in html or "servicio" in html)
 
                 if fallo:
-                    tg_edit(chat, msg_id, "❌ Error al aceptar", botones())
+                    tg_edit(chat, msg_id, f"❌ Error al aceptar servicio {sid}", botones())
+                elif ok_visual:
+                    tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
                 else:
-                    tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado", botones())
+                    tg_edit(chat, msg_id, f"⚠️ No se pudo confirmar aceptación de {sid}", botones())
 
             except Exception as e:
                 tg_edit(chat, msg_id, f"❌ {e}", botones())
@@ -349,8 +475,8 @@ def webhook():
             tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
         elif action == "CAMBIAR":
-            servicios = homeserve.obtener()
-            tg_edit(chat, msg_id, "Selecciona", lista_servicios(servicios))
+            curso = homeserve.obtener_curso()
+            tg_edit(chat, msg_id, "Selecciona", lista_servicios(curso))
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
