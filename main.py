@@ -246,7 +246,7 @@ def lista_servicios(servicios):
 
     for sid in servicios:
         botones_lista.append([
-            {"text": sid, "callback_data": f"SEL_{sid}"}
+            {"text": sid, "callback_data": f"CAMSEL_{sid}"}
         ])
 
     botones_lista.append([
@@ -450,6 +450,16 @@ def webhook():
             curso = homeserve.obtener_curso()
             tg_edit(chat, msg_id, "🛠 Selecciona servicio",
                     lista_servicios(curso) if curso else botones())
+
+        elif action.startswith("CAMSEL_"):
+            sid = action.split("_")[1]
+
+            tg_edit(
+                chat,
+                msg_id,
+                f"🛠 <b>Cambiar estado del servicio</b>\n\n<b>{sid}</b>",
+                botones_estado(sid)
+            )
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
