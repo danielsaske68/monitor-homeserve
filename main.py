@@ -430,7 +430,10 @@ def webhook():
             homeserve.cambiar_estado(sid, "348")
             tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
-
+        elif action == "CAMBIAR":
+            curso = homeserve.obtener_curso()
+            tg_edit(chat, msg_id, "Selecciona", lista_servicios(curso))
+            
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
