@@ -133,9 +133,14 @@ def botones():
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"},
              {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
+
             [{"text": "🌐 Web", "callback_data": "WEB"},
              {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
+
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
+
+            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
+
             [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}]
         ]
     }
@@ -430,18 +435,119 @@ def webhook():
             homeserve.cambiar_estado(sid, "348")
             tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
-        elif action == "CAMBIAR":
-            curso = homeserve.obtener_curso()
-            tg_edit(chat, msg_id, "Selecciona", lista_servicios(curso))
+        # =========================
+# 📋 SERVICIOS EN CURSO
+# =========================
+elif action == "CURSO":
 
-        elif action.startswith("SEL_"):
-            sid = action.split("_")[1]
-            tg_edit(chat, msg_id, sid, botones_estado(sid))
-            
-        elif action.startswith("ESTADO_"):
-            _, sid, estado = action.split("_")
-            ok, msg = homeserve.cambiar_estado(sid, estado)
-            tg_edit(chat, msg_id, msg, botones_estado(sid))
+    servicios = homeserve.obtener_curso()
+
+    if not servicios:
+        tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
+
+    else:
+        botones_lista = []
+
+        for sid in servicios:
+            botones_lista.append([
+                {
+                    "text": sid,
+                    "callback_data": f"SEL_{sid}"
+                }
+            ])
+
+        botones_lista.append([
+            {
+                "text": "⬅️ Volver",
+                "callback_data": "BACK_MENU"
+            }
+        ])
+
+        tg_edit(
+            chat,
+            msg_id,
+            "📋 Selecciona un servicio",
+            {
+                "inline_keyboard": botones_lista
+            }
+        )
+
+# =========================
+# 🛠 CAMBIAR ESTADO
+# =========================
+elif action == "CAMBIAR":
+
+    curso = homeserve.obtener_curso()
+
+    if not curso:
+        tg_edit(chat, msg_id, "❌ No hay servicios", botones())
+
+    else:
+        botones_lista = []
+
+        for sid in curso:
+            botones_lista.append([
+                {
+                    "text": sid,
+                    "callback_data": f"SEL_{sid}"
+                }
+            ])
+
+        botones_lista.append([
+            {
+                "text": "⬅️ Volver",
+                "callback_data": "BACK_MENU"
+            }
+        ])
+
+        tg_edit(
+            chat,
+            msg_id,
+            "🛠 Selecciona servicio",
+            {
+                "inline_keyboard": botones_lista
+            }
+        )
+
+# =========================
+# 📌 SELECCIONAR SERVICIO
+# =========================
+elif action.startswith("SEL_"):
+
+    sid = action.split("_")[1]
+
+    tg_edit(
+        chat,
+        msg_id,
+        f"📌 Servicio:\n\n<b>{sid}</b>",
+        botones_estado(sid)
+    )
+
+# =========================
+# 🔄 CAMBIO ESTADO
+# =========================
+elif action.startswith("ESTADO_"):
+
+    try:
+        _, sid, estado = action.split("_")
+
+        ok, msg = homeserve.cambiar_estado(sid, estado)
+
+        tg_edit(
+            chat,
+            msg_id,
+            msg,
+            botones_estado(sid)
+        )
+
+    except Exception as e:
+
+        tg_edit(
+            chat,
+            msg_id,
+            f"❌ Error: {e}",
+            botones()
+        )
 
     return jsonify(ok=True)
 
