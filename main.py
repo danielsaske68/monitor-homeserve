@@ -241,12 +241,26 @@ def botones_estado(sid):
         ]
     }
 
-def lista_servicios(servicios):
+def lista_curso(servicios):
     botones_lista = []
 
     for sid in servicios:
         botones_lista.append([
-            {"text": sid, "callback_data": f"CAMSEL_{sid}"}
+            {"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}
+        ])
+
+    botones_lista.append([
+        {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
+    ])
+
+    return {"inline_keyboard": botones_lista}
+
+def lista_cambio(servicios):
+    botones_lista = []
+
+    for sid in servicios:
+        botones_lista.append([
+            {"text": f"🛠 {sid}", "callback_data": f"CAMSEL_{sid}"}
         ])
 
     botones_lista.append([
@@ -443,13 +457,21 @@ def webhook():
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
-            tg_edit(chat, msg_id, "📋 Servicios en curso" if curso else "❌ No hay servicios en curso",
-                    lista_servicios(curso) if curso else botones())
+            tg_edit(
+                chat,
+                msg_id,
+                "📋 Servicios en curso" if curso else "❌ No hay servicios en curso",
+                lista_curso(curso) if curso else botones()
+             )
 
         elif action == "CAMBIAR":
             curso = homeserve.obtener_curso()
-            tg_edit(chat, msg_id, "🛠 Selecciona servicio",
-                    lista_servicios(curso) if curso else botones())
+            tg_edit(
+                chat,
+                msg_id,
+                "🛠 Selecciona servicio",
+                lista_cambio(curso) if curso else botones()
+            )
 
         elif action.startswith("CAMSEL_"):
             sid = action.split("_")[1]
