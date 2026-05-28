@@ -358,51 +358,110 @@ def webhook():
         elif action == "REFRESH":
     tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
 
-# =========================
-# 📋 SERVICIOS EN CURSO
-# =========================
-elif action == "CURSO":
+        elif action == "CURSO":
 
-    curso = homeserve.obtener_curso()
+        curso = homeserve.obtener_curso()
 
-    if not curso:
+        if not curso:
+        tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
 
-        tg_edit(
-            chat,
-            msg_id,
-            "❌ No hay servicios en curso",
-            botones()
-        )
-
-    else:
-
-        botones_lista = []
+        else:
+                botones_lista = []
 
         for sid in curso:
+                    botones_lista.append([
+                        {
+                            "text": sid,
+                            "callback_data": f"SEL_{sid}"
+                        }
+                    ])
 
-            botones_lista.append([
-                {
-                    "text": sid,
-                    "callback_data": f"SEL_{sid}"
-                }
-            ])
+                botones_lista.append([
+                    {
+                        "text": "⬅️ Volver",
+                        "callback_data": "BACK_MENU"
+                    }
+                ])
 
-        botones_lista.append([
-            {
-                "text": "⬅️ Volver",
-                "callback_data": "BACK_MENU"
-            }
-        ])
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "📋 Selecciona un servicio",
+                    {
+                        "inline_keyboard": botones_lista
+                    }
+                )
 
-        tg_edit(
-            chat,
-            msg_id,
-            "📋 Selecciona un servicio",
-            {
-                "inline_keyboard": botones_lista
-            }
-        )
+        elif action == "CAMBIAR":
 
+            curso = homeserve.obtener_curso()
+
+        if not curso:
+                tg_edit(chat, msg_id, "❌ No hay servicios", botones())
+
+        else:
+                botones_lista = []
+
+        for sid in curso:
+                    botones_lista.append([
+                        {
+                            "text": sid,
+                            "callback_data": f"SEL_{sid}"
+                        }
+                    ])
+
+                botones_lista.append([
+                    {
+                        "text": "⬅️ Volver",
+                        "callback_data": "BACK_MENU"
+                    }
+                ])
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "🛠 Selecciona servicio",
+                    {
+                        "inline_keyboard": botones_lista
+                    }
+                )
+
+        elif action.startswith("SEL_"):
+
+            sid = action.split("_")[1]
+
+            tg_edit(
+                chat,
+                msg_id,
+                f"📌 Servicio:\n\n<b>{sid}</b>",
+                botones_estado(sid)
+            )
+
+        elif action.startswith("ESTADO_"):
+
+        try:
+
+                _, sid, estado = action.split("_")
+
+                ok, msg = homeserve.cambiar_estado(sid, estado)
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    msg,
+                    botones_estado(sid)
+                )
+
+        except Exception as e:
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    f"❌ Error: {e}",
+                    botones()
+                )
+
+    
         elif action == "NUM_SERV":
             tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
 
@@ -431,10 +490,10 @@ elif action == "CURSO":
 
         elif action == "WEB":
             servicios = homeserve.obtener()
-            if servicios:
+        if servicios:
                 sid, txt = list(servicios.items())[0]
                 tg_edit(chat, msg_id, txt, botones_servicio(sid))
-            else:
+        else:
                 tg_edit(chat, msg_id, "Sin servicios", botones())
 
         elif action == "BACK_MENU":
@@ -456,7 +515,7 @@ elif action == "CURSO":
 
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
-            try:
+        try:
                 url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
                 r = homeserve.session.get(url, timeout=15)
                 html = r.text.lower()
@@ -465,14 +524,14 @@ elif action == "CURSO":
                 fallo = any(e in html for e in errores)
                 ok_visual = ("<table" in html or "<form" in html or "servicio" in html)
 
-                if fallo:
+        if fallo:
                     tg_edit(chat, msg_id, f"❌ Error al aceptar servicio {sid}", botones())
-                elif ok_visual:
+        elif ok_visual:
                     tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
-                else:
+        else:
                     tg_edit(chat, msg_id, f"⚠️ No se pudo confirmar aceptación de {sid}", botones())
 
-            except Exception as e:
+        except Exception as e:
                 tg_edit(chat, msg_id, f"❌ {e}", botones())
 
         elif action.startswith("RECHAZAR_"):
