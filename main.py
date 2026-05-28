@@ -136,8 +136,7 @@ def botones():
             [{"text": "🌐 Web", "callback_data": "WEB"},
              {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}],
-            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}]
+            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}]
         ]
     }
 
@@ -243,37 +242,6 @@ class HomeServe:
         except:
             return {}
 
-    def obtener_servicios_curso(self):
-        try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=15)
-            r.encoding = "latin-1"
-            soup = BeautifulSoup(r.text, "html.parser")
-            filas = soup.find_all("tr")
-
-            servicios = []
-
-            for fila in filas[1:]:
-                columnas = fila.find_all("td")
-                if len(columnas) >= 6:
-                    try:
-                        servicio_raw = columnas[0].get_text(" ", strip=True)
-                        match = re.search(r"\d{7,8}", servicio_raw)
-                        if not match:
-                            continue
-
-                        servicios.append({
-                            "servicio": match.group(0),
-                            "direccion": columnas[2].get_text(" ", strip=True),
-                            "fec_caduca": columnas[5].get_text(" ", strip=True)
-                        })
-                    except:
-                        pass
-
-            return servicios
-        except Exception as e:
-            logger.error(e)
-            return []
-
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
@@ -335,51 +303,40 @@ threading.Thread(target=loop, daemon=True).start()
 def webhook():
     data = request.json
 
-    # ---------------- MENSAJES ----------------
     if "message" in data:
         chat = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "").strip()
+        text = data["message"].get("text", "")
 
         guardar_usuario(chat)
 
-        # ---- flujo servicios manuales ----
         if chat in SERV_STATE:
             data_serv = SERV_STATE[chat]
             msg_edit = data_serv["msg_id"]
 
             if text.upper() == "TERMINAR":
-                SERV_STATE.pop(chat, None)
+                SERV_STATE.pop(chat)
                 tg_edit(chat, msg_edit, "✅ Servicios guardados correctamente", botones_num_serv())
             else:
                 add_service(chat, text)
                 actual = read_services(chat)
-                tg_edit(
-                    chat,
-                    msg_edit,
-                    f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR",
-                    botones_num_serv()
-                )
+                tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
+
             return jsonify(ok=True)
 
-        # ---- comandos básicos ----
         if text == "/start":
             tg_send(chat, "🤖 Bot activo", botones())
 
-        # ---- usuarios estado ----
         if chat in USER_STATE:
-            state = USER_STATE[chat]
-
-            if state == "ADD_USER":
+            if USER_STATE[chat] == "ADD_USER":
                 guardar_usuario(text)
                 tg_send(chat, "✅ Usuario añadido")
-                USER_STATE.pop(chat, None)
+                USER_STATE.pop(chat)
 
-            elif state == "DEL_USER":
+            elif USER_STATE[chat] == "DEL_USER":
                 eliminar_usuario(text)
                 tg_send(chat, "🗑 Usuario eliminado")
-                USER_STATE.pop(chat, None)
+                USER_STATE.pop(chat)
 
-    # ---------------- CALLBACKS ----------------
     if "callback_query" in data:
         cq = data["callback_query"]
         chat = cq["message"]["chat"]["id"]
@@ -389,7 +346,6 @@ def webhook():
         tg_answer(cq["id"])
         guardar_usuario(chat)
 
-        # ---- login ----
         if action == "LOGIN":
             ok = homeserve.login()
             tg_edit(chat, msg_id, "Login OK" if ok else "Error", botones())
@@ -397,52 +353,12 @@ def webhook():
         elif action == "REFRESH":
             tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
 
-        # ---- curso ----
-                # ---- curso ----
-        elif action == "CURSO":
-
-            servicios = homeserve.obtener_servicios_curso()
-
-            if not servicios:
-                tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
-
-            else:
-                teclado = []
-
-                for s in servicios:
-                    sid = s["servicio"]
-
-                    teclado.append([
-                        {
-                            "text": sid,
-                            "callback_data": f"CURSO_SEL_{sid}"
-                        }
-                    ])
-
-                teclado.append([
-                    {
-                        "text": "⬅️ Volver",
-                        "callback_data": "BACK_MENU"
-                    }
-                ])
-
-                tg_edit(
-                    chat,
-                    msg_id,
-                    "📋 <b>Seleccione servicio:</b>",
-                    {
-                        "inline_keyboard": teclado
-                    }
-                )
-
         elif action == "NUM_SERV":
             tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
 
         elif action == "ADD_SERV":
             SERV_STATE[chat] = {"msg_id": msg_id}
-            tg_edit(chat, msg_id,
-                    "✍️ Escribe servicios.\n\nCuando acabes escribe:\nTERMINAR",
-                    botones_num_serv())
+            tg_edit(chat, msg_id, "✍️ Escribe servicios.\n\nCuando acabes escribe:\nTERMINAR", botones_num_serv())
 
         elif action == "DEL_SERV":
             clear_services(chat)
@@ -454,17 +370,15 @@ def webhook():
 
         elif action == "DOWN_SERV":
             path = file_path(chat)
-            with open(path, "rb") as f:
-                requests.post(
-                    f"{TELEGRAM_API}/sendDocument",
-                    data={"chat_id": chat},
-                    files={"document": f}
-                )
+            requests.post(
+                f"{TELEGRAM_API}/sendDocument",
+                data={"chat_id": chat},
+                files={"document": open(path, "rb")}
+            )
 
         elif action == "BACK_NUM_SERV":
             tg_edit(chat, msg_id, "Menú", botones())
 
-        # ---- web ----
         elif action == "WEB":
             servicios = homeserve.obtener()
             if servicios:
@@ -476,7 +390,6 @@ def webhook():
         elif action == "BACK_MENU":
             tg_edit(chat, msg_id, "Menú", botones())
 
-        # ---- usuarios ----
         elif action == "USUARIOS":
             tg_edit(chat, msg_id, "Usuarios", botones_usuarios())
 
@@ -489,26 +402,16 @@ def webhook():
             tg_send(chat, "Envía ID")
 
         elif action == "LIST_USERS":
-            tg_edit(chat, msg_id,
-                    "\n".join(obtener_usuarios()) or "Vacío",
-                    botones_usuarios())
+            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()) or "Vacío", botones_usuarios())
 
-        # =========================
-        # ✅ ACEPTAR SERVICIO
-        # =========================
         elif action.startswith("ACEPTAR_"):
-            sid = action.split("_", 1)[1]
-
+            sid = action.split("_")[1]
             try:
                 url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
                 r = homeserve.session.get(url, timeout=15)
                 html = r.text.lower()
 
-                errores = [
-                    "error", "illegal", "denegado",
-                    "caducada", "no autorizado", "acceso inválido"
-                ]
-
+                errores = ["error","illegal","denegado","caducada","no autorizado","acceso inválido"]
                 fallo = any(e in html for e in errores)
                 ok_visual = ("<table" in html or "<form" in html or "servicio" in html)
 
@@ -517,58 +420,21 @@ def webhook():
                 elif ok_visual:
                     tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
                 else:
-                    tg_edit(chat, msg_id,
-                            f"⚠️ No se pudo confirmar aceptación de {sid}",
-                            botones())
+                    tg_edit(chat, msg_id, f"⚠️ No se pudo confirmar aceptación de {sid}", botones())
 
             except Exception as e:
-                tg_edit(chat, msg_id, f"❌ Error: {e}", botones())
+                tg_edit(chat, msg_id, f"❌ {e}", botones())
 
-        # =========================
-        # ❌ RECHAZAR SERVICIO
-        # =========================
         elif action.startswith("RECHAZAR_"):
-            sid = action.split("_", 1)[1]
+            sid = action.split("_")[1]
+            homeserve.cambiar_estado(sid, "348")
+            tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
-            ok, msg = homeserve.cambiar_estado(sid, "348")
-            tg_edit(chat, msg_id, "❌ Rechazado\n" + msg, botones())
-
-        elif action.startswith("CURSO_SEL_"):
-    sid = action.split("_", 2)[2]
-
-    tg_edit(
-        chat,
-        msg_id,
-        f"📌 Servicio seleccionado:\n\n<b>{sid}</b>",
-        botones_servicio(sid)
-    )
-
-        # ---- cambio estado ----
-                # =========================
-        # 📋 SELECCIONAR SERVICIO CURSO
-        # =========================
-        elif action.startswith("CURSO_SEL_"):
-
-            sid = action.split("_", 2)[2]
-
-            tg_edit(
-                chat,
-                msg_id,
-                f"📌 <b>Servicio:</b> {sid}",
-                botones_servicio(sid)
-            )
-
-        elif action.startswith("SEL_"):
-            sid = action.split("_", 1)[1]
-            tg_edit(chat, msg_id, sid, botones_estado(sid))
 
         elif action.startswith("ESTADO_"):
-            try:
-                _, sid, estado = action.split("_")
-                ok, msg = homeserve.cambiar_estado(sid, estado)
-                tg_edit(chat, msg_id, msg, botones_estado(sid))
-            except:
-                tg_edit(chat, msg_id, "❌ Error estado inválido", botones())
+            _, sid, estado = action.split("_")
+            ok, msg = homeserve.cambiar_estado(sid, estado)
+            tg_edit(chat, msg_id, msg, botones_estado(sid))
 
     return jsonify(ok=True)
 
