@@ -452,66 +452,66 @@ def webhook():
                     lista_servicios(curso) if curso else botones())
 
         elif action.startswith("SEL_"):
-    sid = action.split("_")[1]
-
-    try:
-        url = (
-            f"{BASE_URL}"
-            f"?w3exec=ver_servicioencurso"
-            f"&Servicio={sid}"
-            f"&Pag=1"
-        )
-
-        r = homeserve.session.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        datos = {}
-
-        for tr in soup.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) >= 2:
-                clave = tds[0].get_text(" ", strip=True).replace(":", "")
-                valor = tds[1].get_text(" ", strip=True)
-                datos[clave] = valor
-
-        servicio = datos.get("SERVICIO", sid)
-        domicilio = datos.get("DOMICILIO", "")
-        poblacion = datos.get("POBLACION-PROVINCIA", "")
-        comentarios = datos.get("COMENTARIOS", "")
-
-        comentarios = "\n".join(comentarios.splitlines()[:5])
-
-        texto = (
-            f"📋 <b>SERVICIO:</b> {servicio}\n\n"
-            f"🏠 <b>DOMICILIO:</b>\n{domicilio}\n\n"
-            f"📍 <b>POBLACION-PROVINCIA:</b>\n{poblacion}\n\n"
-            f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
-        )
-
-        tg_edit(
-            chat,
-            msg_id,
-            texto,
-            {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "⬅️ Volver",
-                            "callback_data": "CURSO"
-                        }
-                    ]
-                ]
-            }
-        )
-
-    except Exception as e:
-        tg_edit(
-            chat,
-            msg_id,
-            f"❌ Error obteniendo servicio:\n{e}",
-            botones()
-        )
-
+            sid = action.split("_")[1]
+            
+            try:
+                url = (
+                    f"{BASE_URL}"
+                    f"?w3exec=ver_servicioencurso"
+                    f"&Servicio={sid}"
+                    f"&Pag=1"
+                )
+                
+                r = homeserve.session.get(url, timeout=15)
+                soup = BeautifulSoup(r.text, "html.parser")
+                
+                datos = {}
+                
+                for tr in soup.find_all("tr"):
+                    tds = tr.find_all("td")
+                    if len(tds) >= 2:
+                        clave = tds[0].get_text(" ", strip=True).replace(":", "")
+                        valor = tds[1].get_text(" ", strip=True)
+                        datos[clave] = valor
+                        
+                        
+                servicio = datos.get("SERVICIO", sid)
+                domicilio = datos.get("DOMICILIO", "")
+                poblacion = datos.get("POBLACION-PROVINCIA", "")
+                comentarios = datos.get("COMENTARIOS", "")
+                
+                comentarios = "\n".join(comentarios.splitlines()[:5])
+                
+                texto = (
+                    f"📋 <b>SERVICIO:</b> {servicio}\n\n"
+                    f"🏠 <b>DOMICILIO:</b>\n{domicilio}\n\n"
+                    f"📍 <b>POBLACION-PROVINCIA:</b>\n{poblacion}\n\n"
+                    f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
+                )
+                
+                tg_edit(
+                    chat,
+                    msg_id,
+                    texto,
+                    {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "⬅️ Volver",
+                                    "callback_data": "CURSO"
+                                }
+                            ]
+                        ]
+                    }
+                )
+            except Exception as e:
+                tg_edit(
+                    chat,
+                    msg_id,
+                    f"❌ Error obteniendo servicio:\n{e}",
+                    botones()
+                )
+                    
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
