@@ -398,26 +398,42 @@ def webhook():
             tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
 
         # ---- curso ----
+                # ---- curso ----
         elif action == "CURSO":
-    servicios = homeserve.obtener_servicios_curso()
 
-    if not servicios:
-        tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
-    else:
-        # SOLO IDS (menú limpio)
-        teclado = [
-            [{"text": f"{s['servicio']}", "callback_data": f"CURSO_SEL_{s['servicio']}"}]
-            for s in servicios
-        ]
+            servicios = homeserve.obtener_servicios_curso()
 
-        teclado.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+            if not servicios:
+                tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
 
-        tg_edit(
-            chat,
-            msg_id,
-            "📋 <b>Seleccione servicio:</b>",
-            {"inline_keyboard": teclado}
-        )
+            else:
+                teclado = []
+
+                for s in servicios:
+                    sid = s["servicio"]
+
+                    teclado.append([
+                        {
+                            "text": sid,
+                            "callback_data": f"CURSO_SEL_{sid}"
+                        }
+                    ])
+
+                teclado.append([
+                    {
+                        "text": "⬅️ Volver",
+                        "callback_data": "BACK_MENU"
+                    }
+                ])
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "📋 <b>Seleccione servicio:</b>",
+                    {
+                        "inline_keyboard": teclado
+                    }
+                )
 
         elif action == "NUM_SERV":
             tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
@@ -528,9 +544,19 @@ def webhook():
     )
 
         # ---- cambio estado ----
-        elif action == "CAMBIAR":
-            curso = homeserve.obtener_curso()
-            tg_edit(chat, msg_id, "Selecciona", lista_servicios(curso))
+                # =========================
+        # 📋 SELECCIONAR SERVICIO CURSO
+        # =========================
+        elif action.startswith("CURSO_SEL_"):
+
+            sid = action.split("_", 2)[2]
+
+            tg_edit(
+                chat,
+                msg_id,
+                f"📌 <b>Servicio:</b> {sid}",
+                botones_servicio(sid)
+            )
 
         elif action.startswith("SEL_"):
             sid = action.split("_", 1)[1]
