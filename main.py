@@ -356,7 +356,52 @@ def webhook():
             tg_edit(chat, msg_id, "Login OK" if ok else "Error", botones())
 
         elif action == "REFRESH":
-            tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
+    tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
+
+# =========================
+# 📋 SERVICIOS EN CURSO
+# =========================
+elif action == "CURSO":
+
+    curso = homeserve.obtener_curso()
+
+    if not curso:
+
+        tg_edit(
+            chat,
+            msg_id,
+            "❌ No hay servicios en curso",
+            botones()
+        )
+
+    else:
+
+        botones_lista = []
+
+        for sid in curso:
+
+            botones_lista.append([
+                {
+                    "text": sid,
+                    "callback_data": f"SEL_{sid}"
+                }
+            ])
+
+        botones_lista.append([
+            {
+                "text": "⬅️ Volver",
+                "callback_data": "BACK_MENU"
+            }
+        ])
+
+        tg_edit(
+            chat,
+            msg_id,
+            "📋 Selecciona un servicio",
+            {
+                "inline_keyboard": botones_lista
+            }
+        )
 
         elif action == "NUM_SERV":
             tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
@@ -434,43 +479,6 @@ def webhook():
             sid = action.split("_")[1]
             homeserve.cambiar_estado(sid, "348")
             tg_edit(chat, msg_id, "❌ Rechazado", botones())
-
-        # =========================
-# 📋 SERVICIOS EN CURSO
-# =========================
-elif action == "CURSO":
-
-    servicios = homeserve.obtener_curso()
-
-    if not servicios:
-        tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
-
-    else:
-        botones_lista = []
-
-        for sid in servicios:
-            botones_lista.append([
-                {
-                    "text": sid,
-                    "callback_data": f"SEL_{sid}"
-                }
-            ])
-
-        botones_lista.append([
-            {
-                "text": "⬅️ Volver",
-                "callback_data": "BACK_MENU"
-            }
-        ])
-
-        tg_edit(
-            chat,
-            msg_id,
-            "📋 Selecciona un servicio",
-            {
-                "inline_keyboard": botones_lista
-            }
-        )
 
 # =========================
 # 🛠 CAMBIAR ESTADO
