@@ -433,6 +433,10 @@ def webhook():
         elif action == "CAMBIAR":
             curso = homeserve.obtener_curso()
             tg_edit(chat, msg_id, "Selecciona", lista_servicios(curso))
+
+        elif action.startswith("SEL_"):
+            sid = action.split("_")[1]
+            tg_edit(chat, msg_id, sid, botones_estado(sid))
             
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
