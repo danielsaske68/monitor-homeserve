@@ -399,22 +399,25 @@ def webhook():
 
         # ---- curso ----
         elif action == "CURSO":
-            servicios = homeserve.obtener_servicios_curso()
-            if not servicios:
-                tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
-            else:
-                texto = "📋 <b>Servicios en curso</b>\n\n"
-                for s in servicios:
-                    texto += (
-                        f"🔹 <b>Servicio:</b> {s['servicio']}\n"
-                        f"📍 <b>Dirección:</b> {s['direccion']}\n"
-                        f"📅 <b>Caduca:</b> {s['fec_caduca']}\n\n"
-                    )
+    servicios = homeserve.obtener_servicios_curso()
 
-                if len(texto) > 3500:
-                    texto = texto[:3500] + "\n\n⚠️ Texto truncado..."
+    if not servicios:
+        tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
+    else:
+        # SOLO IDS (menú limpio)
+        teclado = [
+            [{"text": f"{s['servicio']}", "callback_data": f"CURSO_SEL_{s['servicio']}"}]
+            for s in servicios
+        ]
 
-                tg_edit(chat, msg_id, texto, botones())
+        teclado.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+
+        tg_edit(
+            chat,
+            msg_id,
+            "📋 <b>Seleccione servicio:</b>",
+            {"inline_keyboard": teclado}
+        )
 
         elif action == "NUM_SERV":
             tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
@@ -513,6 +516,16 @@ def webhook():
 
             ok, msg = homeserve.cambiar_estado(sid, "348")
             tg_edit(chat, msg_id, "❌ Rechazado\n" + msg, botones())
+
+        elif action.startswith("CURSO_SEL_"):
+    sid = action.split("_", 2)[2]
+
+    tg_edit(
+        chat,
+        msg_id,
+        f"📌 Servicio seleccionado:\n\n<b>{sid}</b>",
+        botones_servicio(sid)
+    )
 
         # ---- cambio estado ----
         elif action == "CAMBIAR":
