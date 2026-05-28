@@ -809,31 +809,24 @@ def webhook():
 
         datos = {}
 
-        filas = soup.find_all("tr")
+        for tr in soup.find_all("tr"):
 
-        for fila in filas:
-
-            tds = fila.find_all("td")
+            tds = tr.find_all("td")
 
             if len(tds) >= 2:
 
-                clave = tds[0].get_text(" ", strip=True)
+                clave = tds[0].get_text(" ", strip=True).replace(":", "")
                 valor = tds[1].get_text(" ", strip=True)
-
-                clave = clave.replace(":", "").strip()
 
                 datos[clave] = valor
 
         servicio = datos.get("SERVICIO", sid)
-        domicilio = datos.get("DOMICILIO", "No encontrado")
-        poblacion = datos.get("POBLACION-PROVINCIA", "No encontrado")
+        domicilio = datos.get("DOMICILIO", "")
+        poblacion = datos.get("POBLACION-PROVINCIA", "")
+        comentarios = datos.get("COMENTARIOS", "")
 
-        comentarios = datos.get("COMENTARIOS", "Sin comentarios")
-
-        comentarios = comentarios.strip()
-
+        # solo primeras 5 líneas
         lineas = comentarios.splitlines()
-
         comentarios = "\n".join(lineas[:5])
 
         texto = (
@@ -864,7 +857,7 @@ def webhook():
         tg_edit(
             chat,
             msg_id,
-            f"❌ Error obteniendo servicio:\n\n{e}",
+            f"❌ Error obteniendo servicio:\n{e}",
             botones()
         )
 
