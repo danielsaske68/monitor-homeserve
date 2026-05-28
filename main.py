@@ -5,6 +5,7 @@ import logging
 import re
 import requests
 import sqlite3
+
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
@@ -12,15 +13,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------- CONFIG ----------------
+# =========================================================
+# CONFIG
+# =========================================================
+
 USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+
 BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
+
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -30,55 +37,79 @@ logger = logging.getLogger("bot")
 
 app = Flask(__name__)
 
-# ---------------- STATE ----------------
+# =========================================================
+# STATE
+# =========================================================
+
 SERVICIOS_ACTUALES = {}
-WEB_CACHE = {}
-WEB_INDEX = {}
 USER_STATE = {}
 SERV_STATE = {}
 
-# ---------------- DB ----------------
+# =========================================================
+# DATABASE
+# =========================================================
+
 DB_PATH = "/data/usuarios.db"
+
 os.makedirs("/data", exist_ok=True)
 
 logger.info(f"DB PATH: {DB_PATH}")
-logger.info(f"DATA EXISTS: {os.path.exists('/data')}")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS usuarios (chat_id TEXT PRIMARY KEY)")
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            chat_id TEXT PRIMARY KEY
+        )
+    """)
+
     conn.commit()
     conn.close()
 
 def guardar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
     c.execute(
         "INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)",
         (str(chat_id),)
     )
+
     conn.commit()
     conn.close()
 
 def obtener_usuarios():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
     c.execute("SELECT chat_id FROM usuarios")
+
     usuarios = [r[0] for r in c.fetchall()]
+
     conn.close()
+
     return usuarios
 
 def eliminar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
+
+    c.execute(
+        "DELETE FROM usuarios WHERE chat_id=?",
+        (str(chat_id),)
+    )
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# ---------------- FILE SYSTEM ----------------
+# =========================================================
+# FILES
+# =========================================================
+
 def file_path(chat):
     return f"/data/servicios_{chat}.txt"
 
@@ -96,111 +127,275 @@ def read_services(chat):
 def clear_services(chat):
     open(file_path(chat), "w").close()
 
-# ---------------- TELEGRAM ----------------
+# =========================================================
+# TELEGRAM
+# =========================================================
+
 def tg_send(chat, text, markup=None):
+
     payload = {
         "chat_id": chat,
         "text": text,
         "parse_mode": "HTML"
     }
+
     if markup:
         payload["reply_markup"] = markup
 
-    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+    requests.post(
+        f"{TELEGRAM_API}/sendMessage",
+        json=payload,
+        timeout=10
+    )
 
 def tg_edit(chat, msg_id, text, markup=None):
+
     payload = {
         "chat_id": chat,
         "message_id": msg_id,
         "text": text,
         "parse_mode": "HTML"
     }
+
     if markup:
         payload["reply_markup"] = markup
 
-    requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
-
-def tg_answer(callback_id):
     requests.post(
-        f"{TELEGRAM_API}/answerCallbackQuery",
-        json={"callback_query_id": callback_id},
+        f"{TELEGRAM_API}/editMessageText",
+        json=payload,
         timeout=10
     )
 
-# ---------------- BOTONES ----------------
+def tg_answer(callback_id):
+
+    requests.post(
+        f"{TELEGRAM_API}/answerCallbackQuery",
+        json={
+            "callback_query_id": callback_id
+        },
+        timeout=10
+    )
+
+# =========================================================
+# BOTONES
+# =========================================================
+
 def botones():
+
     return {
         "inline_keyboard": [
-            [{"text": "🔐 Login", "callback_data": "LOGIN"},
-             {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
 
-            [{"text": "🌐 Web", "callback_data": "WEB"},
-             {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
+            [
+                {
+                    "text": "🔐 Login",
+                    "callback_data": "LOGIN"
+                },
+                {
+                    "text": "🔄 Refresh",
+                    "callback_data": "REFRESH"
+                }
+            ],
 
-            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
+            [
+                {
+                    "text": "🌐 Web",
+                    "callback_data": "WEB"
+                },
+                {
+                    "text": "👥 Usuarios",
+                    "callback_data": "USUARIOS"
+                }
+            ],
 
-            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
+            [
+                {
+                    "text": "🛠 Cambiar estado",
+                    "callback_data": "CAMBIAR"
+                }
+            ],
 
-            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}]
+            [
+                {
+                    "text": "📋 Servicios en curso",
+                    "callback_data": "CURSO"
+                }
+            ],
+
+            [
+                {
+                    "text": "📦 Numero de servicios",
+                    "callback_data": "NUM_SERV"
+                }
+            ]
         ]
     }
 
 def botones_num_serv():
+
     return {
         "inline_keyboard": [
-            [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
-            [{"text": "🗑 Eliminar archivo", "callback_data": "DEL_SERV"}],
-            [{"text": "📥 Descargar", "callback_data": "DOWN_SERV"}],
-            [{"text": "👁 Ver", "callback_data": "VIEW_SERV"}],
-            [{"text": "⬅️ Volver", "callback_data": "BACK_NUM_SERV"}]
+
+            [
+                {
+                    "text": "➕ Agregar servicio",
+                    "callback_data": "ADD_SERV"
+                }
+            ],
+
+            [
+                {
+                    "text": "🗑 Eliminar archivo",
+                    "callback_data": "DEL_SERV"
+                }
+            ],
+
+            [
+                {
+                    "text": "📥 Descargar",
+                    "callback_data": "DOWN_SERV"
+                }
+            ],
+
+            [
+                {
+                    "text": "👁 Ver",
+                    "callback_data": "VIEW_SERV"
+                }
+            ],
+
+            [
+                {
+                    "text": "⬅️ Volver",
+                    "callback_data": "BACK_NUM_SERV"
+                }
+            ]
         ]
     }
 
 def botones_usuarios():
+
     return {
         "inline_keyboard": [
-            [{"text": "➕ Agregar", "callback_data": "ADD_USER"}],
-            [{"text": "🗑 Eliminar", "callback_data": "DEL_USER"}],
-            [{"text": "📋 Listar", "callback_data": "LIST_USERS"}],
-            [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+
+            [
+                {
+                    "text": "➕ Agregar",
+                    "callback_data": "ADD_USER"
+                }
+            ],
+
+            [
+                {
+                    "text": "🗑 Eliminar",
+                    "callback_data": "DEL_USER"
+                }
+            ],
+
+            [
+                {
+                    "text": "📋 Listar",
+                    "callback_data": "LIST_USERS"
+                }
+            ],
+
+            [
+                {
+                    "text": "⬅️ Volver",
+                    "callback_data": "BACK_MENU"
+                }
+            ]
         ]
     }
 
 def botones_servicio(sid):
+
     return {
         "inline_keyboard": [
-            [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
-             {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
-            [{"text": "⬅️ Volver", "callback_data": "WEB"}]
+
+            [
+                {
+                    "text": "✅ Aceptar",
+                    "callback_data": f"ACEPTAR_{sid}"
+                },
+                {
+                    "text": "❌ Rechazar",
+                    "callback_data": f"RECHAZAR_{sid}"
+                }
+            ],
+
+            [
+                {
+                    "text": "⬅️ Volver",
+                    "callback_data": "WEB"
+                }
+            ]
         ]
     }
 
 def botones_estado(sid):
+
     return {
         "inline_keyboard": [
-            [{"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"},
-             {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}],
-            [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
+
+            [
+                {
+                    "text": "🔴 348 Cliente",
+                    "callback_data": f"ESTADO_{sid}_348"
+                },
+                {
+                    "text": "🟢 318 Confirmación",
+                    "callback_data": f"ESTADO_{sid}_318"
+                }
+            ],
+
+            [
+                {
+                    "text": "⬅️ Volver",
+                    "callback_data": "CAMBIAR"
+                }
+            ]
         ]
     }
 
 def lista_servicios(servicios):
-    botones_lista = [
-        [{"text": sid, "callback_data": f"SEL_{sid}"}]
-        for sid in servicios
-    ]
-    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
 
-    return {"inline_keyboard": botones_lista}
+    botones_lista = []
 
-# ---------------- HOMESERVE ----------------
+    for sid in servicios:
+
+        botones_lista.append([
+            {
+                "text": sid,
+                "callback_data": f"SEL_{sid}"
+            }
+        ])
+
+    botones_lista.append([
+        {
+            "text": "⬅️ Volver",
+            "callback_data": "BACK_MENU"
+        }
+    ])
+
+    return {
+        "inline_keyboard": botones_lista
+    }
+
+# =========================================================
+# HOMESERVE
+# =========================================================
+
 class HomeServe:
+
     def __init__(self):
         self.session = requests.Session()
 
     def login(self):
+
         try:
+
             self.session.get(LOGIN_URL, timeout=10)
+
             r = self.session.post(
                 LOGIN_URL,
                 data={
@@ -210,48 +405,89 @@ class HomeServe:
                 },
                 timeout=10
             )
+
             return "error" not in r.text.lower()
+
         except:
             return False
 
     def obtener(self):
+
         try:
-            r = self.session.get(ASIGNACION_URL, timeout=15)
-            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+
+            r = self.session.get(
+                ASIGNACION_URL,
+                timeout=15
+            )
+
+            text = BeautifulSoup(
+                r.text,
+                "html.parser"
+            ).get_text("\n")
+
+            bloques = re.split(
+                r"\n(?=\d{7,8}\s)",
+                text
+            )
+
             servicios = {}
 
             for b in bloques:
+
                 m = re.search(r"\b\d{7,8}\b", b)
+
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
 
             return servicios
+
         except:
             return {}
 
     def obtener_curso(self):
+
         try:
-            r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
+
+            r = self.session.get(
+                SERVICIOS_CURSO_URL,
+                timeout=10
+            )
+
             r.encoding = "latin-1"
-            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+
+            text = BeautifulSoup(
+                r.text,
+                "html.parser"
+            ).get_text("\n")
+
+            bloques = re.split(
+                r"\n(?=\d{7,8}\s)",
+                text
+            )
+
             servicios = {}
 
             for b in bloques:
+
                 m = re.search(r"\b\d{7,8}\b", b)
+
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
 
             return servicios
+
         except:
             return {}
 
     def cambiar_estado(self, sid, estado):
+
         try:
+
             fecha = datetime.now() + timedelta(days=3)
+
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
+
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
@@ -274,157 +510,285 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            self.session.post(BASE_URL, data=payload, timeout=10)
+            self.session.post(
+                BASE_URL,
+                data=payload,
+                timeout=10
+            )
+
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
+
         except Exception as e:
+
             return False, f"❌ Error: {e}"
 
 homeserve = HomeServe()
 
+# =========================================================
+# LOOP
+# =========================================================
+
 def loop():
+
     global SERVICIOS_ACTUALES
+
     homeserve.login()
 
     while True:
+
         try:
+
             actuales = homeserve.obtener()
 
             for sid, txt in actuales.items():
+
                 if sid not in SERVICIOS_ACTUALES:
+
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
+
+                        tg_send(
+                            u,
+                            f"🆕 <b>Nuevo servicio</b>\n\n{txt}",
+                            botones_servicio(sid)
+                        )
 
             SERVICIOS_ACTUALES = actuales
+
             time.sleep(INTERVALO)
 
         except Exception as e:
+
             logger.error(e)
+
             homeserve.login()
+
             time.sleep(10)
 
-threading.Thread(target=loop, daemon=True).start()
+threading.Thread(
+    target=loop,
+    daemon=True
+).start()
+
+# =========================================================
+# WEBHOOK
+# =========================================================
 
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
+
     data = request.json
 
+    # =====================================================
+    # MENSAJES
+    # =====================================================
+
     if "message" in data:
+
         chat = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
 
         guardar_usuario(chat)
 
+        # ---------------------------------------------
+        # GUARDAR SERVICIOS TXT
+        # ---------------------------------------------
+
         if chat in SERV_STATE:
+
             data_serv = SERV_STATE[chat]
             msg_edit = data_serv["msg_id"]
 
             if text.upper() == "TERMINAR":
+
                 SERV_STATE.pop(chat)
-                tg_edit(chat, msg_edit, "✅ Servicios guardados correctamente", botones_num_serv())
+
+                tg_edit(
+                    chat,
+                    msg_edit,
+                    "✅ Servicios guardados correctamente",
+                    botones_num_serv()
+                )
+
             else:
+
                 add_service(chat, text)
+
                 actual = read_services(chat)
-                tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
+
+                tg_edit(
+                    chat,
+                    msg_edit,
+                    f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR",
+                    botones_num_serv()
+                )
 
             return jsonify(ok=True)
 
+        # ---------------------------------------------
+        # START
+        # ---------------------------------------------
+
         if text == "/start":
-            tg_send(chat, "🤖 Bot activo", botones())
+
+            tg_send(
+                chat,
+                "🤖 Bot activo",
+                botones()
+            )
+
+        # ---------------------------------------------
+        # USERS
+        # ---------------------------------------------
 
         if chat in USER_STATE:
+
             if USER_STATE[chat] == "ADD_USER":
+
                 guardar_usuario(text)
+
                 tg_send(chat, "✅ Usuario añadido")
+
                 USER_STATE.pop(chat)
 
             elif USER_STATE[chat] == "DEL_USER":
+
                 eliminar_usuario(text)
+
                 tg_send(chat, "🗑 Usuario eliminado")
+
                 USER_STATE.pop(chat)
 
+    # =====================================================
+    # CALLBACKS
+    # =====================================================
+
     if "callback_query" in data:
+
         cq = data["callback_query"]
+
         chat = cq["message"]["chat"]["id"]
+
         msg_id = cq["message"]["message_id"]
+
         action = cq["data"]
 
         tg_answer(cq["id"])
+
         guardar_usuario(chat)
 
+        # =================================================
+        # LOGIN
+        # =================================================
+
         if action == "LOGIN":
+
             ok = homeserve.login()
-            tg_edit(chat, msg_id, "Login OK" if ok else "Error", botones())
+
+            tg_edit(
+                chat,
+                msg_id,
+                "✅ Login OK" if ok else "❌ Error Login",
+                botones()
+            )
+
+        # =================================================
+        # REFRESH
+        # =================================================
 
         elif action == "REFRESH":
-    tg_edit(chat, msg_id, f"{len(homeserve.obtener())} servicios", botones())
 
-        elif action == "CURSO":
+            total = len(homeserve.obtener())
 
-        curso = homeserve.obtener_curso()
+            tg_edit(
+                chat,
+                msg_id,
+                f"🔄 {total} servicios",
+                botones()
+            )
 
-        if not curso:
-        tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
+        # =================================================
+        # WEB
+        # =================================================
 
-        else:
-                botones_lista = []
+        elif action == "WEB":
 
-        for sid in curso:
-                    botones_lista.append([
-                        {
-                            "text": sid,
-                            "callback_data": f"SEL_{sid}"
-                        }
-                    ])
+            servicios = homeserve.obtener()
 
-                botones_lista.append([
-                    {
-                        "text": "⬅️ Volver",
-                        "callback_data": "BACK_MENU"
-                    }
-                ])
+            if servicios:
+
+                sid, txt = list(servicios.items())[0]
 
                 tg_edit(
                     chat,
                     msg_id,
-                    "📋 Selecciona un servicio",
-                    {
-                        "inline_keyboard": botones_lista
-                    }
+                    txt,
+                    botones_servicio(sid)
                 )
+
+            else:
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "❌ Sin servicios",
+                    botones()
+                )
+
+        # =================================================
+        # CURSO
+        # =================================================
+
+        elif action == "CURSO":
+
+            curso = homeserve.obtener_curso()
+
+            if not curso:
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "❌ No hay servicios en curso",
+                    botones()
+                )
+
+            else:
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "📋 Servicios en curso",
+                    lista_servicios(curso)
+                )
+
+        # =================================================
+        # CAMBIAR ESTADO
+        # =================================================
 
         elif action == "CAMBIAR":
 
             curso = homeserve.obtener_curso()
 
-        if not curso:
-                tg_edit(chat, msg_id, "❌ No hay servicios", botones())
+            if not curso:
 
-        else:
-                botones_lista = []
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "❌ No hay servicios",
+                    botones()
+                )
 
-        for sid in curso:
-                    botones_lista.append([
-                        {
-                            "text": sid,
-                            "callback_data": f"SEL_{sid}"
-                        }
-                    ])
-
-                botones_lista.append([
-                    {
-                        "text": "⬅️ Volver",
-                        "callback_data": "BACK_MENU"
-                    }
-                ])
+            else:
 
                 tg_edit(
                     chat,
                     msg_id,
                     "🛠 Selecciona servicio",
-                    {
-                        "inline_keyboard": botones_lista
-                    }
+                    lista_servicios(curso)
                 )
+
+        # =================================================
+        # SELECCIONAR SERVICIO
+        # =================================================
 
         elif action.startswith("SEL_"):
 
@@ -437,13 +801,20 @@ def webhook():
                 botones_estado(sid)
             )
 
+        # =================================================
+        # CAMBIAR ESTADO REAL
+        # =================================================
+
         elif action.startswith("ESTADO_"):
 
-        try:
+            try:
 
                 _, sid, estado = action.split("_")
 
-                ok, msg = homeserve.cambiar_estado(sid, estado)
+                ok, msg = homeserve.cambiar_estado(
+                    sid,
+                    estado
+                )
 
                 tg_edit(
                     chat,
@@ -452,7 +823,7 @@ def webhook():
                     botones_estado(sid)
                 )
 
-        except Exception as e:
+            except Exception as e:
 
                 tg_edit(
                     chat,
@@ -461,163 +832,247 @@ def webhook():
                     botones()
                 )
 
-    
+        # =================================================
+        # NUM SERV
+        # =================================================
+
         elif action == "NUM_SERV":
-            tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
 
-        elif action == "ADD_SERV":
-            SERV_STATE[chat] = {"msg_id": msg_id}
-            tg_edit(chat, msg_id, "✍️ Escribe servicios.\n\nCuando acabes escribe:\nTERMINAR", botones_num_serv())
-
-        elif action == "DEL_SERV":
-            clear_services(chat)
-            tg_edit(chat, msg_id, "🗑 Archivo eliminado", botones_num_serv())
-
-        elif action == "VIEW_SERV":
-            contenido = read_services(chat)
-            tg_edit(chat, msg_id, contenido if contenido else "Vacío", botones_num_serv())
-
-        elif action == "DOWN_SERV":
-            path = file_path(chat)
-            requests.post(
-                f"{TELEGRAM_API}/sendDocument",
-                data={"chat_id": chat},
-                files={"document": open(path, "rb")}
+            tg_edit(
+                chat,
+                msg_id,
+                "📦 Numero de servicios",
+                botones_num_serv()
             )
 
+        # =================================================
+        # ADD SERV
+        # =================================================
+
+        elif action == "ADD_SERV":
+
+            SERV_STATE[chat] = {
+                "msg_id": msg_id
+            }
+
+            tg_edit(
+                chat,
+                msg_id,
+                "✍️ Escribe servicios.\n\nCuando acabes escribe:\nTERMINAR",
+                botones_num_serv()
+            )
+
+        # =================================================
+        # DELETE SERV
+        # =================================================
+
+        elif action == "DEL_SERV":
+
+            clear_services(chat)
+
+            tg_edit(
+                chat,
+                msg_id,
+                "🗑 Archivo eliminado",
+                botones_num_serv()
+            )
+
+        # =================================================
+        # VIEW SERV
+        # =================================================
+
+        elif action == "VIEW_SERV":
+
+            contenido = read_services(chat)
+
+            tg_edit(
+                chat,
+                msg_id,
+                contenido if contenido else "Vacío",
+                botones_num_serv()
+            )
+
+        # =================================================
+        # DOWNLOAD SERV
+        # =================================================
+
+        elif action == "DOWN_SERV":
+
+            path = file_path(chat)
+
+            requests.post(
+                f"{TELEGRAM_API}/sendDocument",
+                data={
+                    "chat_id": chat
+                },
+                files={
+                    "document": open(path, "rb")
+                }
+            )
+
+        # =================================================
+        # BACK NUM
+        # =================================================
+
         elif action == "BACK_NUM_SERV":
-            tg_edit(chat, msg_id, "Menú", botones())
 
-        elif action == "WEB":
-            servicios = homeserve.obtener()
-        if servicios:
-                sid, txt = list(servicios.items())[0]
-                tg_edit(chat, msg_id, txt, botones_servicio(sid))
-        else:
-                tg_edit(chat, msg_id, "Sin servicios", botones())
+            tg_edit(
+                chat,
+                msg_id,
+                "📦 Menú",
+                botones()
+            )
 
-        elif action == "BACK_MENU":
-            tg_edit(chat, msg_id, "Menú", botones())
+        # =================================================
+        # USERS
+        # =================================================
 
         elif action == "USUARIOS":
-            tg_edit(chat, msg_id, "Usuarios", botones_usuarios())
+
+            tg_edit(
+                chat,
+                msg_id,
+                "👥 Usuarios",
+                botones_usuarios()
+            )
 
         elif action == "ADD_USER":
+
             USER_STATE[chat] = "ADD_USER"
+
             tg_send(chat, "Envía ID")
 
         elif action == "DEL_USER":
+
             USER_STATE[chat] = "DEL_USER"
+
             tg_send(chat, "Envía ID")
 
         elif action == "LIST_USERS":
-            tg_edit(chat, msg_id, "\n".join(obtener_usuarios()) or "Vacío", botones_usuarios())
+
+            usuarios = "\n".join(obtener_usuarios())
+
+            tg_edit(
+                chat,
+                msg_id,
+                usuarios if usuarios else "Vacío",
+                botones_usuarios()
+            )
+
+        # =================================================
+        # ACEPTAR
+        # =================================================
 
         elif action.startswith("ACEPTAR_"):
+
             sid = action.split("_")[1]
-        try:
+
+            try:
+
                 url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
-                r = homeserve.session.get(url, timeout=15)
+
+                r = homeserve.session.get(
+                    url,
+                    timeout=15
+                )
+
                 html = r.text.lower()
 
-                errores = ["error","illegal","denegado","caducada","no autorizado","acceso inválido"]
+                errores = [
+                    "error",
+                    "illegal",
+                    "denegado",
+                    "caducada",
+                    "no autorizado",
+                    "acceso inválido"
+                ]
+
                 fallo = any(e in html for e in errores)
-                ok_visual = ("<table" in html or "<form" in html or "servicio" in html)
 
-        if fallo:
-                    tg_edit(chat, msg_id, f"❌ Error al aceptar servicio {sid}", botones())
-        elif ok_visual:
-                    tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
-        else:
-                    tg_edit(chat, msg_id, f"⚠️ No se pudo confirmar aceptación de {sid}", botones())
+                ok_visual = (
+                    "<table" in html
+                    or "<form" in html
+                    or "servicio" in html
+                )
 
-        except Exception as e:
-                tg_edit(chat, msg_id, f"❌ {e}", botones())
+                if fallo:
+
+                    tg_edit(
+                        chat,
+                        msg_id,
+                        f"❌ Error al aceptar servicio {sid}",
+                        botones()
+                    )
+
+                elif ok_visual:
+
+                    tg_edit(
+                        chat,
+                        msg_id,
+                        f"✅ Servicio {sid} aceptado correctamente",
+                        botones()
+                    )
+
+                else:
+
+                    tg_edit(
+                        chat,
+                        msg_id,
+                        f"⚠️ No se pudo confirmar aceptación de {sid}",
+                        botones()
+                    )
+
+            except Exception as e:
+
+                tg_edit(
+                    chat,
+                    msg_id,
+                    f"❌ {e}",
+                    botones()
+                )
+
+        # =================================================
+        # RECHAZAR
+        # =================================================
 
         elif action.startswith("RECHAZAR_"):
+
             sid = action.split("_")[1]
-            homeserve.cambiar_estado(sid, "348")
-            tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
-# =========================
-# 🛠 CAMBIAR ESTADO
-# =========================
-elif action == "CAMBIAR":
+            homeserve.cambiar_estado(
+                sid,
+                "348"
+            )
 
-    curso = homeserve.obtener_curso()
+            tg_edit(
+                chat,
+                msg_id,
+                "❌ Rechazado",
+                botones()
+            )
 
-    if not curso:
-        tg_edit(chat, msg_id, "❌ No hay servicios", botones())
+        # =================================================
+        # BACK
+        # =================================================
 
-    else:
-        botones_lista = []
+        elif action == "BACK_MENU":
 
-        for sid in curso:
-            botones_lista.append([
-                {
-                    "text": sid,
-                    "callback_data": f"SEL_{sid}"
-                }
-            ])
-
-        botones_lista.append([
-            {
-                "text": "⬅️ Volver",
-                "callback_data": "BACK_MENU"
-            }
-        ])
-
-        tg_edit(
-            chat,
-            msg_id,
-            "🛠 Selecciona servicio",
-            {
-                "inline_keyboard": botones_lista
-            }
-        )
-
-# =========================
-# 📌 SELECCIONAR SERVICIO
-# =========================
-elif action.startswith("SEL_"):
-
-    sid = action.split("_")[1]
-
-    tg_edit(
-        chat,
-        msg_id,
-        f"📌 Servicio:\n\n<b>{sid}</b>",
-        botones_estado(sid)
-    )
-
-# =========================
-# 🔄 CAMBIO ESTADO
-# =========================
-elif action.startswith("ESTADO_"):
-
-    try:
-        _, sid, estado = action.split("_")
-
-        ok, msg = homeserve.cambiar_estado(sid, estado)
-
-        tg_edit(
-            chat,
-            msg_id,
-            msg,
-            botones_estado(sid)
-        )
-
-    except Exception as e:
-
-        tg_edit(
-            chat,
-            msg_id,
-            f"❌ Error: {e}",
-            botones()
-        )
+            tg_edit(
+                chat,
+                msg_id,
+                "🏠 Menú",
+                botones()
+            )
 
     return jsonify(ok=True)
 
+# =========================================================
+# MAIN
+# =========================================================
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+
+    app.run(
+        host="0.0.0.0",
+        port=10000
+    )
