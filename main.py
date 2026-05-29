@@ -631,9 +631,54 @@ def webhook():
                 tg_edit(chat, msg_id, f"❌ {e}", botones())
 
         elif action.startswith("RECHAZAR_"):
+
             sid = action.split("_")[1]
-            homeserve.cambiar_estado(sid, "348")
-            tg_edit(chat, msg_id, "❌ Rechazado", botones())
+            
+            try:
+                url = (
+                    f"{BASE_URL}"
+                    f"?w3exec=prof_asignacion"
+                    f"&servicio=Rech_{sid}"
+                )     
+                
+                r = homeserve.session.get(url, timeout=15)
+                
+                html = r.text.lower()
+                
+                errores = [
+                    "error",
+                    "illegal",
+                    "denegado",
+                    "caducada",
+                    "no autorizado",
+                    "acceso inválido"
+                ]
+                
+                fallo = any(e in html for e in errores)
+                
+                if fallo:
+                    tg_edit(
+                        chat,
+                        msg_id,
+                        f"❌ Error al rechazar servicio {sid}",
+                        botones()
+                    )
+                    
+                else:
+                    tg_edit(
+                        chat,
+                        msg_id,
+                        f"✅ Servicio {sid} rechazado correctamente",
+                        botones()
+                    )
+                    
+            except Exception as e:
+                tg_edit(
+                    chat,
+                    msg_id,
+                    f"❌ {e}",
+                    botones()
+                )
 
         elif action == "BACK_MENU":
             tg_edit(chat, msg_id, "🏠 Menú", botones())
