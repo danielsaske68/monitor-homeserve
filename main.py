@@ -367,19 +367,33 @@ homeserve = HomeServe()
 
 def loop():
     global SERVICIOS_ACTUALES
+    global SERVICIOS_NOTIFICADOS
 
     homeserve.login()
 
     while True:
         try:
             actuales = homeserve.obtener()
+            ahora = time.time()
 
             for sid, txt in actuales.items():
-                if sid not in SERVICIOS_ACTUALES:
+
+                ultima = SERVICIOS_NOTIFICADOS.get(sid, 0)
+
+                # anti spam 10 min
+                if ahora - ultima > 1800:
+
+                    SERVICIOS_NOTIFICADOS[sid] = ahora
+
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
+                        tg_send(
+                            u,
+                            f"🆕 <b>Nuevo servicio</b>\n\n{txt}",
+                            botones_servicio(sid)
+                        )
 
             SERVICIOS_ACTUALES = actuales
+
             time.sleep(INTERVALO)
 
         except Exception as e:
