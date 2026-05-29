@@ -44,7 +44,7 @@ app = Flask(__name__)
 SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
-SERVICIOS_NOTIFICADOS = {}
+
 
 # =========================================================
 # DATABASE
@@ -367,35 +367,19 @@ homeserve = HomeServe()
 
 def loop():
     global SERVICIOS_ACTUALES
-    global SERVICIOS_NOTIFICADOS
 
     homeserve.login()
 
     while True:
         try:
             actuales = homeserve.obtener()
-            ahora = time.time()
 
             for sid, txt in actuales.items():
-
                 if sid not in SERVICIOS_ACTUALES:
-
-                    ultima = SERVICIOS_NOTIFICADOS.get(sid, 0)
-
-                    # anti spam 10 minutos
-                    if ahora - ultima > 1800:
-
-                        SERVICIOS_NOTIFICADOS[sid] = ahora
-
-                        for u in obtener_usuarios():
-                            tg_send(
-                                u,
-                                f"🆕 <b>Nuevo servicio</b>\n\n{txt}",
-                                botones_servicio(sid)
-                            )
+                    for u in obtener_usuarios():
+                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
 
             SERVICIOS_ACTUALES = actuales
-
             time.sleep(INTERVALO)
 
         except Exception as e:
@@ -404,6 +388,7 @@ def loop():
             time.sleep(10)
 
 threading.Thread(target=loop, daemon=True).start()
+
 # =========================================================
 # WEBHOOK
 # =========================================================
@@ -524,19 +509,14 @@ def webhook():
                         
                         
                 servicio = datos.get("SERVICIO", sid)
-                telefonos = datos.get("TELEFONOS", "")
-                cliente = datos.get("CLIENTE", "")
                 domicilio = datos.get("DOMICILIO", "")
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 comentarios = datos.get("COMENTARIOS", "")
-                
                 
                 comentarios = "\n".join(comentarios.splitlines()[:5])
                 
                 texto = (
                     f"📋 <b>SERVICIO:</b> {servicio}\n\n"
-                    f"📞 <b>TELEFONOS:</b>\n{telefonos}\n\n"
-                    f"👤 <b>CLIENTE:</b>\n{cliente}\n\n"
                     f"🏠 <b>DOMICILIO:</b>\n{domicilio}\n\n"
                     f"📍 <b>POBLACION-PROVINCIA:</b>\n{poblacion}\n\n"
                     f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
