@@ -58,7 +58,7 @@ DB_PATH = "/data/usuarios.db"
 
 os.makedirs("/data", exist_ok=True)
 
-logger.info(f"DB PATH: {DB_PATH}")
+(f"DB PATH: {DB_PATH}")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -283,32 +283,27 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
-        try:
-            logger.info("🔐 Intentando login HomeServe")
-            
-            self.session.get(LOGIN_URL, timeout=10)
-               
-            r = self.session.post(
-                LOGIN_URL,
-                data={
-                    "CODIGO": USUARIO,
-                    "PASSW": PASSWORD,
-                    "BTN": "Aceptar"
-                },
-                timeout=10
+    try:
+        self.session.get(LOGIN_URL, timeout=10)
+
+        r = self.session.post(
+            LOGIN_URL,
+            data={
+                "CODIGO": USUARIO,
+                "PASSW": PASSWORD,
+                "BTN": "Aceptar"
+            },
+            timeout=10
         )
 
         ok = "error" not in r.text.lower()
 
-        if ok:
-            logger.info("✅ Login correcto")
-        else:
-            logger.error("❌ Login incorrecto")
+        logger.info(f"LOGIN -> {'OK' if ok else 'ERROR'}")
 
         return ok
 
-    except Exception:
-        logger.exception("💥 Error durante login")
+    except Exception as e:
+        logger.error(f"LOGIN ERROR: {e}")
         return False
 
     def obtener(self):
