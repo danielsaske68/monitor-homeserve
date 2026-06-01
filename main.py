@@ -32,11 +32,7 @@ SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exe
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
 app = Flask(__name__)
@@ -58,7 +54,7 @@ DB_PATH = "/data/usuarios.db"
 
 os.makedirs("/data", exist_ok=True)
 
-(f"DB PATH: {DB_PATH}")
+logger.info(f"DB PATH: {DB_PATH}")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -283,28 +279,16 @@ class HomeServe:
         self.session = requests.Session()
 
     def login(self):
-    try:
-        self.session.get(LOGIN_URL, timeout=10)
-
-        r = self.session.post(
-            LOGIN_URL,
-            data={
-                "CODIGO": USUARIO,
-                "PASSW": PASSWORD,
-                "BTN": "Aceptar"
-            },
-            timeout=10
-        )
-
-        ok = "error" not in r.text.lower()
-
-        logger.info(f"LOGIN -> {'OK' if ok else 'ERROR'}")
-
-        return ok
-
-    except Exception as e:
-        logger.error(f"LOGIN ERROR: {e}")
-        return False
+        try:
+            self.session.get(LOGIN_URL, timeout=10)
+            r = self.session.post(
+                LOGIN_URL,
+                data={"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"},
+                timeout=10
+            )
+            return "error" not in r.text.lower()
+        except:
+            return False
 
     def obtener(self):
         try:
@@ -633,54 +617,9 @@ def webhook():
                 tg_edit(chat, msg_id, f"❌ {e}", botones())
 
         elif action.startswith("RECHAZAR_"):
-
             sid = action.split("_")[1]
-            
-            try:
-                url = (
-                    f"{BASE_URL}"
-                    f"?w3exec=prof_asignacion"
-                    f"&servicio=Rech_{sid}"
-                )     
-                
-                r = homeserve.session.get(url, timeout=15)
-                
-                html = r.text.lower()
-                
-                errores = [
-                    "error",
-                    "illegal",
-                    "denegado",
-                    "caducada",
-                    "no autorizado",
-                    "acceso inválido"
-                ]
-                
-                fallo = any(e in html for e in errores)
-                
-                if fallo:
-                    tg_edit(
-                        chat,
-                        msg_id,
-                        f"❌ Error al rechazar servicio {sid}",
-                        botones()
-                    )
-                    
-                else:
-                    tg_edit(
-                        chat,
-                        msg_id,
-                        f"✅ Servicio {sid} rechazado correctamente",
-                        botones()
-                    )
-                    
-            except Exception as e:
-                tg_edit(
-                    chat,
-                    msg_id,
-                    f"❌ {e}",
-                    botones()
-                )
+            homeserve.cambiar_estado(sid, "348")
+            tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
         elif action == "BACK_MENU":
             tg_edit(chat, msg_id, "🏠 Menú", botones())
