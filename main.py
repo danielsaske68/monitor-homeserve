@@ -32,7 +32,11 @@ SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exe
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
 logger = logging.getLogger("bot")
 
 app = Flask(__name__)
@@ -280,15 +284,32 @@ class HomeServe:
 
     def login(self):
         try:
+            logger.info("🔐 Intentando login HomeServe")
+            
             self.session.get(LOGIN_URL, timeout=10)
+               
             r = self.session.post(
                 LOGIN_URL,
-                data={"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"},
+                data={
+                    "CODIGO": USUARIO,
+                    "PASSW": PASSWORD,
+                    "BTN": "Aceptar"
+                },
                 timeout=10
-            )
-            return "error" not in r.text.lower()
-        except:
-            return False
+        )
+
+        ok = "error" not in r.text.lower()
+
+        if ok:
+            logger.info("✅ Login correcto")
+        else:
+            logger.error("❌ Login incorrecto")
+
+        return ok
+
+    except Exception:
+        logger.exception("💥 Error durante login")
+        return False
 
     def obtener(self):
         try:
