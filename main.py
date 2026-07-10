@@ -450,11 +450,25 @@ def webhook():
 
         elif action == "WEB":
             servicios = homeserve.obtener()
-            if servicios:
-                sid, txt = list(servicios.items())[0]
-                tg_edit(chat, msg_id, txt, botones_servicio(sid))
-            else:
+
+            if not servicios:
                 tg_edit(chat, msg_id, "❌ Sin servicios", botones())
+            else:
+
+                 # Edita el mensaje del menú
+                 tg_edit(
+                    chat,
+                    msg_id,
+                    f"🌐 {len(servicios)} servicios encontrados",
+                     botones()
+                 )
+                 # Envía TODOS los servicios                   
+                 for sid, txt in servicios.items():
+                     tg_send(
+                         chat,
+                         txt,
+                         botones_servicio(sid)                
+                     )
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
