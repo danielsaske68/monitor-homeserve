@@ -7,9 +7,10 @@ import requests
 import sqlite3
 
 from bs4 import BeautifulSoup
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file, render_template_string
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -21,6 +22,8 @@ USUARIO = os.getenv("USUARIO")
 PASSWORD = os.getenv("PASSWORD")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
+ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+ADMIN_PASS = os.getenv("ADMIN_PASS", "1234")
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
 
@@ -639,19 +642,195 @@ def webhook():
             tg_edit(chat, msg_id, "🏠 Menú", botones())
 
     return jsonify(ok=True)
-    
+
 # =========================================================
-# Descargar copia de seguridad 
+# PANEL NUBE RAILWAY
 # =========================================================
 
-@app.route("/backup")
-def backup():
-    from flask import send_file
-    
+def comprobar_login():
+
+    auth = request.authorization
+
+    if not auth:
+        return False
+
+    return (
+        auth.username == ADMIN_USER and
+        auth.password == ADMIN_PASS
+    )
+
+
+@app.route("/")
+def nube():
+
+    if not comprobar_login():
+        return (
+            "Acceso denegado",
+            401,
+            {
+                "WWW-Authenticate": 'Basic realm="Nube Railway"'
+            }
+        )
+
+
+    archivos = os.listdir("/data")
+
+
+    html = """
+    <!doctype html>
+    <html>
+    <head>
+    <title>Nube Railway</title>
+
+    <style>
+    body{
+        font-family:Arial;
+        margin:40px;
+    }
+
+    button{
+        padding:8px;
+    }
+
+    a{
+        margin:5px;
+    }
+
+    </style>
+
+    </head>
+
+    <body>
+
+
+    <h1>☁️ Nube Railway</h1>
+
+    <h3>/data</h3>
+
+
+    <form action="/subir"
+          method="post"
+          enctype="multipart/form-data">
+
+        <input type="file" name="archivo">
+
+        <button>
+        📥 Subir
+        </button>
+
+    </form>
+
+
+    <hr>
+
+
+    {% for archivo in archivos %}
+
+
+    <p>
+
+    📄 <b>{{archivo}}</b>
+
+
+    <a href="/descargar/{{archivo}}">
+    ⬇ Descargar
+    </a>
+
+
+    <a href="/eliminar/{{archivo}}"
+       onclick="return confirm('¿Eliminar?')">
+    🗑 Eliminar
+    </a>
+
+
+    </p>
+
+
+    {% endfor %}
+
+
+    </body>
+    </html>
+    """
+
+
+    return render_template_string(
+        html,
+        archivos=archivos
+    )
+
+
+
+@app.route("/subir", methods=["POST"])
+def subir_archivo():
+
+    if not comprobar_login():
+        return "No autorizado",401
+
+
+    archivo = request.files["archivo"]
+
+
+    if archivo.filename:
+
+        ruta = os.path.join(
+            "/data",
+            archivo.filename
+        )
+
+        archivo.save(ruta)
+
+
+    return """
+    Archivo subido correctamente
+    <br>
+    <a href="/">Volver</a>
+    """
+
+
+
+@app.route("/descargar/<nombre>")
+def descargar_archivo(nombre):
+
+    if not comprobar_login():
+        return "No autorizado",401
+
+
+    ruta = os.path.join(
+        "/data",
+        nombre
+    )
+
+
     return send_file(
-        "/data/backup_bot.tar.gz",
+        ruta,
         as_attachment=True
     )
+
+
+
+@app.route("/eliminar/<nombre>")
+def eliminar_archivo(nombre):
+
+    if not comprobar_login():
+        return "No autorizado",401
+
+
+    ruta = os.path.join(
+        "/data",
+        nombre
+    )
+
+
+    if os.path.exists(ruta):
+        os.remove(ruta)
+
+
+    return """
+    Archivo eliminado
+    <br>
+    <a href="/">Volver</a>
+    """
     
 # =========================================================
 # MAIN
