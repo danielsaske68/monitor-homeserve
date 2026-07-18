@@ -812,8 +812,13 @@ def descargar_archivo(nombre):
 @app.route("/eliminar/<nombre>")
 def eliminar_archivo(nombre):
 
-    if not comprobar_login():
-        return "No autorizado",401
+    # Protección de la base de datos
+    if nombre == "usuarios.db":
+        return """
+        ❌ No puedes eliminar usuarios.db
+        <br>
+        <a href="/">Volver</a>
+        """
 
 
     ruta = os.path.join(
@@ -827,7 +832,7 @@ def eliminar_archivo(nombre):
 
 
     return """
-    Archivo eliminado
+    ✅ Archivo eliminado
     <br>
     <a href="/">Volver</a>
     """
