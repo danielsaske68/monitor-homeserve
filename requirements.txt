@@ -3,4 +3,5 @@ requests==2.32.0
 beautifulsoup4==4.12.2
 python-dotenv==1.0.1
 gunicorn==21.2.0
-pip install edge-tts groq
+edge-tts
+groq
