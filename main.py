@@ -14,6 +14,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+# 👉 AÑADE ESTA LÍNEA NUEVA:
+from rutas_voz import registrar_rutas_voz
+
 # =========================================================
 # CONFIG
 # =========================================================
@@ -841,6 +847,7 @@ def eliminar_archivo(nombre):
 # MAIN
 # =========================================================
 
+registrar_rutas_voz(app, homeserve, tg_send, obtener_usuarios)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
