@@ -5,14 +5,12 @@ import logging
 import re
 import requests
 import sqlite3
-import asyncio
-import edge_tts
-import groq
 
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, send_file, render_template_string
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -26,11 +24,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "1234")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
+
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
+
 BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
+
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -48,44 +48,63 @@ SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
 
+
 # =========================================================
 # DATABASE
 # =========================================================
 
 DB_PATH = "/data/usuarios.db"
+
 os.makedirs("/data", exist_ok=True)
+
 logger.info(f"DB PATH: {DB_PATH}")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             chat_id TEXT PRIMARY KEY
         )
     """)
+
     conn.commit()
     conn.close()
 
 def guardar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+
+    c.execute(
+        "INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)",
+        (str(chat_id),)
+    )
+
     conn.commit()
     conn.close()
 
 def obtener_usuarios():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
     c.execute("SELECT chat_id FROM usuarios")
+
     usuarios = [r[0] for r in c.fetchall()]
+
     conn.close()
+
     return usuarios
 
 def eliminar_usuario(chat_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
+
+    c.execute(
+        "DELETE FROM usuarios WHERE chat_id=?",
+        (str(chat_id),)
+    )
+
     conn.commit()
     conn.close()
 
@@ -113,69 +132,48 @@ def clear_services(chat):
     open(file_path(chat), "w").close()
 
 # =========================================================
-# TELEGRAM & AUDIO UTILS
+# TELEGRAM
 # =========================================================
 
-def generar_audio_ogg(texto, path_salida="/tmp/mensaje.ogg"):
-    """Sintetiza texto a voz OGG para envío nativo por Telegram."""
-    async def _generar():
-        communicate = edge_tts.Communicate(texto, "es-ES-AlvaroNeural")
-        await communicate.save(path_salida)
-    asyncio.run(_generar())
-    return path_salida
-
-def tg_send_voice(chat, text):
-    """Genera y envía una nota de voz al chat especificado."""
-    try:
-        audio_path = generar_audio_ogg(text)
-        with open(audio_path, "rb") as voice_file:
-            requests.post(
-                f"{TELEGRAM_API}/sendVoice",
-                data={"chat_id": chat},
-                files={"voice": voice_file},
-                timeout=15
-            )
-    except Exception as e:
-        logger.error(f"Error enviando nota de voz: {e}")
-
-def transcribir_voice_telegram(file_id):
-    """Descarga nota de voz de Telegram y la transcribe usando Groq Whisper."""
-    try:
-        res = requests.get(f"{TELEGRAM_API}/getFile?file_id={file_id}").json()
-        file_path = res["result"]["file_path"]
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-        
-        audio_data = requests.get(file_url).content
-        temp_file = f"/tmp/user_voice_{file_id}.ogg"
-        with open(temp_file, "wb") as f:
-            f.write(audio_data)
-            
-        client = groq.Groq(api_key=GROQ_API_KEY)
-        with open(temp_file, "rb") as file:
-            transcription = client.audio.transcriptions.create(
-                file=(temp_file, file.read()),
-                model="whisper-large-v3",
-                language="es"
-            )
-        return transcription.text
-    except Exception as e:
-        logger.error(f"Error transcribiendo voz: {e}")
-        return None
-
 def tg_send(chat, text, markup=None):
-    payload = {"chat_id": chat, "text": text, "parse_mode": "HTML"}
+    payload = {
+        "chat_id": chat,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+
     if markup:
         payload["reply_markup"] = markup
-    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+
+    requests.post(
+        f"{TELEGRAM_API}/sendMessage",
+        json=payload,
+        timeout=10
+    )
 
 def tg_edit(chat, msg_id, text, markup=None):
-    payload = {"chat_id": chat, "message_id": msg_id, "text": text, "parse_mode": "HTML"}
+    payload = {
+        "chat_id": chat,
+        "message_id": msg_id,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+
     if markup:
         payload["reply_markup"] = markup
-    requests.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
+
+    requests.post(
+        f"{TELEGRAM_API}/editMessageText",
+        json=payload,
+        timeout=10
+    )
 
 def tg_answer(callback_id):
-    requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": callback_id}, timeout=10)
+    requests.post(
+        f"{TELEGRAM_API}/answerCallbackQuery",
+        json={"callback_query_id": callback_id},
+        timeout=10
+    )
 
 # =========================================================
 # BOTONES
@@ -184,11 +182,23 @@ def tg_answer(callback_id):
 def botones():
     return {
         "inline_keyboard": [
-            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
-            [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
-            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
-            [{"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}]
+            [
+                {"text": "🔐 Login", "callback_data": "LOGIN"},
+                {"text": "🔄 Refresh", "callback_data": "REFRESH"}
+            ],
+            [
+                {"text": "🌐 Web", "callback_data": "WEB"},
+                {"text": "👥 Usuarios", "callback_data": "USUARIOS"}
+            ],
+            [
+                {"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}
+            ],
+            [
+                {"text": "📋 Servicios en curso", "callback_data": "CURSO"}
+            ],
+            [
+                {"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}
+            ]
         ]
     }
 
@@ -236,13 +246,31 @@ def botones_estado(sid):
     }
 
 def lista_curso(servicios):
-    botones_lista = [[{"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}] for sid in servicios]
-    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+    botones_lista = []
+
+    for sid in servicios:
+        botones_lista.append([
+            {"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}
+        ])
+
+    botones_lista.append([
+        {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
+    ])
+
     return {"inline_keyboard": botones_lista}
 
 def lista_cambio(servicios):
-    botones_lista = [[{"text": f"🛠 {sid}", "callback_data": f"CAMSEL_{sid}"}] for sid in servicios]
-    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+    botones_lista = []
+
+    for sid in servicios:
+        botones_lista.append([
+            {"text": f"🛠 {sid}", "callback_data": f"CAMSEL_{sid}"}
+        ])
+
+    botones_lista.append([
+        {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
+    ])
+
     return {"inline_keyboard": botones_lista}
 
 # =========================================================
@@ -269,12 +297,15 @@ class HomeServe:
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", text)
             servicios = {}
+
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
+
             return servicios
         except:
             return {}
@@ -284,12 +315,15 @@ class HomeServe:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+
             bloques = re.split(r"\n(?=\d{7,8}\s)", text)
             servicios = {}
+
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
+
             return servicios
         except:
             return {}
@@ -297,12 +331,14 @@ class HomeServe:
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
+
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
             fecha_str = fecha.strftime("%d/%m/%Y")
+
             obs = (
                 "Pendiente de localizar a asegurado"
                 if estado == "348"
@@ -322,6 +358,7 @@ class HomeServe:
 
             self.session.post(BASE_URL, data=payload, timeout=10)
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
+
         except Exception as e:
             return False, f"❌ Error: {e}"
 
@@ -333,6 +370,7 @@ homeserve = HomeServe()
 
 def loop():
     global SERVICIOS_ACTUALES
+
     homeserve.login()
 
     while True:
@@ -342,11 +380,7 @@ def loop():
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     for u in obtener_usuarios():
-                        # Envío de texto con botones
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
-                        # Envío de alerta hablada
-                        texto_voz = f"Atención. Tienes un nuevo servicio con código {sid}. Revisa Telegram para gestionar."
-                        tg_send_voice(u, texto_voz)
 
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -369,44 +403,9 @@ def webhook():
     if "message" in data:
         chat = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
+
         guardar_usuario(chat)
 
-        # 🎙️ PROCESAMIENTO DE NOTAS DE VOZ DEL USUARIO
-        if "voice" in data["message"]:
-            file_id = data["message"]["voice"]["file_id"]
-            tg_send(chat, "🎙️ <i>Procesando orden de voz...</i>")
-            
-            texto_transcrito = transcribir_voice_telegram(file_id)
-            
-            if texto_transcrito:
-                text_v = texto_transcrito.lower()
-                tg_send(chat, f"🗣️ <b>Has dicho:</b> \"{texto_transcrito}\"")
-                
-                if "aceptar" in text_v:
-                    nums = re.findall(r'\d+', text_v)
-                    if nums:
-                        sid = nums[0]
-                        tg_send(chat, f"⏳ Aceptando servicio {sid} por voz...")
-                        homeserve.session.get(f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}")
-                        tg_send(chat, f"✅ Servicio {sid} procesado por voz.", botones())
-                    else:
-                        tg_send(chat, "⚠️ Dijiste aceptar, pero no detecté el código de servicio.")
-                        
-                elif "rechazar" in text_v:
-                    nums = re.findall(r'\d+', text_v)
-                    if nums:
-                        sid = nums[0]
-                        homeserve.cambiar_estado(sid, "348")
-                        tg_send(chat, f"❌ Servicio {sid} rechazado (Estado 348).", botones())
-                    else:
-                        tg_send(chat, "⚠️ Dijiste rechazar, pero no detecté el código de servicio.")
-                        
-                elif "curso" in text_v or "servicios" in text_v:
-                    curso = homeserve.obtener_curso()
-                    tg_send(chat, f"📋 Tienes {len(curso)} servicios en curso.", lista_curso(curso) if curso else botones())
-                return jsonify(ok=True)
-
-        # 💬 PROCESAMIENTO DE MENSAJES DE TEXTO
         if chat in SERV_STATE:
             data_serv = SERV_STATE[chat]
             msg_edit = data_serv["msg_id"]
@@ -422,7 +421,7 @@ def webhook():
             return jsonify(ok=True)
 
         if text == "/start":
-            tg_send(chat, "🤖 Bot activo (Responde a texto, botones y voz)", botones())
+            tg_send(chat, "🤖 Bot activo", botones())
 
         if chat in USER_STATE:
             if USER_STATE[chat] == "ADD_USER":
@@ -458,9 +457,21 @@ def webhook():
             if not servicios:
                 tg_edit(chat, msg_id, "❌ Sin servicios", botones())
             else:
-                tg_edit(chat, msg_id, f"🌐 {len(servicios)} servicios encontrados", botones())
-                for sid, txt in servicios.items():
-                    tg_send(chat, txt, botones_servicio(sid))
+
+                 # Edita el mensaje del menú
+                 tg_edit(
+                    chat,
+                    msg_id,
+                    f"🌐 {len(servicios)} servicios encontrados",
+                     botones()
+                 )
+                 # Envía TODOS los servicios                   
+                 for sid, txt in servicios.items():
+                     tg_send(
+                         chat,
+                         txt,
+                         botones_servicio(sid)                
+                     )
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
@@ -469,7 +480,7 @@ def webhook():
                 msg_id,
                 "📋 Servicios en curso" if curso else "❌ No hay servicios en curso",
                 lista_curso(curso) if curso else botones()
-            )
+             )
 
         elif action == "CAMBIAR":
             curso = homeserve.obtener_curso()
@@ -482,6 +493,7 @@ def webhook():
 
         elif action.startswith("CAMSEL_"):
             sid = action.split("_")[1]
+
             tg_edit(
                 chat,
                 msg_id,
@@ -491,27 +503,37 @@ def webhook():
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
+            
             try:
-                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+                url = (
+                    f"{BASE_URL}"
+                    f"?w3exec=ver_servicioencurso"
+                    f"&Servicio={sid}"
+                    f"&Pag=1"
+                )
+                
                 r = homeserve.session.get(url, timeout=15)
                 soup = BeautifulSoup(r.text, "html.parser")
                 
                 datos = {}
+                
                 for tr in soup.find_all("tr"):
                     tds = tr.find_all("td")
                     if len(tds) >= 2:
                         clave = tds[0].get_text(" ", strip=True).replace(":", "")
                         valor = tds[1].get_text(" ", strip=True)
                         datos[clave] = valor
-
+                        
+                        
                 servicio = datos.get("SERVICIO", sid)
                 cliente = datos.get("CLIENTE", "")
                 telefonos = datos.get("TELEFONOS", "")
                 domicilio = datos.get("DOMICILIO", "")
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 comentarios = datos.get("COMENTARIOS", "")
+                
                 comentarios = "\n".join(comentarios.splitlines()[:5])
-
+                
                 texto = (
                     f"📋 <b>SERVICIO:</b> {servicio}\n\n"
                     f"👤 <b>CLIENTE:</b>\n{cliente}\n\n"
@@ -520,11 +542,30 @@ def webhook():
                     f"📍 <b>POBLACION-PROVINCIA:</b>\n{poblacion}\n\n"
                     f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
                 )
-
-                tg_edit(chat, msg_id, texto, {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "CURSO"}]]})
+                
+                tg_edit(
+                    chat,
+                    msg_id,
+                    texto,
+                    {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "⬅️ Volver",
+                                    "callback_data": "CURSO"
+                                }
+                            ]
+                        ]
+                    }
+                )
             except Exception as e:
-                tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
-
+                tg_edit(
+                    chat,
+                    msg_id,
+                    f"❌ Error obteniendo servicio:\n{e}",
+                    botones()
+                )
+                    
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
@@ -547,11 +588,9 @@ def webhook():
 
         elif action == "DOWN_SERV":
             path = file_path(chat)
-            requests.post(
-                f"{TELEGRAM_API}/sendDocument",
-                data={"chat_id": chat},
-                files={"document": open(path, "rb")}
-            )
+            requests.post(f"{TELEGRAM_API}/sendDocument",
+                          data={"chat_id": chat},
+                          files={"document": open(path, "rb")})
 
         elif action == "BACK_NUM_SERV":
             tg_edit(chat, msg_id, "📦 Menú", botones())
@@ -576,10 +615,12 @@ def webhook():
             try:
                 url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
                 r = homeserve.session.get(url, timeout=15)
+
                 html = r.text.lower()
 
                 errores = ["error", "illegal", "denegado", "caducada", "no autorizado", "acceso inválido"]
                 fallo = any(e in html for e in errores)
+
                 ok_visual = "<table" in html or "<form" in html or "servicio" in html
 
                 if fallo:
@@ -588,6 +629,7 @@ def webhook():
                     tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
                 else:
                     tg_edit(chat, msg_id, f"⚠️ No se pudo confirmar aceptación de {sid}", botones())
+
             except Exception as e:
                 tg_edit(chat, msg_id, f"❌ {e}", botones())
 
@@ -606,77 +648,199 @@ def webhook():
 # =========================================================
 
 def comprobar_login():
+
     auth = request.authorization
+
     if not auth:
         return False
-    return auth.username == ADMIN_USER and auth.password == ADMIN_PASS
+
+    return (
+        auth.username == ADMIN_USER and
+        auth.password == ADMIN_PASS
+    )
+
 
 @app.route("/")
 def nube():
+
     if not comprobar_login():
-        return "Acceso denegado", 401, {"WWW-Authenticate": 'Basic realm="Nube Railway"'}
+        return (
+            "Acceso denegado",
+            401,
+            {
+                "WWW-Authenticate": 'Basic realm="Nube Railway"'
+            }
+        )
+
 
     archivos = os.listdir("/data")
+
+
     html = """
     <!doctype html>
     <html>
     <head>
     <title>Nube Railway</title>
+
     <style>
-    body{ font-family:Arial; margin:40px; }
-    button{ padding:8px; }
-    a{ margin:5px; }
+    body{
+        font-family:Arial;
+        margin:40px;
+    }
+
+    button{
+        padding:8px;
+    }
+
+    a{
+        margin:5px;
+    }
+
     </style>
+
     </head>
+
     <body>
+
+
     <h1>☁️ Nube Railway</h1>
+
     <h3>/data</h3>
-    <form action="/subir" method="post" enctype="multipart/form-data">
+
+
+    <form action="/subir"
+          method="post"
+          enctype="multipart/form-data">
+
         <input type="file" name="archivo">
-        <button>📥 Subir</button>
+
+        <button>
+        📥 Subir
+        </button>
+
     </form>
+
+
     <hr>
+
+
     {% for archivo in archivos %}
+
+
     <p>
+
     📄 <b>{{archivo}}</b>
-    <a href="/descargar/{{archivo}}">⬇ Descargar</a>
-    <a href="/eliminar/{{archivo}}" onclick="return confirm('¿Eliminar?')">🗑 Eliminar</a>
+
+
+    <a href="/descargar/{{archivo}}">
+    ⬇ Descargar
+    </a>
+
+
+    <a href="/eliminar/{{archivo}}"
+       onclick="return confirm('¿Eliminar?')">
+    🗑 Eliminar
+    </a>
+
+
     </p>
+
+
     {% endfor %}
+
+
     </body>
     </html>
     """
-    return render_template_string(html, archivos=archivos)
+
+
+    return render_template_string(
+        html,
+        archivos=archivos
+    )
+
+
 
 @app.route("/subir", methods=["POST"])
 def subir_archivo():
+
     if not comprobar_login():
-        return "No autorizado", 401
+        return "No autorizado",401
+
+
     archivo = request.files["archivo"]
+
+
     if archivo.filename:
-        ruta = os.path.join("/data", archivo.filename)
+
+        ruta = os.path.join(
+            "/data",
+            archivo.filename
+        )
+
         archivo.save(ruta)
-    return 'Archivo subido correctamente<br><a href="/">Volver</a>'
+
+
+    return """
+    Archivo subido correctamente
+    <br>
+    <a href="/">Volver</a>
+    """
+
+
 
 @app.route("/descargar/<nombre>")
 def descargar_archivo(nombre):
+
     if not comprobar_login():
-        return "No autorizado", 401
-    ruta = os.path.join("/data", nombre)
-    return send_file(ruta, as_attachment=True)
+        return "No autorizado",401
+
+
+    ruta = os.path.join(
+        "/data",
+        nombre
+    )
+
+
+    return send_file(
+        ruta,
+        as_attachment=True
+    )
+
+
 
 @app.route("/eliminar/<nombre>")
 def eliminar_archivo(nombre):
+
+    # Protección de la base de datos
     if nombre == "usuarios.db":
-        return '❌ No puedes eliminar usuarios.db<br><a href="/">Volver</a>'
-    ruta = os.path.join("/data", nombre)
+        return """
+        ❌ No puedes eliminar usuarios.db
+        <br>
+        <a href="/">Volver</a>
+        """
+
+
+    ruta = os.path.join(
+        "/data",
+        nombre
+    )
+
+
     if os.path.exists(ruta):
         os.remove(ruta)
-    return '✅ Archivo eliminado<br><a href="/">Volver</a>'
 
+
+    return """
+    ✅ Archivo eliminado
+    <br>
+    <a href="/">Volver</a>
+    """
+    
 # =========================================================
 # MAIN
 # =========================================================
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
