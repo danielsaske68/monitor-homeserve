@@ -14,12 +14,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-
-import asyncio
-import edge_tts
-
 # =========================================================
 # CONFIG
 # =========================================================
@@ -173,32 +167,6 @@ def tg_edit(chat, msg_id, text, markup=None):
         json=payload,
         timeout=10
     )
-
-def generar_audio_ogg(texto, path_salida="/tmp/mensaje.ogg"):
-    """Convierte texto en audio con voz natural de España en formato OGG para Telegram"""
-    async def _generar():
-        communicate = edge_tts.Communicate(texto, "es-ES-AlvaroNeural")
-        await communicate.save(path_salida)
-    asyncio.run(_generar())
-    return path_salida
-
-def tg_send_voice(chat, text, markup=None):
-    """Genera y envía una nota de voz a Telegram junto con los botones opcionales"""
-    try:
-        audio_path = generar_audio_ogg(text)
-        payload = {"chat_id": chat, "parse_mode": "HTML"}
-        if markup:
-            payload["reply_markup"] = str(markup).replace("'", '"') # Formato JSON string si se requiere
-            
-        with open(audio_path, "rb") as voice_file:
-            requests.post(
-                f"{TELEGRAM_API}/sendVoice",
-                data={"chat_id": chat},
-                files={"voice": voice_file},
-                timeout=15
-            )
-    except Exception as e:
-        logger.error(f"Error enviando nota de voz: {e}")
 
 def tg_answer(callback_id):
     requests.post(
@@ -873,7 +841,6 @@ def eliminar_archivo(nombre):
 # MAIN
 # =========================================================
 
-registrar_rutas_voz(app, homeserve, tg_send, obtener_usuarios)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
