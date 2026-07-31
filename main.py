@@ -7,10 +7,10 @@ import requests
 import sqlite3
 
 from bs4 import BeautifulSoup
-from flask import Flask, request, jsonify, send_file, render_template_string
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-
+from werkzeug.utils import secure_filename
 
 load_dotenv()
 
@@ -26,87 +26,57 @@ ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "1234")
 
 LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-
 ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-
 BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
-
 SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("bot")
 
 app = Flask(__name__)
 
 # =========================================================
-# STATE
+# STATE & DB
 # =========================================================
 
 SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
 
+DATA_DIR = "/data"
+DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# =========================================================
-# DATABASE
-# =========================================================
-
-DB_PATH = "/data/usuarios.db"
-
-os.makedirs("/data", exist_ok=True)
-
-logger.info(f"DB PATH: {DB_PATH}")
+def get_db():
+    conn = sqlite3.connect(DB_PATH, timeout=20)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            chat_id TEXT PRIMARY KEY
-        )
-    """)
-
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                chat_id TEXT PRIMARY KEY
+            )
+        """)
+        conn.commit()
 
 def guardar_usuario(chat_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-
-    c.execute(
-        "INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)",
-        (str(chat_id),)
-    )
-
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        conn.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
+        conn.commit()
 
 def obtener_usuarios():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-
-    c.execute("SELECT chat_id FROM usuarios")
-
-    usuarios = [r[0] for r in c.fetchall()]
-
-    conn.close()
-
-    return usuarios
+    with get_db() as conn:
+        cursor = conn.execute("SELECT chat_id FROM usuarios")
+        return [r["chat_id"] for r in cursor.fetchall()]
 
 def eliminar_usuario(chat_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-
-    c.execute(
-        "DELETE FROM usuarios WHERE chat_id=?",
-        (str(chat_id),)
-    )
-
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        conn.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
+        conn.commit()
 
 init_db()
 
@@ -115,7 +85,7 @@ init_db()
 # =========================================================
 
 def file_path(chat):
-    return f"/data/servicios_{chat}.txt"
+    return os.path.join(DATA_DIR, f"servicios_{chat}.txt")
 
 def add_service(chat, text):
     with open(file_path(chat), "a", encoding="utf-8") as f:
@@ -125,55 +95,43 @@ def read_services(chat):
     try:
         with open(file_path(chat), "r", encoding="utf-8") as f:
             return f.read()
-    except:
+    except Exception:
         return ""
 
 def clear_services(chat):
-    open(file_path(chat), "w").close()
+    path = file_path(chat)
+    if os.path.exists(path):
+        open(path, "w").close()
 
 # =========================================================
 # TELEGRAM
 # =========================================================
 
-def tg_send(chat, text, markup=None):
-    payload = {
-        "chat_id": chat,
-        "text": text,
-        "parse_mode": "HTML"
-    }
+tg_session = requests.Session()
 
+def tg_send(chat, text, markup=None):
+    payload = {"chat_id": chat, "text": text, "parse_mode": "HTML"}
     if markup:
         payload["reply_markup"] = markup
-
-    requests.post(
-        f"{TELEGRAM_API}/sendMessage",
-        json=payload,
-        timeout=10
-    )
+    try:
+        tg_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+    except Exception as e:
+        logger.error(f"Error tg_send: {e}")
 
 def tg_edit(chat, msg_id, text, markup=None):
-    payload = {
-        "chat_id": chat,
-        "message_id": msg_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-
+    payload = {"chat_id": chat, "message_id": msg_id, "text": text, "parse_mode": "HTML"}
     if markup:
         payload["reply_markup"] = markup
-
-    requests.post(
-        f"{TELEGRAM_API}/editMessageText",
-        json=payload,
-        timeout=10
-    )
+    try:
+        tg_session.post(f"{TELEGRAM_API}/editMessageText", json=payload, timeout=10)
+    except Exception as e:
+        logger.error(f"Error tg_edit: {e}")
 
 def tg_answer(callback_id):
-    requests.post(
-        f"{TELEGRAM_API}/answerCallbackQuery",
-        json={"callback_query_id": callback_id},
-        timeout=10
-    )
+    try:
+        tg_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": callback_id}, timeout=5)
+    except Exception as e:
+        logger.error(f"Error tg_answer: {e}")
 
 # =========================================================
 # BOTONES
@@ -182,23 +140,11 @@ def tg_answer(callback_id):
 def botones():
     return {
         "inline_keyboard": [
-            [
-                {"text": "🔐 Login", "callback_data": "LOGIN"},
-                {"text": "🔄 Refresh", "callback_data": "REFRESH"}
-            ],
-            [
-                {"text": "🌐 Web", "callback_data": "WEB"},
-                {"text": "👥 Usuarios", "callback_data": "USUARIOS"}
-            ],
-            [
-                {"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}
-            ],
-            [
-                {"text": "📋 Servicios en curso", "callback_data": "CURSO"}
-            ],
-            [
-                {"text": "📦 Numero de servicios", "callback_data": "NUM_SERV"}
-            ]
+            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
+            [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
+            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
+            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
+            [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}]
         ]
     }
 
@@ -226,10 +172,7 @@ def botones_usuarios():
 def botones_servicio(sid):
     return {
         "inline_keyboard": [
-            [
-                {"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"},
-                {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}
-            ],
+            [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"}, {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
@@ -237,44 +180,23 @@ def botones_servicio(sid):
 def botones_estado(sid):
     return {
         "inline_keyboard": [
-            [
-                {"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"},
-                {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}
-            ],
+            [{"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"}, {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}],
             [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
         ]
     }
 
 def lista_curso(servicios):
-    botones_lista = []
-
-    for sid in servicios:
-        botones_lista.append([
-            {"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}
-        ])
-
-    botones_lista.append([
-        {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
-    ])
-
+    botones_lista = [[{"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}] for sid in servicios]
+    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
     return {"inline_keyboard": botones_lista}
 
 def lista_cambio(servicios):
-    botones_lista = []
-
-    for sid in servicios:
-        botones_lista.append([
-            {"text": f"🛠 {sid}", "callback_data": f"CAMSEL_{sid}"}
-        ])
-
-    botones_lista.append([
-        {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
-    ])
-
+    botones_lista = [[{"text": f"🛠 {sid}", "callback_data": f"CAMSEL_{sid}"}] for sid in servicios]
+    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
     return {"inline_keyboard": botones_lista}
 
 # =========================================================
-# HOMESERVE
+# HOMESERVE CLASS
 # =========================================================
 
 class HomeServe:
@@ -290,24 +212,23 @@ class HomeServe:
                 timeout=10
             )
             return "error" not in r.text.lower()
-        except:
+        except Exception as e:
+            logger.error(f"Login Exception: {e}")
             return False
 
     def obtener(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-
             bloques = re.split(r"\n(?=\d{7,8}\s)", text)
             servicios = {}
-
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
-
             return servicios
-        except:
+        except Exception as e:
+            logger.error(f"Error obtener: {e}")
             return {}
 
     def obtener_curso(self):
@@ -315,30 +236,26 @@ class HomeServe:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-
             bloques = re.split(r"\n(?=\d{7,8}\s)", text)
             servicios = {}
-
             for b in bloques:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
-
             return servicios
-        except:
+        except Exception as e:
+            logger.error(f"Error obtener_curso: {e}")
             return {}
 
     def cambiar_estado(self, sid, estado):
         try:
             fecha = datetime.now() + timedelta(days=3)
-
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
             elif fecha.weekday() == 6:
                 fecha += timedelta(days=1)
 
             fecha_str = fecha.strftime("%d/%m/%Y")
-
             obs = (
                 "Pendiente de localizar a asegurado"
                 if estado == "348"
@@ -358,35 +275,30 @@ class HomeServe:
 
             self.session.post(BASE_URL, data=payload, timeout=10)
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
-
         except Exception as e:
             return False, f"❌ Error: {e}"
 
 homeserve = HomeServe()
 
 # =========================================================
-# LOOP
+# BACKGROUND LOOP
 # =========================================================
 
 def loop():
     global SERVICIOS_ACTUALES
-
     homeserve.login()
 
     while True:
         try:
             actuales = homeserve.obtener()
-
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     for u in obtener_usuarios():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
-
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
-
         except Exception as e:
-            logger.error(e)
+            logger.error(f"Loop error: {e}")
             homeserve.login()
             time.sleep(10)
 
@@ -398,7 +310,7 @@ threading.Thread(target=loop, daemon=True).start()
 
 @app.route("/telegram_webhook", methods=["POST"])
 def webhook():
-    data = request.json
+    data = request.json or {}
 
     if "message" in data:
         chat = data["message"]["chat"]["id"]
@@ -407,9 +319,7 @@ def webhook():
         guardar_usuario(chat)
 
         if chat in SERV_STATE:
-            data_serv = SERV_STATE[chat]
-            msg_edit = data_serv["msg_id"]
-
+            msg_edit = SERV_STATE[chat]["msg_id"]
             if text.upper() == "TERMINAR":
                 SERV_STATE.pop(chat)
                 tg_edit(chat, msg_edit, "✅ Servicios guardados correctamente", botones_num_serv())
@@ -417,7 +327,6 @@ def webhook():
                 add_service(chat, text)
                 actual = read_services(chat)
                 tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
-
             return jsonify(ok=True)
 
         if text == "/start":
@@ -428,13 +337,12 @@ def webhook():
                 guardar_usuario(text)
                 tg_send(chat, "✅ Usuario añadido")
                 USER_STATE.pop(chat)
-
             elif USER_STATE[chat] == "DEL_USER":
                 eliminar_usuario(text)
                 tg_send(chat, "🗑 Usuario eliminado")
                 USER_STATE.pop(chat)
 
-    if "callback_query" in data:
+    elif "callback_query" in data:
         cq = data["callback_query"]
         chat = cq["message"]["chat"]["id"]
         msg_id = cq["message"]["message_id"]
@@ -453,126 +361,76 @@ def webhook():
 
         elif action == "WEB":
             servicios = homeserve.obtener()
-
             if not servicios:
                 tg_edit(chat, msg_id, "❌ Sin servicios", botones())
             else:
-
-                 # Edita el mensaje del menú
-                 tg_edit(
-                    chat,
-                    msg_id,
-                    f"🌐 {len(servicios)} servicios encontrados",
-                     botones()
-                 )
-                 # Envía TODOS los servicios                   
-                 for sid, txt in servicios.items():
-                     tg_send(
-                         chat,
-                         txt,
-                         botones_servicio(sid)                
-                     )
+                tg_edit(chat, msg_id, f"🌐 {len(servicios)} servicios encontrados", botones())
+                for sid, txt in servicios.items():
+                    tg_send(chat, txt, botones_servicio(sid))
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
             tg_edit(
-                chat,
-                msg_id,
+                chat, msg_id,
                 "📋 Servicios en curso" if curso else "❌ No hay servicios en curso",
                 lista_curso(curso) if curso else botones()
-             )
+            )
 
         elif action == "CAMBIAR":
             curso = homeserve.obtener_curso()
             tg_edit(
-                chat,
-                msg_id,
+                chat, msg_id,
                 "🛠 Selecciona servicio",
                 lista_cambio(curso) if curso else botones()
             )
 
         elif action.startswith("CAMSEL_"):
             sid = action.split("_")[1]
-
-            tg_edit(
-                chat,
-                msg_id,
-                f"🛠 <b>Cambiar estado del servicio</b>\n\n<b>{sid}</b>",
-                botones_estado(sid)
-            )
+            tg_edit(chat, msg_id, f"🛠 <b>Cambiar estado del servicio</b>\n\n<b>{sid}</b>", botones_estado(sid))
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
-            
             try:
-                url = (
-                    f"{BASE_URL}"
-                    f"?w3exec=ver_servicioencurso"
-                    f"&Servicio={sid}"
-                    f"&Pag=1"
-                )
-                
+                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
                 r = homeserve.session.get(url, timeout=15)
                 soup = BeautifulSoup(r.text, "html.parser")
                 
                 datos = {}
-                
                 for tr in soup.find_all("tr"):
                     tds = tr.find_all("td")
                     if len(tds) >= 2:
-                        clave = tds[0].get_text(" ", strip=True).replace(":", "")
+                        clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
                         valor = tds[1].get_text(" ", strip=True)
                         datos[clave] = valor
-                        
-                        
+
                 servicio = datos.get("SERVICIO", sid)
                 cliente = datos.get("CLIENTE", "")
                 telefonos = datos.get("TELEFONOS", "")
                 domicilio = datos.get("DOMICILIO", "")
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 comentarios = datos.get("COMENTARIOS", "")
-                
                 comentarios = "\n".join(comentarios.splitlines()[:5])
-                
+
                 texto = (
                     f"📋 <b>SERVICIO:</b> {servicio}\n\n"
                     f"👤 <b>CLIENTE:</b>\n{cliente}\n\n"
-                    f"📞 <b>TELEFONOS:</b>\n{telefonos}\n\n"
+                    f"📞 <b>TELÉFONOS:</b>\n{telefonos}\n\n"
                     f"🏠 <b>DOMICILIO:</b>\n{domicilio}\n\n"
-                    f"📍 <b>POBLACION-PROVINCIA:</b>\n{poblacion}\n\n"
+                    f"📍 <b>POBLACIÓN:</b>\n{poblacion}\n\n"
                     f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
                 )
-                
-                tg_edit(
-                    chat,
-                    msg_id,
-                    texto,
-                    {
-                        "inline_keyboard": [
-                            [
-                                {
-                                    "text": "⬅️ Volver",
-                                    "callback_data": "CURSO"
-                                }
-                            ]
-                        ]
-                    }
-                )
+
+                tg_edit(chat, msg_id, texto, {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "CURSO"}]]})
             except Exception as e:
-                tg_edit(
-                    chat,
-                    msg_id,
-                    f"❌ Error obteniendo servicio:\n{e}",
-                    botones()
-                )
-                    
+                tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
+
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
             ok, msg = homeserve.cambiar_estado(sid, estado)
             tg_edit(chat, msg_id, msg, botones_estado(sid))
 
         elif action == "NUM_SERV":
-            tg_edit(chat, msg_id, "📦 Numero de servicios", botones_num_serv())
+            tg_edit(chat, msg_id, "📦 Número de servicios", botones_num_serv())
 
         elif action == "ADD_SERV":
             SERV_STATE[chat] = {"msg_id": msg_id}
@@ -588,9 +446,9 @@ def webhook():
 
         elif action == "DOWN_SERV":
             path = file_path(chat)
-            requests.post(f"{TELEGRAM_API}/sendDocument",
-                          data={"chat_id": chat},
-                          files={"document": open(path, "rb")})
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    requests.post(f"{TELEGRAM_API}/sendDocument", data={"chat_id": chat}, files={"document": f}, timeout=15)
 
         elif action == "BACK_NUM_SERV":
             tg_edit(chat, msg_id, "📦 Menú", botones())
@@ -615,23 +473,14 @@ def webhook():
             try:
                 url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
                 r = homeserve.session.get(url, timeout=15)
-
                 html = r.text.lower()
-
                 errores = ["error", "illegal", "denegado", "caducada", "no autorizado", "acceso inválido"]
-                fallo = any(e in html for e in errores)
-
-                ok_visual = "<table" in html or "<form" in html or "servicio" in html
-
-                if fallo:
+                if any(e in html for e in errores):
                     tg_edit(chat, msg_id, f"❌ Error al aceptar servicio {sid}", botones())
-                elif ok_visual:
-                    tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
                 else:
-                    tg_edit(chat, msg_id, f"⚠️ No se pudo confirmar aceptación de {sid}", botones())
-
+                    tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
             except Exception as e:
-                tg_edit(chat, msg_id, f"❌ {e}", botones())
+                tg_edit(chat, msg_id, f"❌ Error: {e}", botones())
 
         elif action.startswith("RECHAZAR_"):
             sid = action.split("_")[1]
@@ -644,203 +493,81 @@ def webhook():
     return jsonify(ok=True)
 
 # =========================================================
-# PANEL NUBE RAILWAY
+# PANEL NUBE RAILWAY (SECURED)
 # =========================================================
 
 def comprobar_login():
-
     auth = request.authorization
-
-    if not auth:
-        return False
-
-    return (
-        auth.username == ADMIN_USER and
-        auth.password == ADMIN_PASS
-    )
-
+    return auth and auth.username == ADMIN_USER and auth.password == ADMIN_PASS
 
 @app.route("/")
 def nube():
-
     if not comprobar_login():
-        return (
-            "Acceso denegado",
-            401,
-            {
-                "WWW-Authenticate": 'Basic realm="Nube Railway"'
-            }
-        )
+        return ("Acceso denegado", 401, {"WWW-Authenticate": 'Basic realm="Nube Railway"'})
 
-
-    archivos = os.listdir("/data")
-
-
+    archivos = os.listdir(DATA_DIR)
     html = """
     <!doctype html>
     <html>
-    <head>
-    <title>Nube Railway</title>
-
-    <style>
-    body{
-        font-family:Arial;
-        margin:40px;
-    }
-
-    button{
-        padding:8px;
-    }
-
-    a{
-        margin:5px;
-    }
-
-    </style>
-
+    <head><title>Nube Railway</title>
+    <style>body{font-family:Arial;margin:40px;} button{padding:8px;} a{margin:5px;}</style>
     </head>
-
     <body>
-
-
     <h1>☁️ Nube Railway</h1>
-
     <h3>/data</h3>
-
-
-    <form action="/subir"
-          method="post"
-          enctype="multipart/form-data">
-
+    <form action="/subir" method="post" enctype="multipart/form-data">
         <input type="file" name="archivo">
-
-        <button>
-        📥 Subir
-        </button>
-
+        <button>📥 Subir</button>
     </form>
-
-
     <hr>
-
-
     {% for archivo in archivos %}
-
-
     <p>
-
     📄 <b>{{archivo}}</b>
-
-
-    <a href="/descargar/{{archivo}}">
-    ⬇ Descargar
-    </a>
-
-
-    <a href="/eliminar/{{archivo}}"
-       onclick="return confirm('¿Eliminar?')">
-    🗑 Eliminar
-    </a>
-
-
+    <a href="/descargar/{{archivo}}">⬇ Descargar</a>
+    <a href="/eliminar/{{archivo}}" onclick="return confirm('¿Eliminar?')">🗑 Eliminar</a>
     </p>
-
-
     {% endfor %}
-
-
     </body>
     </html>
     """
-
-
-    return render_template_string(
-        html,
-        archivos=archivos
-    )
-
-
+    return render_template_string(html, archivos=archivos)
 
 @app.route("/subir", methods=["POST"])
 def subir_archivo():
-
     if not comprobar_login():
-        return "No autorizado",401
+        return "No autorizado", 401
 
+    archivo = request.files.get("archivo")
+    if archivo and archivo.filename:
+        filename = secure_filename(archivo.filename)
+        archivo.save(os.path.join(DATA_DIR, filename))
 
-    archivo = request.files["archivo"]
-
-
-    if archivo.filename:
-
-        ruta = os.path.join(
-            "/data",
-            archivo.filename
-        )
-
-        archivo.save(ruta)
-
-
-    return """
-    Archivo subido correctamente
-    <br>
-    <a href="/">Volver</a>
-    """
-
-
+    return 'Archivo subido correctamente<br><a href="/">Volver</a>'
 
 @app.route("/descargar/<nombre>")
 def descargar_archivo(nombre):
-
     if not comprobar_login():
-        return "No autorizado",401
-
-
-    ruta = os.path.join(
-        "/data",
-        nombre
-    )
-
-
-    return send_file(
-        ruta,
-        as_attachment=True
-    )
-
-
+        return "No autorizado", 401
+    return send_from_directory(DATA_DIR, secure_filename(nombre), as_attachment=True)
 
 @app.route("/eliminar/<nombre>")
 def eliminar_archivo(nombre):
+    if not comprobar_login():
+        return "No autorizado", 401
+    
+    filename = secure_filename(nombre)
+    if filename == "usuarios.db":
+        return '❌ No puedes eliminar usuarios.db<br><a href="/">Volver</a>'
 
-    # Protección de la base de datos
-    if nombre == "usuarios.db":
-        return """
-        ❌ No puedes eliminar usuarios.db
-        <br>
-        <a href="/">Volver</a>
-        """
-
-
-    ruta = os.path.join(
-        "/data",
-        nombre
-    )
-
-
+    ruta = os.path.join(DATA_DIR, filename)
     if os.path.exists(ruta):
         os.remove(ruta)
 
+    return '✅ Archivo eliminado<br><a href="/">Volver</a>'
 
-    return """
-    ✅ Archivo eliminado
-    <br>
-    <a href="/">Volver</a>
-    """
-    
 # =========================================================
 # MAIN
 # =========================================================
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
