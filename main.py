@@ -5,6 +5,9 @@ import logging
 import re
 import requests
 import sqlite3
+from urllib.parse import quote_plus
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, send_from_directory, render_template_string
@@ -61,6 +64,15 @@ def init_db():
                 chat_id TEXT PRIMARY KEY
             )
         """)
+        # Tabla para control de seguimiento automático (Punto 3)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS seguimiento (
+                sid TEXT PRIMARY KEY,
+                estado TEXT,
+                fecha_cambio TIMESTAMP,
+                ultimo_aviso TIMESTAMP
+            )
+        """)
         conn.commit()
 
 def guardar_usuario(chat_id):
@@ -76,6 +88,19 @@ def obtener_usuarios():
 def eliminar_usuario(chat_id):
     with get_db() as conn:
         conn.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
+        conn.commit()
+
+def registrar_seguimiento(sid, estado):
+    with get_db() as conn:
+        ahora = datetime.now()
+        conn.execute("""
+            INSERT INTO seguimiento (sid, estado, fecha_cambio, ultimo_aviso)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(sid) DO UPDATE SET
+                estado=excluded.estado,
+                fecha_cambio=excluded.fecha_cambio,
+                ultimo_aviso=excluded.ultimo_aviso
+        """, (sid, estado, ahora, ahora))
         conn.commit()
 
 init_db()
@@ -181,11 +206,11 @@ def botones_estado(sid):
     return {
         "inline_keyboard": [
             [
-                {"text": "🔴 En espera de Cliente", "callback_data": f"ESTADO_{sid}_348"}, 
-                {"text": "🟢 En espera de Profesional por confirmacion del Siniestro", "callback_data": f"ESTADO_{sid}_318"}
+                {"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"}, 
+                {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}
             ],
             [
-                {"text": "🟡 320 En espera de otro gremio", "callback_data": f"ESTADO_{sid}_320"}
+                {"text": "🟠 320 Espera Gremio", "callback_data": f"ESTADO_{sid}_320"}
             ],
             [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
         ]
@@ -208,6 +233,16 @@ def lista_cambio(servicios):
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "es-ES,es;q=0.9",
+            "Connection": "keep-alive"
+        })
+        retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504], raise_on_status=False)
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def login(self):
         try:
@@ -234,7 +269,20 @@ class HomeServe:
                     servicios[m.group(0)] = " ".join(b.split())
             return servicios
         except Exception as e:
-            logger.error(f"Error obtener: {e}")
+            logger.warning(f"Error obtener, re-intentando login: {e}")
+            if self.login():
+                try:
+                    r = self.session.get(ASIGNACION_URL, timeout=15)
+                    text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+                    bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+                    servicios = {}
+                    for b in bloques:
+                        m = re.search(r"\b\d{7,8}\b", b)
+                        if m:
+                            servicios[m.group(0)] = " ".join(b.split())
+                    return servicios
+                except Exception as ex:
+                    logger.error(f"Error definitivo obtener: {ex}")
             return {}
 
     def obtener_curso(self):
@@ -251,6 +299,7 @@ class HomeServe:
             return servicios
         except Exception as e:
             logger.error(f"Error obtener_curso: {e}")
+            self.login()
             return {}
 
     def cambiar_estado(self, sid, estado):
@@ -263,7 +312,6 @@ class HomeServe:
 
             fecha_str = fecha.strftime("%d/%m/%Y")
 
-            # Mapeo exacto de observaciones de HomeServe
             if estado == "348":
                 obs = "Pendiente de localizar a asegurado"
             elif estado == "318":
@@ -285,6 +333,7 @@ class HomeServe:
             }
 
             self.session.post(BASE_URL, data=payload, timeout=10)
+            registrar_seguimiento(sid, estado) # Guardar en DB para el recordatorio
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
         except Exception as e:
             return False, f"❌ Error: {e}"
@@ -292,7 +341,7 @@ class HomeServe:
 homeserve = HomeServe()
 
 # =========================================================
-# BACKGROUND LOOP
+# BACKGROUND LOOPS (MONITOR & RECORDATORIOS)
 # =========================================================
 
 def loop():
@@ -313,7 +362,37 @@ def loop():
             homeserve.login()
             time.sleep(10)
 
+def loop_recordatorios():
+    """ PUNTO 3: Tarea programada en segundo plano para avisar sobre seguimiento """
+    while True:
+        try:
+            time.sleep(3600) # Revisa cada hora
+            with get_db() as conn:
+                cursor = conn.execute("SELECT sid, estado, fecha_cambio, ultimo_aviso FROM seguimiento WHERE estado IN ('348', '320')")
+                registros = cursor.fetchall()
+                
+                ahora = datetime.now()
+                for r in registros:
+                    ultimo_aviso = datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S.%f") if "." in r["ultimo_aviso"] else datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S")
+                    
+                    # Si han pasado más de 24 horas desde el último aviso
+                    if (ahora - ultimo_aviso).total_seconds() >= 86400:
+                        txt = (
+                            f"⏰ <b>RECORDATORIO DE SEGUIMIENTO</b>\n\n"
+                            f"El servicio <b>{r['sid']}</b> lleva pendiente en estado <b>{r['estado']}</b>.\n"
+                            f"¿Has podido hablar con el cliente o avanzar con la avería?"
+                        )
+                        for u in obtener_usuarios():
+                            tg_send(u, txt, botones_estado(r['sid']))
+                        
+                        # Actualizar fecha de último aviso
+                        conn.execute("UPDATE seguimiento SET ultimo_aviso=? WHERE sid=?", (ahora, r["sid"]))
+                        conn.commit()
+        except Exception as e:
+            logger.error(f"Error en loop_recordatorios: {e}")
+
 threading.Thread(target=loop, daemon=True).start()
+threading.Thread(target=loop_recordatorios, daemon=True).start()
 
 # =========================================================
 # WEBHOOK
@@ -422,16 +501,36 @@ def webhook():
                 comentarios = datos.get("COMENTARIOS", "")
                 comentarios = "\n".join(comentarios.splitlines()[:5])
 
+                # PUNTO 1 & 2: CONSTRUCCIÓN DE LINKS DE MAPAS Y TELÉFONOS
+                direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
+                query_mapa = quote_plus(direccion_completa)
+                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+
+                # Extraer números telefónicos
+                numeros = re.findall(r"\b\d{9}\b", telefonos)
+                telefonos_formateados = ""
+                for num in numeros:
+                    telefonos_formateados += f"📞 <a href='tel:+34{num}'>{num}</a> (Llamar)\n"
+                if not telefonos_formateados:
+                    telefonos_formateados = telefonos
+
                 texto = (
                     f"📋 <b>SERVICIO:</b> {servicio}\n\n"
-                    f"👤 <b>CLIENTE:</b>\n{cliente}\n\n"
-                    f"📞 <b>TELÉFONOS:</b>\n{telefonos}\n\n"
-                    f"🏠 <b>DOMICILIO:</b>\n{domicilio}\n\n"
-                    f"📍 <b>POBLACIÓN:</b>\n{poblacion}\n\n"
+                    f"👤 <b>CLIENTE:</b> {cliente}\n\n"
+                    f"📞 <b>TELÉFONOS:</b>\n{telefonos_formateados}\n"
+                    f"🏠 <b>DOMICILIO:</b> {domicilio}\n"
+                    f"📍 <b>POBLACIÓN:</b> {poblacion}\n\n"
                     f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
                 )
 
-                tg_edit(chat, msg_id, texto, {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "CURSO"}]]})
+                inline_kb = [
+                    [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
+                    [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
+                    [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
+                ]
+
+                tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
             except Exception as e:
                 tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
 
