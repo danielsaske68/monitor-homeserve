@@ -206,11 +206,11 @@ def botones_estado(sid):
     return {
         "inline_keyboard": [
             [
-                {"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"}, 
-                {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}
+                {"text": "🔴 En espera de cliente", "callback_data": f"ESTADO_{sid}_348"}, 
+                {"text": "🟢 En espera por confirmación ", "callback_data": f"ESTADO_{sid}_318"}
             ],
             [
-                {"text": "🟠 320 Espera Gremio", "callback_data": f"ESTADO_{sid}_320"}
+                {"text": "🟠 En Espera de otro Gremio", "callback_data": f"ESTADO_{sid}_320"}
             ],
             [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
         ]
@@ -350,11 +350,16 @@ def loop():
 
     while True:
         try:
+            logger.info("🔎 [MONITOR] Consultando asignación de nuevos servicios...")
             actuales = homeserve.obtener()
+            logger.info(f"📊 [MONITOR] Servicios encontrados en la web: {len(actuales)}")
+
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
+                    logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
                     for u in obtener_usuarios():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
+                
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
