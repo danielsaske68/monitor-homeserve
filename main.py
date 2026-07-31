@@ -180,7 +180,13 @@ def botones_servicio(sid):
 def botones_estado(sid):
     return {
         "inline_keyboard": [
-            [{"text": "🔴 348 Cliente", "callback_data": f"ESTADO_{sid}_348"}, {"text": "🟢 318 Confirmación", "callback_data": f"ESTADO_{sid}_318"}],
+            [
+                {"text": "🔴 En espera de Cliente", "callback_data": f"ESTADO_{sid}_348"}, 
+                {"text": "🟢 En espera de Profesional por confirmacion del Siniestro", "callback_data": f"ESTADO_{sid}_318"}
+            ],
+            [
+                {"text": "🟡 320 En espera de otro gremio", "callback_data": f"ESTADO_{sid}_320"}
+            ],
             [{"text": "⬅️ Volver", "callback_data": "CAMBIAR"}]
         ]
     }
@@ -256,11 +262,16 @@ class HomeServe:
                 fecha += timedelta(days=1)
 
             fecha_str = fecha.strftime("%d/%m/%Y")
-            obs = (
-                "Pendiente de localizar a asegurado"
-                if estado == "348"
-                else "En espera de Profesional por confirmación del Siniestro"
-            )
+
+            # Mapeo exacto de observaciones de HomeServe
+            if estado == "348":
+                obs = "Pendiente de localizar a asegurado"
+            elif estado == "318":
+                obs = "En espera de Profesional por confirmación del Siniestro"
+            elif estado == "320":
+                obs = "En espera de Profesional por espera de otro gremio"
+            else:
+                obs = "Cambio de estado tramitado desde bot"
 
             payload = {
                 "w3exec": "ver_servicioencurso",
