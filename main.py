@@ -426,33 +426,36 @@ def webhook():
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
             
-            # Limpiamos el mensaje de texto del usuario para mantener limpio el chat si se desea, o lo dejamos
-            # Realizamos la búsqueda por similitud de palabras
+            # Convertimos el texto introducido a minúsculas y separamos por palabras
             palabras = text.lower().split()
             resultados = []
             
-            for item in BAREMOS_DATA:
-                # Se asume que cada item en BAREMOS_DATA es un diccionario o tupla con codigo, nombre, precio
-                # Adaptable según la estructura de baremos.py: ej. {"codigo": "...", "nombre": "...", "precio": "..."}
-                codigo = item.get("codigo", item.get("code", ""))
-                nombre = item.get("nombre", item.get("name", ""))
-                precio = item.get("precio", item.get("price", ""))
-                
+            # Recorremos la tupla BAREMOS_DB que tiene estructura (codigo, nombre, precio)
+            for item in BAREMOS_DB:
+                codigo, nombre, precio = item
                 texto_item = f"{codigo} {nombre}".lower()
-                if all(p in texto_item for p in palabras):
-                    resultados.append(item)
+                
+                # Coincidencia si CUALQUIERA de las palabras buscadas está en el elemento
+                # (Ideal para que devuelva múltiples opciones relacionadas)
+                if any(p in texto_item for p in palabras):
+                    resultados.append({
+                        "codigo": codigo,
+                        "nombre": nombre,
+                        "precio": precio
+                    })
             
             if not resultados:
                 respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando o pulsa volver:"
             else:
                 respuesta = f"🔍 <b>Resultados para:</b> {text}\n\n"
-                for res in resultados[:10]: # Limitamos a 10 para no saturar
-                    c = res.get("codigo", "")
-                    n = res.get("nombre", "")
-                    p = res.get("precio", "")
+                for res in resultados[:10]:  # Limitamos a 10 resultados para no saturar el mensaje de Telegram
+                    c = res["codigo"]
+                    n = res["nombre"]
+                    p = res["precio"]
                     respuesta += f"<code>{c}</code>\n{n}\n<b>{p}</b>\n\n"
+                
                 if len(resultados) > 10:
-                    respuesta += f"<i>(Mostrando 10 de {len(resultados)} resultados...)</i>\n"
+                    respuesta += f"<i>(Mostrando 10 de {len(resultados)} coincidencias...)</i>\n"
             
             kb = {
                 "inline_keyboard": [
@@ -460,7 +463,6 @@ def webhook():
                 ]
             }
             
-            # Editamos el mensaje original en lugar de enviar uno nuevo (evita la chorrera de mensajes)
             tg_edit(chat, msg_id, respuesta, kb)
             return jsonify(ok=True)
 
