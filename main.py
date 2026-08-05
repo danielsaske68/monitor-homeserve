@@ -15,6 +15,12 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
+# Importar la base de datos de baremos (asumiendo que baremos.py está en el mismo directorio)
+try:
+    from baremos import BAREMOS_DATA
+except ImportError:
+    BAREMOS_DATA = []
+
 load_dotenv()
 
 # =========================================================
@@ -47,6 +53,7 @@ app = Flask(__name__)
 SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
+BAREMO_STATE = {}
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -138,9 +145,13 @@ def tg_send(chat, text, markup=None):
     if markup:
         payload["reply_markup"] = markup
     try:
-        tg_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        res = tg_session.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        data = res.json()
+        if data.get("ok"):
+            return data["result"]["message_id"]
     except Exception as e:
         logger.error(f"Error tg_send: {e}")
+    return None
 
 def tg_edit(chat, msg_id, text, markup=None):
     payload = {"chat_id": chat, "message_id": msg_id, "text": text, "parse_mode": "HTML"}
@@ -169,7 +180,7 @@ def botones():
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
             [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
             [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
-            [{"text": "📊 Baremo", "callback_data": "BAREMO"}]
+            [{"text": "📊 BAREMOS", "callback_data": "BAREMO"}, {"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
         ]
     }
 
@@ -410,6 +421,49 @@ def webhook():
 
         guardar_usuario(chat)
 
+        # Gestión del estado de búsqueda de baremos
+        if chat in BAREMO_STATE:
+            state_info = BAREMO_STATE[chat]
+            msg_id = state_info["msg_id"]
+            
+            # Limpiamos el mensaje de texto del usuario para mantener limpio el chat si se desea, o lo dejamos
+            # Realizamos la búsqueda por similitud de palabras
+            palabras = text.lower().split()
+            resultados = []
+            
+            for item in BAREMOS_DATA:
+                # Se asume que cada item en BAREMOS_DATA es un diccionario o tupla con codigo, nombre, precio
+                # Adaptable según la estructura de baremos.py: ej. {"codigo": "...", "nombre": "...", "precio": "..."}
+                codigo = item.get("codigo", item.get("code", ""))
+                nombre = item.get("nombre", item.get("name", ""))
+                precio = item.get("precio", item.get("price", ""))
+                
+                texto_item = f"{codigo} {nombre}".lower()
+                if all(p in texto_item for p in palabras):
+                    resultados.append(item)
+            
+            if not resultados:
+                respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando o pulsa volver:"
+            else:
+                respuesta = f"🔍 <b>Resultados para:</b> {text}\n\n"
+                for res in resultados[:10]: # Limitamos a 10 para no saturar
+                    c = res.get("codigo", "")
+                    n = res.get("nombre", "")
+                    p = res.get("precio", "")
+                    respuesta += f"<code>{c}</code>\n{n}\n<b>{p}</b>\n\n"
+                if len(resultados) > 10:
+                    respuesta += f"<i>(Mostrando 10 de {len(resultados)} resultados...)</i>\n"
+            
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "⬅️ Volver al Menú", "callback_data": "BACK_MENU"}]
+                ]
+            }
+            
+            # Editamos el mensaje original en lugar de enviar uno nuevo (evita la chorrera de mensajes)
+            tg_edit(chat, msg_id, respuesta, kb)
+            return jsonify(ok=True)
+
         if chat in SERV_STATE:
             msg_edit = SERV_STATE[chat]["msg_id"]
             if text.upper() == "TERMINAR":
@@ -442,6 +496,10 @@ def webhook():
 
         tg_answer(cq["id"])
         guardar_usuario(chat)
+
+        # Si pulsa cualquier otro botón, limpiamos el estado de baremo si lo tuviera activo
+        if action != "SEARCH_BAREMO" and chat in BAREMO_STATE:
+            BAREMO_STATE.pop(chat, None)
 
         if action == "LOGIN":
             ok = homeserve.login()
@@ -570,11 +628,25 @@ def webhook():
             )
             keyboard_baremo = {
                 "inline_keyboard": [
+                    [{"text": "🔍 Buscar en Baremos", "callback_data": "SEARCH_BAREMO"}],
                     [{"text": "🌐 Ver Baremo Oficial", "url": "https://web.multiassistance.com/w3multi/documentos/cat3/Baremo2013.pdf"}],
                     [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
                 ]
             }
             tg_edit(chat, msg_id, texto_baremo, keyboard_baremo)
+
+        elif action == "SEARCH_BAREMO":
+            BAREMO_STATE[chat] = {"msg_id": msg_id}
+            texto_busqueda = (
+                "🔍 <b>BÚSQUEDA DE BAREMOS</b>\n\n"
+                "Escribe a continuación la palabra o frase que deseas buscar (ej. <i>latiguillo</i>, <i>sustitucion</i>):"
+            )
+            keyboard_busqueda = {
+                "inline_keyboard": [
+                    [{"text": "⬅️ Volver", "callback_data": "BAREMO"}]
+                ]
+            }
+            tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
 
         elif action == "USUARIOS":
             tg_edit(chat, msg_id, "👥 Usuarios", botones_usuarios())
@@ -611,6 +683,7 @@ def webhook():
             tg_edit(chat, msg_id, "❌ Rechazado", botones())
 
         elif action == "BACK_MENU":
+            BAREMO_STATE.pop(chat, None)
             tg_edit(chat, msg_id, "🏠 Menú", botones())
 
     return jsonify(ok=True)
