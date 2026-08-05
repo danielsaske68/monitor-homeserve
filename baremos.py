@@ -165,6 +165,8 @@ BAREMOS_DB = [
     ("x07", "utilizacion de saco para escombro incluido gestion de residuos del mismo con capacidad 1 m3", "48.89"),
     ("x08", "escalera telescopica/ alquiler martillo compresor o pistolete o martillo electrico ( solo para superficies de hormigon tales como rampas, garajes, patios )", "34.44"),
     ("x09", "plus peligrosidad, utilizacion de arneses", "174.6"),
+    ("x10", "Localizador de fugas gas traza", "178"),
+    ("x011", "Localizador de fugas termografico, geofono o camara endoscopica", "70"),
     ("x13", "alquiler grua especial elevadora de gran tonelaje y dimensiones mas de 12 m de brazo (imprescindible factura)", "Importe manual"),
     ("x14", "alquiler camion/ grua elevadora ( con o sin cesta)", "275"),
     ("x15", "trabajos verticales ( descolgados )", "Importe manual")
