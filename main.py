@@ -208,9 +208,38 @@ def botones_usuarios():
         ]
     }
 
-def botones_servicio(sid):
+def botones_servicio(sid, texto_servicio=""):
+    # Extraer domicilio/poblacion del texto para los mapas si está disponible
+    gmaps_url = "https://www.google.com/maps"
+    waze_url = "https://waze.com"
+    
+    if texto_servicio:
+        # Intentar extraer líneas que contengan direcciones o buscar patrones comunes
+        match_dom = re.search(r"(?:Domicilio|Direccion|Calle)[:\s]+([^\n]+)", texto_servicio, re.IGNORECASE)
+        match_pob = re.search(r"(?:Poblacion|Ciudad|Provincia)[:\s]+([^\n]+)", texto_servicio, re.IGNORECASE)
+        
+        direccion_parts = []
+        if match_dom:
+            direccion_parts.append(match_dom.group(1).strip())
+        if match_pob:
+            direccion_parts.append(match_pob.group(1).strip())
+            
+        if not direccion_parts:
+            # Si viene en formato libre, cogemos líneas del texto del servicio que parezcan ubicación
+            lineas = [l.strip() for l in texto_servicio.split("\n") if l.strip()]
+            if len(lineas) > 2:
+                # Comúnmente la dirección está en las líneas intermedias
+                direccion_parts = lineas[1:3]
+                
+        if direccion_parts:
+            direccion_completa = ", ".join(direccion_parts)
+            query_mapa = quote_plus(direccion_completa)
+            gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+            waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+
     return {
         "inline_keyboard": [
+            [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
             [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"}, {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
@@ -372,7 +401,7 @@ def loop():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
+                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid, txt))
             
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -515,7 +544,7 @@ def webhook():
             else:
                 tg_edit(chat, msg_id, f"🌐 {len(servicios)} servicios encontrados", botones())
                 for sid, txt in servicios.items():
-                    tg_send(chat, txt, botones_servicio(sid))
+                    tg_send(chat, txt, botones_servicio(sid, txt))
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
@@ -734,7 +763,7 @@ def descargar_archivo(nombre):
 @app.route("/eliminar/<nombre>")
 def eliminar_archivo(nombre):
     if not comprobar_login():
-        return "No autorizado", 0
+        return "No autorizado", 401
       
     filename = secure_filename(nombre)
     if filename == "usuarios.db":
@@ -748,7 +777,7 @@ def eliminar_archivo(nombre):
 
 # =========================================================
 # MAIN
-# =========================================================
+-- =========================================================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
