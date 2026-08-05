@@ -183,7 +183,7 @@ def botones():
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
             [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
             [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
-            [{"text": "📊 BAREMOS", "callback_data": "BAREMO"}, {"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
+            [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
         ]
     }
 
@@ -424,12 +424,15 @@ def webhook():
 
         guardar_usuario(chat)
 
-        # Gestión del estado de búsqueda de baremos (con flexibilidad mejorada)
+        if text == "/start":
+            tg_send(chat, "🤖 Bot activo", botones())
+            return jsonify(ok=True)
+
+        # Gestión del estado de búsqueda de baremos
         if chat in BAREMO_STATE:
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
             
-            # Limpiamos acentos básicos o buscamos por trozos de palabras clave
             busqueda = text.lower().strip()
             resultados = []
             
@@ -437,7 +440,6 @@ def webhook():
                 codigo, nombre, precio = item
                 texto_item = f"{codigo} {nombre}".lower()
                 
-                # Coincidencia si la palabra buscada está contenida (ej: "latiguil" pilla "latiguillo" y "latiguillos")
                 if any(p in texto_item for p in busqueda.split()):
                     resultados.append({
                         "codigo": codigo,
@@ -449,7 +451,7 @@ def webhook():
                 respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando:"
             else:
                 respuesta = f"🔍 <b>Resultados para:</b> {text}\n\n"
-                for res in resultados[:10]:  # Máximo 10 para no saturar
+                for res in resultados[:10]:
                     c = res["codigo"]
                     n = res["nombre"]
                     p = res["precio"]
@@ -460,7 +462,8 @@ def webhook():
             
             kb = {
                 "inline_keyboard": [
-                    [{"text": "⬅️ Volver al Menú", "callback_data": "BACK_MENU"}]
+                    [{"text": "🔍 Buscar otro", "callback_data": "SEARCH_BAREMO"}],
+                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
                 ]
             }
             
@@ -477,9 +480,6 @@ def webhook():
                 actual = read_services(chat)
                 tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
             return jsonify(ok=True)
-
-        if text == "/start":
-            tg_send(chat, "🤖 Bot activo", botones())
 
         if chat in USER_STATE:
             if USER_STATE[chat] == "ADD_USER":
@@ -499,11 +499,6 @@ def webhook():
 
         tg_answer(cq["id"])
         guardar_usuario(chat)
-
-        # Si pulsa cualquier botón que NO sea búsqueda de baremos, limpiamos el estado de baremo para que no interfiera
-        if action != "SEARCH_BAREMO" and action != "BACK_MENU":
-            if chat in BAREMO_STATE and action != "BAREMO":
-                pass # Mantenemos si navega, o puedes limpiarlo si prefieres
 
         if action == "LOGIN":
             ok = homeserve.login()
@@ -625,21 +620,6 @@ def webhook():
         elif action == "BACK_NUM_SERV":
             tg_edit(chat, msg_id, "📦 Menú", botones())
 
-        elif action == "BAREMO":
-            BAREMO_STATE.pop(chat, None)
-            texto_baremo = (
-                "📊 <b>CONSULTA DE BAREMO Y TARIFAS</b>\n\n"
-                "Selecciona o consulta las condiciones y valores económicos asociados a las intervenciones y siniestros."
-            )
-            keyboard_baremo = {
-                "inline_keyboard": [
-                    [{"text": "🔍 Buscar en Baremos", "callback_data": "SEARCH_BAREMO"}],
-                    [{"text": "🌐 Ver Baremo Oficial", "url": "https://web.multiassistance.com/w3multi/documentos/cat3/Baremo2013.pdf"}],
-                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
-                ]
-            }
-            tg_edit(chat, msg_id, texto_baremo, keyboard_baremo)
-
         elif action == "SEARCH_BAREMO":
             BAREMO_STATE[chat] = {"msg_id": msg_id}
             texto_busqueda = (
@@ -648,7 +628,7 @@ def webhook():
             )
             keyboard_busqueda = {
                 "inline_keyboard": [
-                    [{"text": "⬅️ Volver", "callback_data": "BAREMO"}]
+                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
                 ]
             }
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
@@ -754,7 +734,7 @@ def descargar_archivo(nombre):
 @app.route("/eliminar/<nombre>")
 def eliminar_archivo(nombre):
     if not comprobar_login():
-        return "No autorizado", 401
+        return "No autorizado", 0
       
     filename = secure_filename(nombre)
     if filename == "usuarios.db":
