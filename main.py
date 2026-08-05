@@ -209,12 +209,11 @@ def botones_usuarios():
     }
 
 def botones_servicio(sid, texto_servicio=""):
-    # Extraer domicilio/poblacion del texto para los mapas si está disponible
     gmaps_url = "https://www.google.com/maps"
     waze_url = "https://waze.com"
     
     if texto_servicio:
-        # Intentar extraer líneas que contengan direcciones o buscar patrones comunes
+        # Intento 1: Buscar etiquetas explícitas
         match_dom = re.search(r"(?:Domicilio|Direccion|Calle)[:\s]+([^\n]+)", texto_servicio, re.IGNORECASE)
         match_pob = re.search(r"(?:Poblacion|Ciudad|Provincia)[:\s]+([^\n]+)", texto_servicio, re.IGNORECASE)
         
@@ -224,12 +223,24 @@ def botones_servicio(sid, texto_servicio=""):
         if match_pob:
             direccion_parts.append(match_pob.group(1).strip())
             
+        # Intento 2: Si viene en formato libre de alerta (ej: VALENCIA (46003) C/ ANGEL CUSTODIO...)
         if not direccion_parts:
-            # Si viene en formato libre, cogemos líneas del texto del servicio que parezcan ubicación
+            # Buscar patrón de calle (C/, Calle, Av., etc.) y la ciudad antes o después
+            match_calle = re.search(r"((?:C\/|Calle|Avenida|Av\.|Paseo|Plaza)[\s\w\dºª\-]+)", texto_servicio, re.IGNORECASE)
+            match_ciudad = re.search(r"\b(VALENCIA|MADRID|BARCELONA|SEVILLA|ALICANTE|CASTELLON|MURCIA|MALAGA|ZARAGOZA|BILBAO|[A-Z]{4,})\b", texto_servicio)
+            
+            if match_calle:
+                direccion_parts.append(match_calle.group(1).strip())
+            if match_ciudad:
+                # Evitar palabras comunes que coincidan en mayúsculas
+                ciudad_encontrada = match_ciudad.group(1)
+                if ciudad_encontrada not in ["DE", "PARA", "LIBRE", "HOY", "URGENTE", "AVERIA"]:
+                    direccion_parts.append(ciudad_encontrada)
+
+        if not direccion_parts:
             lineas = [l.strip() for l in texto_servicio.split("\n") if l.strip()]
-            if len(lineas) > 2:
-                # Comúnmente la dirección está en las líneas intermedias
-                direccion_parts = lineas[1:3]
+            if len(lineas) > 1:
+                direccion_parts = [lineas[0]] # usar texto orientativo
                 
         if direccion_parts:
             direccion_completa = ", ".join(direccion_parts)
