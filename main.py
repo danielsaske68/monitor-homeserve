@@ -64,7 +64,6 @@ def init_db():
                 chat_id TEXT PRIMARY KEY
             )
         """)
-        # Tabla para control de seguimiento automático (Punto 3)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS seguimiento (
                 sid TEXT PRIMARY KEY,
@@ -207,8 +206,8 @@ def botones_estado(sid):
     return {
         "inline_keyboard": [
             [
-                {"text": "🔴 En espera de cliente", "callback_data": f"ESTADO_{sid}_348"}, 
-                {"text": "🟢 En espera por confirmación ", "callback_data": f"ESTADO_{sid}_318"}
+                {"text": "🔴 En espera de cliente", "callback_data": f"ESTADO_{sid}_348"},
+                {"text": "🟢 En espera por confirmación", "callback_data": f"ESTADO_{sid}_318"}
             ],
             [
                 {"text": "🟠 En Espera de otro Gremio", "callback_data": f"ESTADO_{sid}_320"}
@@ -334,7 +333,7 @@ class HomeServe:
             }
 
             self.session.post(BASE_URL, data=payload, timeout=10)
-            registrar_seguimiento(sid, estado) # Guardar en DB para el recordatorio
+            registrar_seguimiento(sid, estado)
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
         except Exception as e:
             return False, f"❌ Error: {e}"
@@ -369,19 +368,17 @@ def loop():
             time.sleep(10)
 
 def loop_recordatorios():
-    """ PUNTO 3: Tarea programada en segundo plano para avisar sobre seguimiento """
     while True:
         try:
-            time.sleep(3600) # Revisa cada hora
+            time.sleep(3600)
             with get_db() as conn:
                 cursor = conn.execute("SELECT sid, estado, fecha_cambio, ultimo_aviso FROM seguimiento WHERE estado IN ('348', '320')")
                 registros = cursor.fetchall()
-                
+              
                 ahora = datetime.now()
                 for r in registros:
                     ultimo_aviso = datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S.%f") if "." in r["ultimo_aviso"] else datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S")
-                    
-                    # Si han pasado más de 24 horas desde el último aviso
+                  
                     if (ahora - ultimo_aviso).total_seconds() >= 86400:
                         txt = (
                             f"⏰ <b>RECORDATORIO DE SEGUIMIENTO</b>\n\n"
@@ -390,8 +387,7 @@ def loop_recordatorios():
                         )
                         for u in obtener_usuarios():
                             tg_send(u, txt, botones_estado(r['sid']))
-                        
-                        # Actualizar fecha de último aviso
+                      
                         conn.execute("UPDATE seguimiento SET ultimo_aviso=? WHERE sid=?", (ahora, r["sid"]))
                         conn.commit()
         except Exception as e:
@@ -490,7 +486,7 @@ def webhook():
                 url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
                 r = homeserve.session.get(url, timeout=15)
                 soup = BeautifulSoup(r.text, "html.parser")
-                
+              
                 datos = {}
                 for tr in soup.find_all("tr"):
                     tds = tr.find_all("td")
@@ -507,13 +503,11 @@ def webhook():
                 comentarios = datos.get("COMENTARIOS", "")
                 comentarios = "\n".join(comentarios.splitlines()[:5])
 
-                # PUNTO 1 & 2: CONSTRUCCIÓN DE LINKS DE MAPAS Y TELÉFONOS
                 direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
                 query_mapa = quote_plus(direccion_completa)
                 gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
                 waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
-                # Extraer números telefónicos
                 numeros = re.findall(r"\b\d{9}\b", telefonos)
                 telefonos_formateados = ""
                 for num in numeros:
@@ -683,7 +677,7 @@ def descargar_archivo(nombre):
 def eliminar_archivo(nombre):
     if not comprobar_login():
         return "No autorizado", 401
-    
+      
     filename = secure_filename(nombre)
     if filename == "usuarios.db":
         return '❌ No puedes eliminar usuarios.db<br><a href="/">Volver</a>'
