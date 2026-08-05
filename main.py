@@ -15,11 +15,14 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
-# Importar la base de datos de baremos (asumiendo que baremos.py está en el mismo directorio)
+# Importar la base de datos de baremos asegurando el nombre correcto
 try:
     from baremos import BAREMOS_DATA
 except ImportError:
-    BAREMOS_DATA = []
+    try:
+        from baremos import BAREMOS_DB as BAREMOS_DATA
+    except ImportError:
+        BAREMOS_DATA = []
 
 load_dotenv()
 
@@ -370,7 +373,7 @@ def loop():
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
                     for u in obtener_usuarios():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
-             
+            
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -421,23 +424,21 @@ def webhook():
 
         guardar_usuario(chat)
 
-        # Gestión del estado de búsqueda de baremos
+        # Gestión del estado de búsqueda de baremos (con flexibilidad mejorada)
         if chat in BAREMO_STATE:
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
             
-            # Convertimos el texto introducido a minúsculas y separamos por palabras
-            palabras = text.lower().split()
+            # Limpiamos acentos básicos o buscamos por trozos de palabras clave
+            busqueda = text.lower().strip()
             resultados = []
             
-            # Recorremos la tupla BAREMOS_DB que tiene estructura (codigo, nombre, precio)
-            for item in BAREMOS_DB:
+            for item in BAREMOS_DATA:
                 codigo, nombre, precio = item
                 texto_item = f"{codigo} {nombre}".lower()
                 
-                # Coincidencia si CUALQUIERA de las palabras buscadas está en el elemento
-                # (Ideal para que devuelva múltiples opciones relacionadas)
-                if any(p in texto_item for p in palabras):
+                # Coincidencia si la palabra buscada está contenida (ej: "latiguil" pilla "latiguillo" y "latiguillos")
+                if any(p in texto_item for p in busqueda.split()):
                     resultados.append({
                         "codigo": codigo,
                         "nombre": nombre,
@@ -445,10 +446,10 @@ def webhook():
                     })
             
             if not resultados:
-                respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando o pulsa volver:"
+                respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando:"
             else:
                 respuesta = f"🔍 <b>Resultados para:</b> {text}\n\n"
-                for res in resultados[:10]:  # Limitamos a 10 resultados para no saturar el mensaje de Telegram
+                for res in resultados[:10]:  # Máximo 10 para no saturar
                     c = res["codigo"]
                     n = res["nombre"]
                     p = res["precio"]
@@ -499,9 +500,10 @@ def webhook():
         tg_answer(cq["id"])
         guardar_usuario(chat)
 
-        # Si pulsa cualquier otro botón, limpiamos el estado de baremo si lo tuviera activo
-        if action != "SEARCH_BAREMO" and chat in BAREMO_STATE:
-            BAREMO_STATE.pop(chat, None)
+        # Si pulsa cualquier botón que NO sea búsqueda de baremos, limpiamos el estado de baremo para que no interfiera
+        if action != "SEARCH_BAREMO" and action != "BACK_MENU":
+            if chat in BAREMO_STATE and action != "BAREMO":
+                pass # Mantenemos si navega, o puedes limpiarlo si prefieres
 
         if action == "LOGIN":
             ok = homeserve.login()
@@ -624,6 +626,7 @@ def webhook():
             tg_edit(chat, msg_id, "📦 Menú", botones())
 
         elif action == "BAREMO":
+            BAREMO_STATE.pop(chat, None)
             texto_baremo = (
                 "📊 <b>CONSULTA DE BAREMO Y TARIFAS</b>\n\n"
                 "Selecciona o consulta las condiciones y valores económicos asociados a las intervenciones y siniestros."
