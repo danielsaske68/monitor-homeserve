@@ -169,7 +169,8 @@ def botones():
             [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
             [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
-            [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}]
+            [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
+            [{"text": "📊 Baremo", "callback_data": "BAREMO"}]
         ]
     }
 
@@ -359,7 +360,7 @@ def loop():
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
                     for u in obtener_usuarios():
                         tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
-                
+             
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -567,6 +568,19 @@ def webhook():
 
         elif action == "BACK_NUM_SERV":
             tg_edit(chat, msg_id, "📦 Menú", botones())
+
+        elif action == "BAREMO":
+            texto_baremo = (
+                "📊 <b>CONSULTA DE BAREMO Y TARIFAS</b>\n\n"
+                "Selecciona o consulta las condiciones y valores económicos asociados a las intervenciones y siniestros."
+            )
+            keyboard_baremo = {
+                "inline_keyboard": [
+                    [{"text": "🌐 Ver Baremo Oficial", "url": "https://web.multiassistance.com/w3multi/documentos/cat3/Baremo2013.pdf"}],
+                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+                ]
+            }
+            tg_edit(chat, msg_id, texto_baremo, keyboard_baremo)
 
         elif action == "USUARIOS":
             tg_edit(chat, msg_id, "👥 Usuarios", botones_usuarios())
