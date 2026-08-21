@@ -213,38 +213,40 @@ def botones_servicio(sid, texto_servicio=""):
     waze_url = "https://waze.com"
     
     if texto_servicio:
-        # Intento 1: Buscar etiquetas explícitas
-        match_dom = re.search(r"(?:Domicilio|Direccion|Calle)[:\s]+([^\n]+)", texto_servicio, re.IGNORECASE)
-        match_pob = re.search(r"(?:Poblacion|Ciudad|Provincia)[:\s]+([^\n]+)", texto_servicio, re.IGNORECASE)
-        
-        direccion_parts = []
-        if match_dom:
-            direccion_parts.append(match_dom.group(1).strip())
-        if match_pob:
-            direccion_parts.append(match_pob.group(1).strip())
-            
-        # Intento 2: Si viene en formato libre de alerta (ej: VALENCIA (46003) C/ ANGEL CUSTODIO...)
-        if not direccion_parts:
-            # Buscar patrón de calle (C/, Calle, Av., etc.) y la ciudad antes o después
-            match_calle = re.search(r"((?:C\/|Calle|Avenida|Av\.|Paseo|Plaza)[\s\w\dºª\-]+)", texto_servicio, re.IGNORECASE)
-            match_ciudad = re.search(r"\b(VALENCIA|MADRID|BARCELONA|SEVILLA|ALICANTE|CASTELLON|MURCIA|MALAGA|ZARAGOZA|BILBAO|[A-Z]{4,})\b", texto_servicio)
-            
-            if match_calle:
-                direccion_parts.append(match_calle.group(1).strip())
-            if match_ciudad:
-                # Evitar palabras comunes que coincidan en mayúsculas
-                ciudad_encontrada = match_ciudad.group(1)
-                if ciudad_encontrada not in ["DE", "PARA", "LIBRE", "HOY", "URGENTE", "AVERIA"]:
-                    direccion_parts.append(ciudad_encontrada)
+        direccion_limpia = ""
 
-        if not direccion_parts:
-            lineas = [l.strip() for l in texto_servicio.split("\n") if l.strip()]
-            if len(lineas) > 1:
-                direccion_parts = [lineas[0]] # usar texto orientativo
-                
-        if direccion_parts:
-            direccion_completa = ", ".join(direccion_parts)
-            query_mapa = quote_plus(direccion_completa)
+        # Patrón para detectar: CIUDAD (CP) TIPO_VIA NOMBRE_CALLE
+        # Ej: VALENCIA (46022) C INGENIERO+RAFAEL+JANINI
+        # Ej: VALENCIA (46009) AV PRIMADO REIG
+        patron_hs = re.search(
+            r"\b([A-ZÁÉÍÓÚÑ\s]+)\s*\((?:\D*(\d{5}))?\)\s*((?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r,]+)",
+            texto_servicio,
+            re.IGNORECASE
+        )
+
+        if patron_hs:
+            ciudad = patron_hs.group(1).strip()
+            cp = patron_hs.group(2) if patron_hs.group(2) else ""
+            calle = patron_hs.group(3).strip()
+            
+            # Reemplazar '+' por espacios si vienen codificados así en el texto
+            calle = calle.replace("+", " ")
+            
+            # Formar dirección completa limpia
+            componentes = [calle, cp, ciudad]
+            direccion_limpia = " ".join([c for c in componentes if c])
+        else:
+            # Fallback si no encaja exactamente con el patrón anterior:
+            # Extraer la zona de 'CIUDAD (CP)' hasta la primera coma o salto de línea
+            match_fallback = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\)[^\n\r,]+)", texto_servicio)
+            if match_fallback:
+                direccion_limpia = match_fallback.group(1).replace("+", " ").strip()
+
+        if direccion_limpia:
+            # Limpiar espacios múltiples y caracteres raros sobrantes
+            direccion_limpia = re.sub(r"\s+", " ", direccion_limpia).strip()
+            
+            query_mapa = quote_plus(direccion_limpia)
             gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
             waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
