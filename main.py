@@ -124,7 +124,7 @@ def file_path(chat):
 
 def add_service(chat, text):
     with open(file_path(chat), "a", encoding="utf-8") as f:
-        f.write(text + "\n")
+        f.write(text.strip() + "\n")
 
 def read_services(chat):
     try:
@@ -182,15 +182,18 @@ def tg_answer(callback_id, text=None):
 def extraer_limpios(domicilio="", poblacion="", telefonos_txt=""):
     dir_completa = f"{domicilio}, {poblacion}".strip(", ")
     
-    # Limpieza de dirección
+    # Limpieza estricta de paréntesis y comentarios adicionales
     dir_limpia = re.sub(r"\(.*?\)", "", dir_completa)
-    palabras_corte = [r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", r"Encargo", r"Cobro", r"Fuga"]
+    palabras_corte = [r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", r"Encargo", r"Cobro", r"Fuga", r"Cita", r"Horario"]
     patron = re.compile("|".join(palabras_corte), re.IGNORECASE)
     dir_limpia = patron.split(dir_limpia)[0]
+    
+    # Eliminar posibles horas (10:00, 10:00-12:00) o números residuales
+    dir_limpia = re.sub(r"\b\d{2}:\d{2}(-\d{2}:\d{2})?\b", "", dir_limpia)
     dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia)
-    dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
+    dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip().upper()
 
-    num_match = re.search(r"\b\d{9}\b", str(telefonos_txt))
+    num_match = re.search(r"\b(6\d{8}|7\d{8}|9\d{8})\b", str(telefonos_txt))
     tlf = num_match.group(0) if num_match else ""
 
     return dir_limpia, tlf
@@ -516,7 +519,7 @@ def webhook():
                 for res in resultados[:10]:
                     respuesta += f"<code>{res['codigo']}</code>\n{res['nombre']}\n<b>{res['precio']}</b>\n\n"
                 if len(resultados) > 10:
-                    respuesta += f"<i>(Mostrando 10 de {len(resultados)} coincidencias...)</i>\n"
+                    respuesta += f"<i>(Mostrando 10 de {len(resultados)} coincidencia...)</i>\n"
             
             kb = {
                 "inline_keyboard": [
@@ -620,7 +623,7 @@ def webhook():
                 url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
                 r = homeserve.session.get(url, timeout=15)
                 soup = BeautifulSoup(r.text, "html.parser")
-              
+                
                 datos = {}
                 for tr in soup.find_all("tr"):
                     tds = tr.find_all("td")
@@ -651,7 +654,7 @@ def webhook():
                     gmaps_url = "https://www.google.com/maps"
                     waze_url = "https://waze.com"
 
-                # Generación de mensajes para SMS y WhatsApp
+                # Generación del mensaje base sin hora
                 msg_sin_hora = f"Hola, soy el fontanero del seguro, era para informarle de su cita en {dir_limpia}. Era para saber si podemos pasar a su vivienda."
                 encoded_sin_hora = quote(msg_sin_hora)
 
@@ -785,23 +788,18 @@ def nube():
     <!doctype html>
     <html>
     <head><title>Nube Railway</title>
-    <style>body{font-family:Arial;margin:40px;} button{padding:8px;} a{margin:5px;}</style>
+    <style>body{font-family:Arial;margin:40px;} button{padding:8px;} a{margin-left:10px;}</style>
     </head>
     <body>
-    <h1>☁️ Nube Railway</h1>
-    <h3>/data</h3>
-    <form action="/subir" method="post" enctype="multipart/form-data">
-        <input type="file" name="archivo">
-        <button>📥 Subir</button>
-    </form>
-    <hr>
-    {% for archivo in archivos %}
-    <p>
-    📄 <b>{{archivo}}</b>
-    <a href="/descargar/{{archivo}}">⬇ Descargar</a>
-    <a href="/eliminar/{{archivo}}" onclick="return confirm('¿Eliminar?')">🗑 Eliminar</a>
-    </p>
-    {% endfor %}
+        <h1>Panel de Administración - Nube Railway</h1>
+        <ul>
+        {% for archivo in archivos %}
+            <li>
+                {{ archivo }}
+                <a href="/download/{{ archivo }}">Descargar</a>
+            </li>
+        {% endfor %}
+        </ul>
     </body>
     </html>
     """
