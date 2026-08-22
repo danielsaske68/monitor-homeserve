@@ -5,7 +5,7 @@ import logging
 import re
 import requests
 import sqlite3
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, quote
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -57,6 +57,7 @@ SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
 BAREMO_STATE = {}
+CITA_STATE = {}  # Guarda estado para ingresar fecha/hora por chat
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -165,11 +166,34 @@ def tg_edit(chat, msg_id, text, markup=None):
     except Exception as e:
         logger.error(f"Error tg_edit: {e}")
 
-def tg_answer(callback_id):
+def tg_answer(callback_id, text=None):
     try:
-        tg_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": callback_id}, timeout=5)
+        payload = {"callback_query_id": callback_id}
+        if text:
+            payload["text"] = text
+        tg_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json=payload, timeout=5)
     except Exception as e:
         logger.error(f"Error tg_answer: {e}")
+
+# =========================================================
+# HELPER PARSER DIRECCIÓN Y TELÉFONO
+# =========================================================
+
+def extraer_limpios(domicilio, poblacion, telefonos_txt=""):
+    dir_completa = f"{domicilio}, {poblacion}".strip(", ")
+    
+    # Limpieza de dirección
+    dir_limpia = re.sub(r"\(.*?\)", "", dir_completa)
+    palabras_corte = [r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", r"Encargo", r"Cobro", r"Fuga"]
+    patron = re.compile("|".join(palabras_corte), re.IGNORECASE)
+    dir_limpia = patron.split(dir_limpia)[0]
+    dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia)
+    dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
+
+    num_match = re.search(r"\b\d{9}\b", telefonos_txt)
+    tlf = num_match.group(0) if num_match else ""
+
+    return dir_limpia, tlf
 
 # =========================================================
 # BOTONES
@@ -218,21 +242,13 @@ def botones_servicio(sid, texto_servicio=""):
             texto_servicio,
             re.IGNORECASE
         )
-        
         if match:
             direccion_bruta = match.group(1)
-            palabras_corte = [
-                r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", 
-                r"Servicio\s+generado", r"Encargo", r"Cobro", r"Suceso", 
-                r"Rechaza", r"Argumentario", r"Sin\s+agua", r"Fuga"
-            ]
-            
+            palabras_corte = [r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", r"Encargo", r"Cobro", r"Fuga"]
             direccion_separada = re.sub(r"([a-z0-9ªºA-Z])([A-Z][a-z])", r"\1 \2", direccion_bruta)
             patron_corte = re.compile("|".join(palabras_corte), re.IGNORECASE)
             direccion_cortada = patron_corte.split(direccion_separada)[0]
-            
-            dir_limpia = direccion_cortada.replace("+", " ")
-            dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia)
+            dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", direccion_cortada)
             dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
             
             if dir_limpia:
@@ -387,7 +403,7 @@ class HomeServe:
 homeserve = HomeServe()
 
 # =========================================================
-# BACKGROUND LOOPS (MONITOR & RECORDATORIOS)
+# BACKGROUND LOOPS
 # =========================================================
 
 def loop():
@@ -460,34 +476,45 @@ def webhook():
             tg_send(chat, "🤖 Bot activo", botones())
             return jsonify(ok=True)
 
+        if chat in CITA_STATE:
+            info = CITA_STATE.pop(chat)
+            msg_id = info["msg_id"]
+            dir_limpia = info["dir"]
+            tlf = info["tlf"]
+
+            msg_cita = f"Hola, soy el fontanero del seguro, era para informarle de su cita en {dir_limpia} el día {text}. Era para saber si podemos pasar a su vivienda."
+            msg_encoded = quote(msg_cita)
+
+            wa_link = f"https://wa.me/34{tlf}?text={msg_encoded}" if tlf else f"https://wa.me/?text={msg_encoded}"
+            sms_link = f"sms:+34{tlf}?body={msg_encoded}" if tlf else f"sms:?body={msg_encoded}"
+
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "💬 WhatsApp (Con Hora)", "url": wa_link}, {"text": "📲 SMS (Con Hora)", "url": sms_link}],
+                    [{"text": "⬅️ Volver", "callback_data": f"SEL_{info['sid']}"}]
+                ]
+            }
+            tg_edit(chat, msg_id, f"✅ <b>Mensaje generado para:</b> {text}\n\n<i>\"{msg_cita}\"</i>", kb)
+            return jsonify(ok=True)
+
         if chat in BAREMO_STATE:
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
-            
             busqueda = text.lower().strip()
             resultados = []
             
             for item in BAREMOS_DATA:
                 codigo, nombre, precio = item
                 texto_item = f"{codigo} {nombre}".lower()
-                
                 if any(p in texto_item for p in busqueda.split()):
-                    resultados.append({
-                        "codigo": codigo,
-                        "nombre": nombre,
-                        "precio": precio
-                    })
+                    resultados.append({"codigo": codigo, "nombre": nombre, "precio": precio})
             
             if not resultados:
                 respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando:"
             else:
                 respuesta = f"🔍 <b>Resultados para:</b> {text}\n\n"
                 for res in resultados[:10]:
-                    c = res["codigo"]
-                    n = res["nombre"]
-                    p = res["precio"]
-                    respuesta += f"<code>{c}</code>\n{n}\n<b>{p}</b>\n\n"
-                
+                    respuesta += f"<code>{res['codigo']}</code>\n{res['nombre']}\n<b>{res['precio']}</b>\n\n"
                 if len(resultados) > 10:
                     respuesta += f"<i>(Mostrando 10 de {len(resultados)} coincidencias...)</i>\n"
             
@@ -497,7 +524,6 @@ def webhook():
                     [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
                 ]
             }
-            
             tg_edit(chat, msg_id, respuesta, kb)
             return jsonify(ok=True)
 
@@ -568,6 +594,27 @@ def webhook():
             sid = action.split("_")[1]
             tg_edit(chat, msg_id, f"🛠 <b>Cambiar estado del servicio</b>\n\n<b>{sid}</b>", botones_estado(sid))
 
+        elif action.startswith("SAVE_SERV_"):
+            sid = action.split("_")[2]
+            add_service(chat, sid)
+            tg_answer(cq["id"], f"✅ Servicio {sid} guardado en el archivo")
+
+        elif action.startswith("SETCITA_"):
+            sid = action.split("_")[1]
+            # Extraer dirección y tlf nuevamente
+            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+            r = homeserve.session.get(url, timeout=15)
+            soup = BeautifulSoup(r.text, "html.parser")
+            datos = {}
+            for tr in soup.find_all("tr"):
+                tds = tr.find_all("td")
+                if len(tds) >= 2:
+                    datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
+
+            dir_limpia, tlf = extraer_limpios(datos.get("DOMICILIO", ""), datos.get("POBLACION-PROVINCIA", ""), datos.get("TELEFONOS", ""))
+            CITA_STATE[chat] = {"msg_id": msg_id, "sid": sid, "dir": dir_limpia, "tlf": tlf}
+            tg_edit(chat, msg_id, "📅 Escribe la fecha y hora por el chat (ejemplo: <code>23/08 a las 10:00</code>):")
+
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
             try:
@@ -591,17 +638,20 @@ def webhook():
                 comentarios = datos.get("COMENTARIOS", "")
                 comentarios = "\n".join(comentarios.splitlines()[:5])
 
-                direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
-                query_mapa = quote_plus(direccion_completa)
+                dir_limpia, tlf_limpio = extraer_limpios(domicilio, poblacion, telefonos)
+                query_mapa = quote_plus(dir_limpia)
                 gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
                 waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
+                # Generación de mensajes para SMS y WhatsApp
+                msg_sin_hora = f"Hola, soy el fontanero del seguro, era para informarle de su cita en {dir_limpia}. Era para saber si podemos pasar a su vivienda."
+                encoded_sin_hora = quote(msg_sin_hora)
+
+                wa_sin_hora = f"https://wa.me/34{tlf_limpio}?text={encoded_sin_hora}" if tlf_limpio else f"https://wa.me/?text={encoded_sin_hora}"
+                sms_sin_hora = f"sms:+34{tlf_limpio}?body={encoded_sin_hora}" if tlf_limpio else f"sms:?body={encoded_sin_hora}"
+
                 numeros = re.findall(r"\b\d{9}\b", telefonos)
-                telefonos_formateados = ""
-                for num in numeros:
-                    telefonos_formateados += f"📞 <a href='tel:+34{num}'>{num}</a> (Llamar)\n"
-                if not telefonos_formateados:
-                    telefonos_formateados = telefonos
+                telefonos_formateados = "".join([f"📞 <a href='tel:+34{num}'>{num}</a> (Llamar)\n" for num in numeros]) or telefonos
 
                 texto = (
                     f"📋 <b>SERVICIO:</b> {servicio}\n\n"
@@ -614,6 +664,9 @@ def webhook():
 
                 inline_kb = [
                     [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
+                    [{"text": "💬 WhatsApp (Sin hora)", "url": wa_sin_hora}, {"text": "📲 SMS (Sin hora)", "url": sms_sin_hora}],
+                    [{"text": "📅 Definir fecha/hora", "callback_data": f"SETCITA_{sid}"}],
+                    [{"text": "💾 Guardar servicio", "callback_data": f"SAVE_SERV_{sid}"}],
                     [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
                     [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
                 ]
@@ -700,6 +753,7 @@ def webhook():
 
         elif action == "BACK_MENU":
             BAREMO_STATE.pop(chat, None)
+            CITA_STATE.pop(chat, None)
             tg_edit(chat, msg_id, "🏠 Menú", botones())
 
     return jsonify(ok=True)
