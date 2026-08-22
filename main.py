@@ -49,83 +49,6 @@ logger = logging.getLogger("bot")
 
 app = Flask(__name__)
 
-# MAPEO AMPLIADO DE MUNICIPIOS DE LA COMUNIDAD VALENCIANA
-MAPEO_LOCALIDADES = {
-    # Valencia / Àrea Metropolitana
-    "VALENCIA": "Valencia",
-    "VALÈNCIA": "Valencia",
-    "TORRENT": "Torrent",
-    "TORRENTE": "Torrent",
-    "PATERNA": "Paterna",
-    "MISLATA": "Mislata",
-    "BURJASSOT": "Burjassot",
-    "BURJASOT": "Burjassot",
-    "ALDAIA": "Aldaia",
-    "ALDAYA": "Aldaia",
-    "ALAQUÀS": "Alaquàs",
-    "ALAQUAS": "Alaquàs",
-    "MANISES": "Manises",
-    "XIRIVELLA": "Xirivella",
-    "CHIRIVELLA": "Xirivella",
-    "CATARROJA": "Catarroja",
-    "PAIPORTA": "Paiporta",
-    "ALFAFAR": "Alfafar",
-    "BENETÚSSER": "Benetússer",
-    "BENETUSER": "Benetússer",
-    "PICASSENT": "Picassent",
-    "PICASENT": "Picassent",
-    "SEDAVÍ": "Sedaví",
-    "SEDAVI": "Sedaví",
-    "MASSANASSA": "Massanassa",
-    "MASANASA": "Massanassa",
-    "ALBAL": "Albal",
-    "SILLA": "Silla",
-    "PICANYA": "Picanya",
-    "QUART DE POBLET": "Quart de Poblet",
-    "GODELLETTA": "Godelleta",
-    "GODELLETA": "Godelleta",
-    "RIBA-ROJA": "Riba-roja de Túria",
-    "RIBAROJA": "Riba-roja de Túria",
-    "L'ELIANA": "L'Eliana",
-    "ELIANA": "L'Eliana",
-    "L`ELIANA": "L'Eliana",
-    "BÉTERA": "Bétera",
-    "BETERA": "Bétera",
-    "POBLA DE VALLBONA": "La Pobla de Vallbona",
-    "LA POBLA DE VALLBONA": "La Pobla de Vallbona",
-    "MONCADA": "Moncada",
-    "ALCÀSSER": "Alcàsser",
-    "ALCASSER": "Alcàsser",
-    "SAGUNTO": "Sagunto",
-    "SAGUNT": "Sagunto",
-    "PUÇOL": "Puçol",
-    "PUSOL": "Puçol",
-    "GANDIA": "Gandia",
-    "GANDÍA": "Gandia",
-    "ALZIRA": "Alzira",
-    "ALCIRA": "Alzira",
-    "XÀTIVA": "Xàtiva",
-    "JÁTIVA": "Xàtiva",
-    "ONTINYENT": "Ontinyent",
-    "ONTENIENTE": "Ontinyent",
-    "CULLERA": "Cullera",
-    "SUECA": "Sueca",
-    "REQUENA": "Requena",
-    "UTIEL": "Utiel"
-}
-
-def normalizar_localidad(loc_raw):
-    if not loc_raw:
-        return "Otras Localidades"
-    
-    loc_clean = loc_raw.strip().upper()
-    
-    for clave, normalizada in MAPEO_LOCALIDADES.items():
-        if clave in loc_clean:
-            return normalizada
-            
-    return loc_clean.title()
-
 # =========================================================
 # STATE & DB
 # =========================================================
@@ -339,6 +262,11 @@ def botones_estado(sid):
         ]
     }
 
+def lista_curso(servicios):
+    botones_lista = [[{"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}] for sid in servicios]
+    botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+    return {"inline_keyboard": botones_lista}
+
 def lista_cambio(servicios):
     botones_lista = [[{"text": f"🛠 {sid}", "callback_data": f"CAMSEL_{sid}"}] for sid in servicios]
     botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
@@ -403,36 +331,20 @@ class HomeServe:
                     logger.error(f"Error definitivo obtener: {ex}")
             return {}
 
-    def obtener_curso_agrupado(self):
+    def obtener_curso(self):
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
-            soup = BeautifulSoup(r.text, "html.parser")
-            
-            grupos = {}
-            filas = soup.find_all("tr")
-            for f in filas:
-                txt = f.get_text(" ", strip=True)
-                m_sid = re.search(r"\b(\d{7,8})\b", txt)
-                if m_sid:
-                    sid = m_sid.group(1)
-                    
-                    match_dir = re.search(r"(?:C\/|AV|CALLE|AVENIDA|PASEO|PLAZA)\s+[^\d\n]+", txt, re.IGNORECASE)
-                    direccion = match_dir.group(0).strip() if match_dir else ""
-                    
-                    match_loc = re.search(r"\((?:46\d{3}|03\d{3}|12\d{3})\)\s*([A-ZÁÉÍÓÚÑ\s]+)", txt, re.IGNORECASE)
-                    loc_raw = match_loc.group(1) if match_loc else ""
-                    
-                    localidad = normalizar_localidad(loc_raw)
-                    
-                    if localidad not in grupos:
-                        grupos[localidad] = []
-                        
-                    grupos[localidad].append({"sid": sid, "direccion": direccion})
-
-            return grupos
+            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+            servicios = {}
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+            return servicios
         except Exception as e:
-            logger.error(f"Error obtener_curso_agrupado: {e}")
+            logger.error(f"Error obtener_curso: {e}")
             self.login()
             return {}
 
@@ -473,20 +385,6 @@ class HomeServe:
             return False, f"❌ Error: {e}"
 
 homeserve = HomeServe()
-
-def generar_texto_servicios_curso(agrupados):
-    if not agrupados:
-        return "❌ No hay servicios en curso."
-
-    lineas = ["📋 <b>**SERVICIOS EN CURSO POR LOCALIDAD**</b>\n"]
-    for localidad, servicios in agrupados.items():
-        lineas.append(f"<b>{localidad} ({len(servicios)})</b>\n")
-        for s in servicios:
-            dir_txt = f" - {s['direccion']}" if s['direccion'] else ""
-            lineas.append(f"<code>{s['sid']}</code>{dir_txt}")
-        lineas.append("")
-        
-    return "\n".join(lineas)
 
 # =========================================================
 # BACKGROUND LOOPS (MONITOR & RECORDATORIOS)
@@ -563,7 +461,9 @@ def webhook():
             return jsonify(ok=True)
 
         if chat in BAREMO_STATE:
-            msg_id = BAREMO_STATE[chat]["msg_id"]
+            state_info = BAREMO_STATE[chat]
+            msg_id = state_info["msg_id"]
+            
             busqueda = text.lower().strip()
             resultados = []
             
@@ -607,14 +507,9 @@ def webhook():
                 SERV_STATE.pop(chat)
                 tg_edit(chat, msg_edit, "✅ Servicios guardados correctamente", botones_num_serv())
             else:
-                match = re.search(r"\b(\d{7,8})\b", text)
-                if match:
-                    numero_servicio = match.group(1)
-                    add_service(chat, numero_servicio)
-                    actual = read_services(chat)
-                    tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
-                else:
-                    tg_edit(chat, msg_edit, "⚠️ No se detectó ningún número de servicio válido (7-8 dígitos). Inténtalo de nuevo o escribe TERMINAR.", botones_num_serv())
+                add_service(chat, text)
+                actual = read_services(chat)
+                tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
             return jsonify(ok=True)
 
         if chat in USER_STATE:
@@ -654,27 +549,78 @@ def webhook():
                     tg_send(chat, txt, botones_servicio(sid, txt))
 
         elif action == "CURSO":
-            agrupados = homeserve.obtener_curso_agrupado()
-            texto_resp = generar_texto_servicios_curso(agrupados)
-            kb = {
-                "inline_keyboard": [
-                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
-                ]
-            }
-            tg_edit(chat, msg_id, texto_resp, kb)
+            curso = homeserve.obtener_curso()
+            tg_edit(
+                chat, msg_id,
+                "📋 Servicios en curso" if curso else "❌ No hay servicios en curso",
+                lista_curso(curso) if curso else botones()
+            )
 
         elif action == "CAMBIAR":
-            agrupados = homeserve.obtener_curso_agrupado()
-            sids = [s["sid"] for servicios in agrupados.values() for s in servicios]
+            curso = homeserve.obtener_curso()
             tg_edit(
                 chat, msg_id,
                 "🛠 Selecciona servicio",
-                lista_cambio(sids) if sids else botones()
+                lista_cambio(curso) if curso else botones()
             )
 
         elif action.startswith("CAMSEL_"):
             sid = action.split("_")[1]
             tg_edit(chat, msg_id, f"🛠 <b>Cambiar estado del servicio</b>\n\n<b>{sid}</b>", botones_estado(sid))
+
+        elif action.startswith("SEL_"):
+            sid = action.split("_")[1]
+            try:
+                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+                r = homeserve.session.get(url, timeout=15)
+                soup = BeautifulSoup(r.text, "html.parser")
+              
+                datos = {}
+                for tr in soup.find_all("tr"):
+                    tds = tr.find_all("td")
+                    if len(tds) >= 2:
+                        clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
+                        valor = tds[1].get_text(" ", strip=True)
+                        datos[clave] = valor
+
+                servicio = datos.get("SERVICIO", sid)
+                cliente = datos.get("CLIENTE", "")
+                telefonos = datos.get("TELEFONOS", "")
+                domicilio = datos.get("DOMICILIO", "")
+                poblacion = datos.get("POBLACION-PROVINCIA", "")
+                comentarios = datos.get("COMENTARIOS", "")
+                comentarios = "\n".join(comentarios.splitlines()[:5])
+
+                direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
+                query_mapa = quote_plus(direccion_completa)
+                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+
+                numeros = re.findall(r"\b\d{9}\b", telefonos)
+                telefonos_formateados = ""
+                for num in numeros:
+                    telefonos_formateados += f"📞 <a href='tel:+34{num}'>{num}</a> (Llamar)\n"
+                if not telefonos_formateados:
+                    telefonos_formateados = telefonos
+
+                texto = (
+                    f"📋 <b>SERVICIO:</b> {servicio}\n\n"
+                    f"👤 <b>CLIENTE:</b> {cliente}\n\n"
+                    f"📞 <b>TELÉFONOS:</b>\n{telefonos_formateados}\n"
+                    f"🏠 <b>DOMICILIO:</b> {domicilio}\n"
+                    f"📍 <b>POBLACIÓN:</b> {poblacion}\n\n"
+                    f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
+                )
+
+                inline_kb = [
+                    [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
+                    [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
+                    [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
+                ]
+
+                tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
+            except Exception as e:
+                tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
