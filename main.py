@@ -57,6 +57,7 @@ SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
 BAREMO_STATE = {}
+CITAS_GUARDADAS = {}
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -115,15 +116,20 @@ def registrar_seguimiento(sid, estado):
 init_db()
 
 # =========================================================
-# FILES
+# FILES & UTILS
 # =========================================================
 
 def file_path(chat):
     return os.path.join(DATA_DIR, f"servicios_{chat}.txt")
 
+def extraer_id_limpio(texto):
+    match = re.search(r"\b(\d{7,8})\b", texto)
+    return match.group(1) if match else texto.strip()
+
 def add_service(chat, text):
+    id_limpio = extraer_id_limpio(text)
     with open(file_path(chat), "a", encoding="utf-8") as f:
-        f.write(text + "\n")
+        f.write(id_limpio + "\n")
 
 def read_services(chat):
     try:
@@ -136,6 +142,36 @@ def clear_services(chat):
     path = file_path(chat)
     if os.path.exists(path):
         open(path, "w").close()
+
+def generar_link_whatsapp(sid, texto_servicio=""):
+    fecha_hora = CITAS_GUARDADAS.get(sid, "")
+    
+    match_tlf = re.search(r"\b([678]\d{8})\b", texto_servicio)
+    telefono = match_tlf.group(1) if match_tlf else ""
+    
+    match_pob = re.search(r"([A-ZÁÉÍÓÚÑ\s]+)\s*\(\d{5}\)", texto_servicio)
+    poblacion = match_pob.group(1).strip() if match_pob else ""
+    
+    match_calle = re.search(r"((?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r]+)", texto_servicio, re.IGNORECASE)
+    calle = ""
+    if match_calle:
+        c_bruta = match_calle.group(1)
+        palabras_corte = [r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", r"Servicio\s+generado", r"Encargo"]
+        c_cortada = re.split("|".join(palabras_corte), c_bruta, flags=re.IGNORECASE)[0]
+        calle = re.sub(r"[\*\/]", "", c_cortada).replace("+", " ").strip()
+    
+    ubicacion = f"{calle}, {poblacion}".strip(", ")
+    
+    if fecha_hora:
+        mensaje = f"Hola, soy el fontanero del seguro, era para informarle de su cita en {ubicacion}. Era para saber si podemos pasar a su vivienda el {fecha_hora}."
+    else:
+        mensaje = f"Hola, soy el fontanero del seguro, era para informarle de su cita en {ubicacion}. Era para saber si podemos pasar a su vivienda."
+        
+    query_wa = quote_plus(mensaje)
+    
+    if telefono:
+        return f"https://wa.me/34{telefono}?text={query_wa}"
+    return f"https://wa.me/?text={query_wa}"
 
 # =========================================================
 # TELEGRAM
@@ -213,7 +249,6 @@ def botones_servicio(sid, texto_servicio=""):
     waze_url = "https://waze.com"
     
     if texto_servicio:
-        # 1. Buscar la estructura: CIUDAD (CP) TIPO_VIA CALLE...
         match = re.search(
             r"\b([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\)\s*(?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r]+)",
             texto_servicio,
@@ -222,24 +257,18 @@ def botones_servicio(sid, texto_servicio=""):
         
         if match:
             direccion_bruta = match.group(1)
-            
-            # 2. Palabras clave donde SIEMPRE empieza la avería (se corta todo a partir de ahí)
             palabras_corte = [
                 r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", 
                 r"Servicio\s+generado", r"Encargo", r"Cobro", r"Suceso", 
                 r"Rechaza", r"Argumentario", r"Sin\s+agua", r"Fuga"
             ]
             
-            # Insertar un espacio antes de mayúsculas pegadas (ej: "PUERTATubería" -> "PUERTA Tubería")
             direccion_separada = re.sub(r"([a-z0-9ªºA-Z])([A-Z][a-z])", r"\1 \2", direccion_bruta)
-            
-            # Cortar en la primera palabra clave encontrada
             patron_corte = re.compile("|".join(palabras_corte), re.IGNORECASE)
             direccion_cortada = patron_corte.split(direccion_separada)[0]
             
-            # 3. Limpieza final de caracteres extra
             dir_limpia = direccion_cortada.replace("+", " ")
-            dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia) # Quitar comas, barras, asteriscos
+            dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia)
             dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
             
             if dir_limpia:
@@ -247,9 +276,12 @@ def botones_servicio(sid, texto_servicio=""):
                 gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
                 waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
+    wa_url = generar_link_whatsapp(sid, texto_servicio)
+
     return {
         "inline_keyboard": [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
+            [{"text": "💬 WhatsApp Rápido", "url": wa_url}],
             [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"}, {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
@@ -270,7 +302,27 @@ def botones_estado(sid):
     }
 
 def lista_curso(servicios):
-    botones_lista = [[{"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}] for sid in servicios]
+    grupos = {}
+    normalizar = {"TORRENTE": "TORRENT", "VALÈNCIA": "VALENCIA", "ALDAYA": "ALDAIA"}
+
+    for sid, texto in servicios.items():
+        match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+)\s*\(\d{5}\)", texto)
+        if match:
+            pob = match.group(1).strip().upper()
+            pob = normalizar.get(pob, pob)
+        else:
+            pob = "OTRAS LOCALIDADES"
+
+        if pob not in grupos:
+            grupos[pob] = []
+        grupos[pob].append(sid)
+
+    botones_lista = []
+    for localidad in sorted(grupos.keys()):
+        sids = grupos[localidad]
+        for s_id in sids:
+            botones_lista.append([{"text": f"📍 {localidad} | 👁 {s_id}", "callback_data": f"SEL_{s_id}"}])
+            
     botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
     return {"inline_keyboard": botones_lista}
 
@@ -394,7 +446,7 @@ class HomeServe:
 homeserve = HomeServe()
 
 # =========================================================
-# BACKGROUND LOOPS (MONITOR & RECORDATORIOS)
+# BACKGROUND LOOPS
 # =========================================================
 
 def loop():
@@ -463,11 +515,21 @@ def webhook():
 
         guardar_usuario(chat)
 
+        if text.startswith("/cita"):
+            partes = text.split(maxsplit=2)
+            if len(partes) >= 3:
+                sid = partes[1]
+                fecha_hora = partes[2]
+                CITAS_GUARDADAS[sid] = fecha_hora
+                tg_send(chat, f"📅 Cita guardada para `{sid}`: {fecha_hora}")
+            else:
+                tg_send(chat, "⚠️ Formato incorrecto. Usa: `/cita <id_servicio> <fecha/hora>`")
+            return jsonify(ok=True)
+
         if text == "/start":
             tg_send(chat, "🤖 Bot activo", botones())
             return jsonify(ok=True)
 
-        # Gestión del estado de búsqueda de baremos
         if chat in BAREMO_STATE:
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
@@ -560,7 +622,7 @@ def webhook():
             curso = homeserve.obtener_curso()
             tg_edit(
                 chat, msg_id,
-                "📋 Servicios en curso" if curso else "❌ No hay servicios en curso",
+                "📋 **SERVICIOS EN CURSO POR LOCALIDAD**" if curso else "❌ No hay servicios en curso",
                 lista_curso(curso) if curso else botones()
             )
 
@@ -604,6 +666,8 @@ def webhook():
                 gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
                 waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
+                wa_url = generar_link_whatsapp(sid, f"{domicilio} {poblacion} {telefonos}")
+
                 numeros = re.findall(r"\b\d{9}\b", telefonos)
                 telefonos_formateados = ""
                 for num in numeros:
@@ -622,6 +686,7 @@ def webhook():
 
                 inline_kb = [
                     [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
+                    [{"text": "💬 WhatsApp Rápido", "url": wa_url}],
                     [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
                     [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
                 ]
