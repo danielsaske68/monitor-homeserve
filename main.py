@@ -213,26 +213,33 @@ def botones_servicio(sid, texto_servicio=""):
     waze_url = "https://waze.com"
     
     if texto_servicio:
-        # 1. Buscar el bloque que contiene: CIUDAD (CP) CALLE...
-        # Ejemplo: VALENCIA (46025) C/ CALLE PLATANOS PUERTA Avería...
-        match = re.search(r"\b([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\)\s*(?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r]+)", texto_servicio, re.IGNORECASE)
+        # 1. Buscar la estructura: CIUDAD (CP) TIPO_VIA CALLE...
+        match = re.search(
+            r"\b([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\)\s*(?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r]+)",
+            texto_servicio,
+            re.IGNORECASE
+        )
         
         if match:
             direccion_bruta = match.group(1)
             
-            # 2. Cortar tajantemente la dirección antes de que empiece la descripción del siniestro
-            # Lista de palabras clave donde termina la dirección y empieza el texto de la avería:
+            # 2. Palabras clave donde SIEMPRE empieza la avería (se corta todo a partir de ahí)
             palabras_corte = [
-                r"\bAver[ií]a\b", r"\bDa[nñ]o\b", r"\bEl asegurado\b", r"\bServicio generado\b",
-                r"\bEncargo\b", r"\bCobro\b", r"\bSuceso\b", r"\bRechaza\b", r"\bArgumentario\b"
+                r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", 
+                r"Servicio\s+generado", r"Encargo", r"Cobro", r"Suceso", 
+                r"Rechaza", r"Argumentario", r"Sin\s+agua", r"Fuga"
             ]
             
-            patron_corte = re.compile("|".join(palabras_corte), re.IGNORECASE)
-            direccion_cortada = patron_corte.split(direccion_bruta)[0]
+            # Insertar un espacio antes de mayúsculas pegadas (ej: "PUERTATubería" -> "PUERTA Tubería")
+            direccion_separada = re.sub(r"([a-z0-9ªºA-Z])([A-Z][a-z])", r"\1 \2", direccion_bruta)
             
-            # 3. Limpieza final de caracteres sobrantes (+, comas, espacios dobles)
+            # Cortar en la primera palabra clave encontrada
+            patron_corte = re.compile("|".join(palabras_corte), re.IGNORECASE)
+            direccion_cortada = patron_corte.split(direccion_separada)[0]
+            
+            # 3. Limpieza final de caracteres extra
             dir_limpia = direccion_cortada.replace("+", " ")
-            dir_limpia = re.sub(r"[\*\/]", " ", dir_limpia) # Limpiar barras sueltas o asteriscos
+            dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia) # Quitar comas, barras, asteriscos
             dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
             
             if dir_limpia:
