@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
-# Importar la base de datos de baremos asegurando el nombre correcto
+# Importar la base de datos de baremos
 try:
     from baremos import BAREMOS_DATA
 except ImportError:
@@ -57,7 +57,7 @@ SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
 BAREMO_STATE = {}
-CITA_STATE = {}  # Guarda estado para ingresar fecha/hora por chat
+CITA_STATE = {}
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -179,7 +179,7 @@ def tg_answer(callback_id, text=None):
 # HELPER PARSER DIRECCIÓN Y TELÉFONO
 # =========================================================
 
-def extraer_limpios(domicilio, poblacion, telefonos_txt=""):
+def extraer_limpios(domicilio="", poblacion="", telefonos_txt=""):
     dir_completa = f"{domicilio}, {poblacion}".strip(", ")
     
     # Limpieza de dirección
@@ -190,7 +190,7 @@ def extraer_limpios(domicilio, poblacion, telefonos_txt=""):
     dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia)
     dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
 
-    num_match = re.search(r"\b\d{9}\b", telefonos_txt)
+    num_match = re.search(r"\b\d{9}\b", str(telefonos_txt))
     tlf = num_match.group(0) if num_match else ""
 
     return dir_limpia, tlf
@@ -601,7 +601,6 @@ def webhook():
 
         elif action.startswith("SETCITA_"):
             sid = action.split("_")[1]
-            # Extraer dirección y tlf nuevamente
             url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
             r = homeserve.session.get(url, timeout=15)
             soup = BeautifulSoup(r.text, "html.parser")
@@ -631,17 +630,26 @@ def webhook():
                         datos[clave] = valor
 
                 servicio = datos.get("SERVICIO", sid)
-                cliente = datos.get("CLIENTE", "")
+                cliente = datos.get("CLIENTE", "No indicado")
                 telefonos = datos.get("TELEFONOS", "")
                 domicilio = datos.get("DOMICILIO", "")
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 comentarios = datos.get("COMENTARIOS", "")
-                comentarios = "\n".join(comentarios.splitlines()[:5])
+                if comentarios:
+                    comentarios = "\n".join(comentarios.splitlines()[:5])
+                else:
+                    comentarios = "Sin comentarios"
 
                 dir_limpia, tlf_limpio = extraer_limpios(domicilio, poblacion, telefonos)
-                query_mapa = quote_plus(dir_limpia)
-                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+                
+                # Links mapas
+                if dir_limpia:
+                    query_mapa = quote_plus(dir_limpia)
+                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                    waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+                else:
+                    gmaps_url = "https://www.google.com/maps"
+                    waze_url = "https://waze.com"
 
                 # Generación de mensajes para SMS y WhatsApp
                 msg_sin_hora = f"Hola, soy el fontanero del seguro, era para informarle de su cita en {dir_limpia}. Era para saber si podemos pasar a su vivienda."
@@ -651,14 +659,14 @@ def webhook():
                 sms_sin_hora = f"sms:+34{tlf_limpio}?body={encoded_sin_hora}" if tlf_limpio else f"sms:?body={encoded_sin_hora}"
 
                 numeros = re.findall(r"\b\d{9}\b", telefonos)
-                telefonos_formateados = "".join([f"📞 <a href='tel:+34{num}'>{num}</a> (Llamar)\n" for num in numeros]) or telefonos
+                telefonos_formateados = "".join([f"📞 <a href='tel:+34{num}'>{num}</a>\n" for num in numeros]) or (telefonos if telefonos else "Sin teléfono")
 
                 texto = (
                     f"📋 <b>SERVICIO:</b> {servicio}\n\n"
                     f"👤 <b>CLIENTE:</b> {cliente}\n\n"
                     f"📞 <b>TELÉFONOS:</b>\n{telefonos_formateados}\n"
-                    f"🏠 <b>DOMICILIO:</b> {domicilio}\n"
-                    f"📍 <b>POBLACIÓN:</b> {poblacion}\n\n"
+                    f"🏠 <b>DOMICILIO:</b> {domicilio if domicilio else 'No disponible'}\n"
+                    f"📍 <b>POBLACIÓN:</b> {poblacion if poblacion else 'No disponible'}\n\n"
                     f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
                 )
 
@@ -673,7 +681,8 @@ def webhook():
 
                 tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
             except Exception as e:
-                tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
+                logger.error(f"Error parseando servicio {sid}: {e}")
+                tg_edit(chat, msg_id, f"❌ Error obteniendo servicio <b>{sid}</b>:\n{e}", botones())
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
