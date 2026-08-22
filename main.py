@@ -13,7 +13,6 @@ from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, send_from_directory, render_template_string
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from werkzeug.utils import secure_filename
 
 # Importar la base de datos de baremos
 try:
@@ -182,13 +181,11 @@ def tg_answer(callback_id, text=None):
 def extraer_limpios(domicilio="", poblacion="", telefonos_txt=""):
     dir_completa = f"{domicilio}, {poblacion}".strip(", ")
     
-    # Limpieza estricta de paréntesis y comentarios adicionales
     dir_limpia = re.sub(r"\(.*?\)", "", dir_completa)
     palabras_corte = [r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", r"Encargo", r"Cobro", r"Fuga", r"Cita", r"Horario"]
     patron = re.compile("|".join(palabras_corte), re.IGNORECASE)
     dir_limpia = patron.split(dir_limpia)[0]
     
-    # Eliminar posibles horas (10:00, 10:00-12:00) o números residuales
     dir_limpia = re.sub(r"\b\d{2}:\d{2}(-\d{2}:\d{2})?\b", "", dir_limpia)
     dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia)
     dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip().upper()
@@ -304,18 +301,18 @@ class HomeServe:
             "Accept-Language": "es-ES,es;q=0.9",
             "Connection": "keep-alive"
         })
-        retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504], raise_on_status=False)
+        retries = Retry(total=2, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504], raise_on_status=False)
         adapter = HTTPAdapter(max_retries=retries)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
 
     def login(self):
         try:
-            self.session.get(LOGIN_URL, timeout=10)
+            self.session.get(LOGIN_URL, timeout=8)
             r = self.session.post(
                 LOGIN_URL,
                 data={"CODIGO": USUARIO, "PASSW": PASSWORD, "BTN": "Aceptar"},
-                timeout=10
+                timeout=8
             )
             return "error" not in r.text.lower()
         except Exception as e:
@@ -324,7 +321,7 @@ class HomeServe:
 
     def obtener(self):
         try:
-            r = self.session.get(ASIGNACION_URL, timeout=15)
+            r = self.session.get(ASIGNACION_URL, timeout=10)
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", text)
             servicios = {}
@@ -337,7 +334,7 @@ class HomeServe:
             logger.warning(f"Error obtener, re-intentando login: {e}")
             if self.login():
                 try:
-                    r = self.session.get(ASIGNACION_URL, timeout=15)
+                    r = self.session.get(ASIGNACION_URL, timeout=10)
                     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
                     bloques = re.split(r"\n(?=\d{7,8}\s)", text)
                     servicios = {}
@@ -397,7 +394,7 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            self.session.post(BASE_URL, data=payload, timeout=10)
+            self.session.post(BASE_URL, data=payload, timeout=8)
             registrar_seguimiento(sid, estado)
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
         except Exception as e:
@@ -604,24 +601,36 @@ def webhook():
 
         elif action.startswith("SETCITA_"):
             sid = action.split("_")[1]
-            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-            r = homeserve.session.get(url, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            datos = {}
-            for tr in soup.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) >= 2:
-                    datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
+            try:
+                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+                r = homeserve.session.get(url, timeout=8)
+                soup = BeautifulSoup(r.text, "html.parser")
+                datos = {}
+                for tr in soup.find_all("tr"):
+                    tds = tr.find_all("td")
+                    if len(tds) >= 2:
+                        datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
 
-            dir_limpia, tlf = extraer_limpios(datos.get("DOMICILIO", ""), datos.get("POBLACION-PROVINCIA", ""), datos.get("TELEFONOS", ""))
-            CITA_STATE[chat] = {"msg_id": msg_id, "sid": sid, "dir": dir_limpia, "tlf": tlf}
-            tg_edit(chat, msg_id, "📅 Escribe la fecha y hora por el chat (ejemplo: <code>23/08 a las 10:00</code>):")
+                dir_limpia, tlf = extraer_limpios(datos.get("DOMICILIO", ""), datos.get("POBLACION-PROVINCIA", ""), datos.get("TELEFONOS", ""))
+                CITA_STATE[chat] = {"msg_id": msg_id, "sid": sid, "dir": dir_limpia, "tlf": tlf}
+                tg_edit(chat, msg_id, "📅 Escribe la fecha y hora por el chat (ejemplo: <code>23/08 a las 10:00</code>):")
+            except Exception as e:
+                logger.error(f"Error SETCITA_ {sid}: {e}")
+                tg_edit(chat, msg_id, f"❌ Error al consultar servicio {sid} para cita.", botones())
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
+            # Mensaje temporal de carga inmediata para asegurar respuesta inmediata
+            tg_edit(chat, msg_id, f"⏳ Cargando detalles del servicio <b>{sid}</b>...")
             try:
                 url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-                r = homeserve.session.get(url, timeout=15)
+                r = homeserve.session.get(url, timeout=8)
+                
+                # Reintento de login si expiró la sesión
+                if "w3exec=PROF_PASS" in r.url or "acceso" in r.text.lower():
+                    homeserve.login()
+                    r = homeserve.session.get(url, timeout=8)
+
                 soup = BeautifulSoup(r.text, "html.parser")
                 
                 datos = {}
@@ -638,6 +647,7 @@ def webhook():
                 domicilio = datos.get("DOMICILIO", "")
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 comentarios = datos.get("COMENTARIOS", "")
+                
                 if comentarios:
                     comentarios = "\n".join(comentarios.splitlines()[:5])
                 else:
@@ -645,7 +655,6 @@ def webhook():
 
                 dir_limpia, tlf_limpio = extraer_limpios(domicilio, poblacion, telefonos)
                 
-                # Links mapas
                 if dir_limpia:
                     query_mapa = quote_plus(dir_limpia)
                     gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
@@ -654,7 +663,6 @@ def webhook():
                     gmaps_url = "https://www.google.com/maps"
                     waze_url = "https://waze.com"
 
-                # Generación del mensaje base sin hora
                 msg_sin_hora = f"Hola, soy el fontanero del seguro, era para informarle de su cita en {dir_limpia}. Era para saber si podemos pasar a su vivienda."
                 encoded_sin_hora = quote(msg_sin_hora)
 
@@ -748,7 +756,7 @@ def webhook():
             sid = action.split("_")[1]
             try:
                 url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
-                r = homeserve.session.get(url, timeout=15)
+                r = homeserve.session.get(url, timeout=10)
                 html = r.text.lower()
                 errores = ["error", "illegal", "denegado", "caducada", "no autorizado", "acceso inválido"]
                 if any(e in html for e in errores):
@@ -805,42 +813,12 @@ def nube():
     """
     return render_template_string(html, archivos=archivos)
 
-@app.route("/subir", methods=["POST"])
-def subir_archivo():
+@app.route("/download/<path:filename>")
+def download_file(filename):
     if not comprobar_login():
-        return "No autorizado", 401
-
-    archivo = request.files.get("archivo")
-    if archivo and archivo.filename:
-        filename = secure_filename(archivo.filename)
-        archivo.save(os.path.join(DATA_DIR, filename))
-
-    return 'Archivo subido correctamente<br><a href="/">Volver</a>'
-
-@app.route("/descargar/<nombre>")
-def descargar_archivo(nombre):
-    if not comprobar_login():
-        return "No autorizado", 401
-    return send_from_directory(DATA_DIR, secure_filename(nombre), as_attachment=True)
-
-@app.route("/eliminar/<nombre>")
-def eliminar_archivo(nombre):
-    if not comprobar_login():
-        return "No autorizado", 401
-      
-    filename = secure_filename(nombre)
-    if filename == "usuarios.db":
-        return '❌ No puedes eliminar usuarios.db<br><a href="/">Volver</a>'
-
-    ruta = os.path.join(DATA_DIR, filename)
-    if os.path.exists(ruta):
-        os.remove(ruta)
-
-    return '✅ Archivo eliminado<br><a href="/">Volver</a>'
-
-# =========================================================
-# MAIN
-# =========================================================
+        return ("Acceso denegado", 401, {"WWW-Authenticate": 'Basic realm="Nube Railway"'})
+    return send_from_directory(DATA_DIR, filename, as_attachment=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
