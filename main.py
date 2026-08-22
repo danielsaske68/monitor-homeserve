@@ -213,42 +213,32 @@ def botones_servicio(sid, texto_servicio=""):
     waze_url = "https://waze.com"
     
     if texto_servicio:
-        direccion_limpia = ""
-
-        # Patrón para detectar: CIUDAD (CP) TIPO_VIA NOMBRE_CALLE
-        # Ej: VALENCIA (46022) C INGENIERO+RAFAEL+JANINI
-        # Ej: VALENCIA (46009) AV PRIMADO REIG
-        patron_hs = re.search(
-            r"\b([A-ZÁÉÍÓÚÑ\s]+)\s*\((?:\D*(\d{5}))?\)\s*((?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r,]+)",
-            texto_servicio,
-            re.IGNORECASE
-        )
-
-        if patron_hs:
-            ciudad = patron_hs.group(1).strip()
-            cp = patron_hs.group(2) if patron_hs.group(2) else ""
-            calle = patron_hs.group(3).strip()
+        # 1. Buscar el bloque que contiene: CIUDAD (CP) CALLE...
+        # Ejemplo: VALENCIA (46025) C/ CALLE PLATANOS PUERTA Avería...
+        match = re.search(r"\b([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\)\s*(?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r]+)", texto_servicio, re.IGNORECASE)
+        
+        if match:
+            direccion_bruta = match.group(1)
             
-            # Reemplazar '+' por espacios si vienen codificados así en el texto
-            calle = calle.replace("+", " ")
+            # 2. Cortar tajantemente la dirección antes de que empiece la descripción del siniestro
+            # Lista de palabras clave donde termina la dirección y empieza el texto de la avería:
+            palabras_corte = [
+                r"\bAver[ií]a\b", r"\bDa[nñ]o\b", r"\bEl asegurado\b", r"\bServicio generado\b",
+                r"\bEncargo\b", r"\bCobro\b", r"\bSuceso\b", r"\bRechaza\b", r"\bArgumentario\b"
+            ]
             
-            # Formar dirección completa limpia
-            componentes = [calle, cp, ciudad]
-            direccion_limpia = " ".join([c for c in componentes if c])
-        else:
-            # Fallback si no encaja exactamente con el patrón anterior:
-            # Extraer la zona de 'CIUDAD (CP)' hasta la primera coma o salto de línea
-            match_fallback = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\)[^\n\r,]+)", texto_servicio)
-            if match_fallback:
-                direccion_limpia = match_fallback.group(1).replace("+", " ").strip()
-
-        if direccion_limpia:
-            # Limpiar espacios múltiples y caracteres raros sobrantes
-            direccion_limpia = re.sub(r"\s+", " ", direccion_limpia).strip()
+            patron_corte = re.compile("|".join(palabras_corte), re.IGNORECASE)
+            direccion_cortada = patron_corte.split(direccion_bruta)[0]
             
-            query_mapa = quote_plus(direccion_limpia)
-            gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-            waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+            # 3. Limpieza final de caracteres sobrantes (+, comas, espacios dobles)
+            dir_limpia = direccion_cortada.replace("+", " ")
+            dir_limpia = re.sub(r"[\*\/]", " ", dir_limpia) # Limpiar barras sueltas o asteriscos
+            dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
+            
+            if dir_limpia:
+                query_mapa = quote_plus(dir_limpia)
+                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
     return {
         "inline_keyboard": [
