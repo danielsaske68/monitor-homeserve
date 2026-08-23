@@ -466,7 +466,6 @@ def webhook():
             telefono = state_info["telefono"]
             base_msg = state_info["base_msg"]
             
-            # Formatear el mensaje completo con la fecha y hora proporcionadas
             mensaje_final = f"{base_msg} para el {text}."
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
             
@@ -480,7 +479,6 @@ def webhook():
             tg_send(chat, f"✅ Mensaje preparado:\n\n<code>{mensaje_final}</code>", kb)
             return jsonify(ok=True)
 
-        # Gestión del estado de búsqueda de baremos
         if chat in BAREMO_STATE:
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
@@ -635,7 +633,7 @@ def webhook():
 
                 inline_kb = [
                     [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-                    [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}],
+                    [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "💾 Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
                     [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
                     [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
                 ]
@@ -643,6 +641,16 @@ def webhook():
                 tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
             except Exception as e:
                 tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
+
+        elif action.startswith("GUARDARSERV_"):
+            sid = action.split("_")[1]
+            try:
+                add_service(chat, sid)
+                tg_answer(cq["id"])
+                # Opcional: mostrar notificación emergente de confirmación en Telegram
+                tg_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": f"✅ Servicio {sid} guardado correctamente", "show_alert": True}, timeout=5)
+            except Exception as e:
+                logger.error(f"Error al guardar servicio: {e}")
 
         elif action.startswith("CITAWAP_"):
             sid = action.split("_")[1]
@@ -668,10 +676,8 @@ def webhook():
                     tg_edit(chat, msg_id, "❌ No se encontró un número de teléfono válido para este servicio.", botones())
                     return jsonify(ok=True)
                 
-                # Tomar el primer número de teléfono
                 primer_telefono = numeros[0]
 
-                # Calcular saludo según la hora actual
                 hora_actual = datetime.now().hour
                 if 6 <= hora_actual < 12:
                     saludo = "días"
@@ -680,7 +686,6 @@ def webhook():
                 else:
                     saludo = "noches"
 
-                # Limpieza de dirección y localidad
                 dir_limpia = domicilio.strip() if domicilio else "su domicilio"
                 pob_limpia = poblacion.strip() if poblacion else ""
                 ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
