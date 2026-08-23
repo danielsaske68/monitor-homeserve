@@ -646,9 +646,42 @@ def webhook():
             sid = action.split("_")[1]
             try:
                 add_service(chat, sid)
-                tg_answer(cq["id"])
-                # Opcional: mostrar notificación emergente de confirmación en Telegram
-                tg_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": f"✅ Servicio {sid} guardado correctamente", "show_alert": True}, timeout=5)
+                
+                # Obtener dirección actual para recalcular la botonera y cambiar el botón de guardado
+                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+                r = homeserve.session.get(url, timeout=15)
+                soup = BeautifulSoup(r.text, "html.parser")
+                datos = {}
+                for tr in soup.find_all("tr"):
+                    tds = tr.find_all("td")
+                    if len(tds) >= 2:
+                        datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
+
+                domicilio = datos.get("DOMICILIO", "")
+                poblacion = datos.get("POBLACION-PROVINCIA", "")
+                direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
+                query_mapa = quote_plus(direccion_completa)
+                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+
+                # Reconstruir teclado cambiando el botón por la confirmación y un callback nulo
+                updated_kb = {
+                    "inline_keyboard": [
+                        [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
+                        [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "✅ Guardado con éxito", "callback_data": "NOOP"}],
+                        [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
+                        [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
+                    ]
+                }
+                
+                # Actualizar únicamente el teclado del mensaje sin recargar todo el texto
+                payload = {
+                    "chat_id": chat,
+                    "message_id": msg_id,
+                    "reply_markup": updated_kb
+                }
+                tg_session.post(f"{TELEGRAM_API}/editMessageReplyMarkup", json=payload, timeout=5)
+
             except Exception as e:
                 logger.error(f"Error al guardar servicio: {e}")
 
