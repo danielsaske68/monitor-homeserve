@@ -214,27 +214,24 @@ def botones_servicio(sid, texto_servicio=""):
     waze_url = "https://waze.com"
     
     if texto_servicio:
-        # Extractor específico y seguro solo para los mensajes de NUEVOS servicios
-        match = re.search(
-            r"(?:VALENCIA|[A-ZÁÉÍÓÚÑ\s]+)\s*\(\d{5}\)\s*([A-ZÁÉÍÓÚÑ0-9ºª\.\-\/]+(?:\s+[A-ZÁÉÍÓÚÑ0-9ºª\.\-\/]+)*?(?=\b(?:Tuber[ií]a|Aver[ií]a|Da[nñ]o|El\s+asegurado|Servicio|Encargo|Cobro|Suceso|Rechaza|Argumentario|Sin\s+agua|Fuga|ES:)\b|$))",
-            texto_servicio,
-            re.IGNORECASE
-        )
+        pob_match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\))", texto_servicio, re.IGNORECASE)
+        pob_str = pob_match.group(1) if pob_match else "VALENCIA (46020)"
         
-        if match:
-            direccion_bruta = match.group(1).strip()
+        if pob_match:
+            resto = texto_servicio[pob_match.end():].strip()
+            cortes = r"(?i)\b(ES:|PL:|PT:|PISO|PUERTA|BL|ESC|Tuber[ií]a|Aver[ií]a|Da[nñ]o|El\s+asegurado|Servicio|Encargo)\b"
+            partes = re.split(cortes, resto)
+            direccion_bruta = partes[0].strip() if partes else ""
             
-            pob_match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\))", texto_servicio)
-            pob_str = pob_match.group(1) if pob_match else "VALENCIA (46020)"
-            
-            dir_limpia = f"{direccion_bruta}, {pob_str}"
-            dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
-            dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
-            
-            if dir_limpia:
-                query_mapa = quote_plus(dir_limpia)
-                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+            if direccion_bruta:
+                dir_limpia = f"{direccion_bruta}, {pob_str}"
+                dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
+                dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
+                
+                if dir_limpia:
+                    query_mapa = quote_plus(dir_limpia)
+                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                    waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
     return {
         "inline_keyboard": [
