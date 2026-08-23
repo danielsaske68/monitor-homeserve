@@ -214,25 +214,21 @@ def botones_servicio(sid, texto_servicio=""):
     waze_url = "https://waze.com"
     
     if texto_servicio:
+        # Extractor específico y seguro solo para los mensajes de NUEVOS servicios
         match = re.search(
-            r"\b([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\)\s*(?:C\/|C\b|AV\b|AV\.|CALLE|AVENIDA|PASEO|PLAZA|CTRA)[^\n\r]+)",
+            r"(?:VALENCIA|[A-ZÁÉÍÓÚÑ\s]+)\s*\(\d{5}\)\s*([A-ZÁÉÍÓÚÑ0-9ºª\.\-\/]+(?:\s+[A-ZÁÉÍÓÚÑ0-9ºª\.\-\/]+)*?(?=\b(?:Tuber[ií]a|Aver[ií]a|Da[nñ]o|El\s+asegurado|Servicio|Encargo|Cobro|Suceso|Rechaza|Argumentario|Sin\s+agua|Fuga|ES:)\b|$))",
             texto_servicio,
             re.IGNORECASE
         )
         
         if match:
-            direccion_bruta = match.group(1)
-            palabras_corte = [
-                r"Tuber[ií]a", r"Aver[ií]a", r"Da[nñ]o", r"El\s+asegurado", 
-                r"Servicio\s+generado", r"Encargo", r"Cobro", r"Suceso", 
-                r"Rechaza", r"Argumentario", r"Sin\s+agua", r"Fuga"
-            ]
-            direccion_separada = re.sub(r"([a-z0-9ªºA-Z])([A-Z][a-z])", r"\1 \2", direccion_bruta)
-            patron_corte = re.compile("|".join(palabras_corte), re.IGNORECASE)
-            direccion_cortada = patron_corte.split(direccion_separada)[0]
+            direccion_bruta = match.group(1).strip()
             
-            dir_limpia = direccion_cortada.replace("+", " ")
-            dir_limpia = re.sub(r"[\[\]\*\/\,]", " ", dir_limpia)
+            pob_match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\))", texto_servicio)
+            pob_str = pob_match.group(1) if pob_match else "VALENCIA (46020)"
+            
+            dir_limpia = f"{direccion_bruta}, {pob_str}"
+            dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
             dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
             
             if dir_limpia:
@@ -647,7 +643,6 @@ def webhook():
             try:
                 add_service(chat, sid)
                 
-                # Obtener dirección actual para recalcular la botonera y cambiar el botón de guardado
                 url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
                 r = homeserve.session.get(url, timeout=15)
                 soup = BeautifulSoup(r.text, "html.parser")
@@ -664,7 +659,6 @@ def webhook():
                 gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
                 waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
-                # Reconstruir teclado cambiando el botón por la confirmación y un callback nulo
                 updated_kb = {
                     "inline_keyboard": [
                         [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
@@ -674,7 +668,6 @@ def webhook():
                     ]
                 }
                 
-                # Actualizar únicamente el teclado del mensaje sin recargar todo el texto
                 payload = {
                     "chat_id": chat,
                     "message_id": msg_id,
