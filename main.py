@@ -68,6 +68,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def parse_datetime(value):
     if value is None:
         return None
@@ -125,7 +126,6 @@ def init_db():
         if "fecha_caducidad" not in columnas:
             conn.execute("ALTER TABLE seguimiento ADD COLUMN fecha_caducidad TIMESTAMP")
         conn.commit()
-
 def guardar_usuario(chat_id):
     with get_db() as conn:
         conn.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
@@ -247,8 +247,8 @@ def botones_todos_estados():
         ]
     }
 
-def botones_num_serv():
-    return {
+
+def botones_num_serv():    return {
         "inline_keyboard": [
             [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
             [{"text": "🗑 Eliminar archivo", "callback_data": "DEL_SERV"}],
@@ -314,14 +314,14 @@ def botones_estado(sid):
         ]
     }
 
-def formato_servicio_lista(sid, texto=""):
+def formato_lista_servicio(sid, texto=""):
     fecha = extraer_fecha_caducidad(texto)
     if fecha:
         return f"👁 {sid} | Cad. {fecha.strftime('%d/%m/%Y')}"
     return f"👁 {sid}"
 
 
-def formato_cambio_lista(sid, texto=""):
+def formato_lista_cambio(sid, texto=""):
     fecha = extraer_fecha_caducidad(texto)
     if fecha:
         return f"🛠 {sid} | Cad. {fecha.strftime('%d/%m/%Y')}"
@@ -330,7 +330,7 @@ def formato_cambio_lista(sid, texto=""):
 
 def lista_curso(servicios):
     botones_lista = [
-        [{"text": formato_servicio_lista(sid, texto), "callback_data": f"SEL_{sid}"}]
+        [{"text": formato_lista_servicio(sid, texto), "callback_data": f"SEL_{sid}"}]
         for sid, texto in servicios.items()
     ]
     botones_lista.append([
@@ -343,7 +343,7 @@ def lista_curso(servicios):
 
 def lista_cambio(servicios):
     botones_lista = [
-        [{"text": formato_cambio_lista(sid, texto), "callback_data": f"CAMSEL_{sid}"}]
+        [{"text": formato_lista_cambio(sid, texto), "callback_data": f"CAMSEL_{sid}"}]
         for sid, texto in servicios.items()
     ]
     botones_lista.append([
@@ -416,35 +416,13 @@ class HomeServe:
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
-            soup = BeautifulSoup(r.text, "html.parser")
+            text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
             servicios = {}
-
-            for tr in soup.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) < 5:
-                    continue
-
-                link = tr.find("a", href=True)
-                if not link:
-                    continue
-                sid_match = re.search(r"\b\d{7,8}\b", link.get_text(" ", strip=True))
-                if not sid_match:
-                    continue
-
-                sid = sid_match.group(0)
-                fila = " ".join(td.get_text(" ", strip=True) for td in tds)
-                fecha_cad = extraer_fecha_caducidad(fila)
-                if fecha_cad:
-                    fila = f"{fila} | CADUCIDAD {fecha_cad.strftime('%d/%m/%Y')}"
-                servicios[sid] = fila
-
-            if not servicios:
-                text = soup.get_text("\n")
-                bloques = re.split(r"\n(?=\d{7,8}\s)", text)
-                for b in bloques:
-                    m = re.search(r"\b\d{7,8}\b", b)
-                    if m:
-                        servicios[m.group(0)] = " ".join(b.split())
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
             return servicios
         except Exception as e:
             logger.error(f"Error obtener_curso: {e}")
@@ -522,23 +500,13 @@ def loop_recordatorios():
         try:
             time.sleep(3600)
             with get_db() as conn:
-                cursor = conn.execute("SELECT sid, estado, fecha_cambio, ultimo_aviso, fecha_caducidad FROM seguimiento WHERE estado IN ('348', '320')")
+                cursor = conn.execute("SELECT sid, estado, fecha_cambio, ultimo_aviso FROM seguimiento WHERE estado IN ('348', '320')")
                 registros = cursor.fetchall()
-
+                
                 ahora = datetime.now()
-                curso = homeserve.obtener_curso()
                 for r in registros:
-                    fecha_caducidad = parse_datetime(r["fecha_caducidad"])
-                    if fecha_caducidad is None:
-                        fecha_caducidad = parse_datetime(r["fecha_cambio"]) + timedelta(days=3)
-
-                    texto_del_servicio = curso.get(r["sid"], "")
-                    fecha_web = extraer_fecha_caducidad(texto_del_servicio)
-                    if fecha_web is not None:
-                        fecha_caducidad = datetime.combine(fecha_web, datetime.min.time())
-                    fecha_caducidad = fecha_caducidad.date()
-
-                    ultimo_aviso = parse_datetime(r["ultimo_aviso"])
+                    ultimo_aviso = datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S.%f") if "." in r["ultimo_aviso"] else datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S")
+                    
                     if (ahora - ultimo_aviso).total_seconds() >= 86400:
                         txt = (
                             f"⏰ <b>RECORDATORIO DE SEGUIMIENTO</b>\n\n"
@@ -547,23 +515,9 @@ def loop_recordatorios():
                         )
                         for u in obtener_usuarios():
                             tg_send(u, txt, botones_estado(r['sid']))
-
+                        
                         conn.execute("UPDATE seguimiento SET ultimo_aviso=? WHERE sid=?", (ahora, r["sid"]))
                         conn.commit()
-
-                    if ahora.date() >= fecha_caducidad:
-                        nuevo_estado = siguiente_estado_automatico(r["estado"])
-                        if nuevo_estado != r["estado"]:
-                            ok, _ = homeserve.cambiar_estado(r["sid"], nuevo_estado)
-                            if ok:
-                                for u in obtener_usuarios():
-                                    tg_send(
-                                        u,
-                                        f"⏰ <b>CADUCIDAD AUTOMÁTICA</b>\n\n"
-                                        f"El servicio <b>{r['sid']}</b> ha llegado a su fecha de caducidad en estado <b>{r['estado']}</b>\n"
-                                        f"y se ha actualizado automáticamente a <b>{nuevo_estado}</b>.",
-                                        botones_estado(r['sid'])
-                                    )
         except Exception as e:
             logger.error(f"Error en loop_recordatorios: {e}")
 
@@ -720,7 +674,6 @@ def webhook():
                 tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
                 return jsonify(ok=True)
 
-            changed = 0
             with get_db() as conn:
                 placeholders = ", ".join("?" for _ in servicios)
                 registros = conn.execute(
@@ -728,18 +681,19 @@ def webhook():
                     list(servicios.keys())
                 ).fetchall()
 
-            for registro in registros:
-                nuevo_estado = siguiente_estado_automatico(registro["estado"])
-                if nuevo_estado == registro["estado"]:
+            changed = 0
+            for r in registros:
+                nuevo_estado = siguiente_estado_automatico(r["estado"])
+                if nuevo_estado == r["estado"]:
                     continue
-                ok, _ = homeserve.cambiar_estado(registro["sid"], nuevo_estado)
+                ok, _ = homeserve.cambiar_estado(r["sid"], nuevo_estado)
                 if ok:
                     changed += 1
 
-            if changed == 0:
-                mensaje = "ℹ️ No había servicios pendientes de cambio automático"
-            else:
-                mensaje = f"✅ Se han actualizado automáticamente {changed} servicios"
+            mensaje = (
+                f"✅ Se han actualizado automáticamente {changed} servicios"
+                if changed > 0 else "ℹ️ No había servicios pendientes de cambio automático"
+            )
             tg_edit(chat, msg_id, mensaje, botones())
 
         elif action.startswith("TODOS_"):
@@ -783,8 +737,6 @@ def webhook():
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 comentarios = datos.get("COMENTARIOS", "")
                 comentarios = "\n".join(comentarios.splitlines()[:5])
-                caducidad = extraer_fecha_caducidad(r.text)
-                str_caducidad = caducidad.strftime("%d/%m/%Y") if caducidad else "No disponible"
 
                 direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
                 query_mapa = quote_plus(direccion_completa)
@@ -803,8 +755,7 @@ def webhook():
                     f"👤 <b>CLIENTE:</b> {cliente}\n\n"
                     f"📞 <b>TELÉFONOS:</b>\n{telefonos_formateados}\n"
                     f"🏠 <b>DOMICILIO:</b> {domicilio}\n"
-                    f"📍 <b>POBLACIÓN:</b> {poblacion}\n"
-                    f"📅 <b>CADUCIDAD:</b> {str_caducidad}\n\n"
+                    f"📍 <b>POBLACIÓN:</b> {poblacion}\n\n"
                     f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
                 )
 
