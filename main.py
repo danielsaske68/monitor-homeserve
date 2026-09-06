@@ -225,7 +225,6 @@ def botones():
             [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "🔁 Cambiar automáticos", "callback_data": "AUTO_TODOS"}, {"text": "🛠 Cambiar todos", "callback_data": "CAMBIAR_TODOS"}],
             [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
             [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
             [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
