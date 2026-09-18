@@ -58,6 +58,8 @@ USER_STATE = {}
 SERV_STATE = {}
 BAREMO_STATE = {}
 CITA_STATE = {}
+VIEW_STATE = {}
+BUSCAR_STATE = {}
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -313,6 +315,80 @@ def botones_estado(sid):
         ]
     }
 
+
+def mostrar_servicio(chat, msg_id, sid):
+    try:
+        url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+        r = homeserve.session.get(url, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        datos = {}
+        for tr in soup.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) >= 2:
+                clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
+                valor = tds[1].get_text(" ", strip=True)
+                datos[clave] = valor
+
+        servicio = datos.get("SERVICIO", sid)
+        cliente = datos.get("CLIENTE", "")
+        telefonos = datos.get("TELEFONOS", "")
+        domicilio = datos.get("DOMICILIO", "")
+        poblacion = datos.get("POBLACION-PROVINCIA", "")
+        comentarios = datos.get("COMENTARIOS", "")
+        comentarios = "\n".join(comentarios.splitlines()[:5])
+        caducidad = extraer_fecha_caducidad(r.text)
+        str_caducidad = caducidad.strftime("%d/%m/%Y") if caducidad else "No disponible"
+
+        direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
+        query_mapa = quote_plus(direccion_completa)
+        gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+        waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+
+        numeros = re.findall(r"\b\d{9}\b", telefonos)
+        telefonos_formateados = ""
+        for num in numeros:
+            telefonos_formateados += f"📞 <a href='tel:+34{num}'>{num}</a> (Llamar)\n"
+        if not telefonos_formateados:
+            telefonos_formateados = telefonos
+
+        texto = (
+            f"📋 <b>SERVICIO:</b> {servicio}\n\n"
+            f"👤 <b>CLIENTE:</b> {cliente}\n\n"
+            f"📞 <b>TELÉFONOS:</b>\n{telefonos_formateados}\n"
+            f"🏠 <b>DOMICILIO:</b> {domicilio}\n"
+            f"📍 <b>POBLACIÓN:</b> {poblacion}\n"
+            f"📅 <b>CADUCIDAD:</b> {str_caducidad}\n\n"
+            f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
+        )
+
+        # Prepare navigation buttons based on current course list
+        curso = homeserve.obtener_curso()
+        ordered = list(curso.keys())
+        if sid in ordered:
+            idx = ordered.index(sid)
+            prev_sid = ordered[idx - 1] if idx > 0 else ordered[-1]
+            next_sid = ordered[idx + 1] if idx + 1 < len(ordered) else ordered[0]
+        else:
+            prev_sid = sid
+            next_sid = sid
+
+        inline_kb = [
+            [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
+            [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "💾 Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
+            [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
+            [{"text": "⬅️ {prev}", "callback_data": f"NAV_{prev_sid}_prev"}, {"text": "{next} ➡️", "callback_data": f"NAV_{next_sid}_next"}],
+            [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
+        ]
+
+        # format prev/next labels (can't f-string the keys after building list)
+        inline_kb[3][0]["text"] = f"⬅️ {prev_sid}"
+        inline_kb[3][1]["text"] = f"{next_sid} ➡️"
+
+        tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
+    except Exception as e:
+        tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
+
 def formato_lista_servicio(sid, texto=""):
     fecha = extraer_fecha_caducidad(texto)
     if fecha:
@@ -332,10 +408,7 @@ def lista_curso(servicios):
         [{"text": formato_lista_servicio(sid, texto), "callback_data": f"SEL_{sid}"}]
         for sid, texto in servicios.items()
     ]
-    botones_lista.append([
-        {"text": "🔁 Auto todos", "callback_data": "AUTO_TODOS"},
-        {"text": "🛠 Cambiar todos", "callback_data": "CAMBIAR_TODOS"}
-    ])
+    botones_lista.append([{"text": "🔎 Buscar servicio", "callback_data": "BUSCAR_SERV"}])
     botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
     return {"inline_keyboard": botones_lista}
 
@@ -346,9 +419,10 @@ def lista_cambio(servicios):
         for sid, texto in servicios.items()
     ]
     botones_lista.append([
-        {"text": "🔁 Auto todos", "callback_data": "AUTO_TODOS"},
+        {"text": "🔁 Cambiar automáticos", "callback_data": "AUTO_TODOS"},
         {"text": "🛠 Cambiar todos", "callback_data": "CAMBIAR_TODOS"}
     ])
+    botones_lista.append([{"text": "🔎 Buscar servicio", "callback_data": "BUSCAR_SERV"}])
     botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
     return {"inline_keyboard": botones_lista}
 
@@ -601,6 +675,41 @@ def webhook():
             tg_edit(chat, msg_id, respuesta, kb)
             return jsonify(ok=True)
 
+        # Búsqueda por servicio: teléfono o dirección
+        if chat in BUSCAR_STATE:
+            state_info = BUSCAR_STATE.pop(chat)
+            msg_id = state_info.get("msg_id", msg_id)
+            query = text.strip()
+            servicios = homeserve.obtener_curso()
+            matches = []
+            qlow = query.lower()
+            digits = re.sub(r"\D", "", query)
+            for sid, texto in servicios.items():
+                if qlow in texto.lower():
+                    matches.append((sid, texto))
+                    continue
+                if digits:
+                    only_digits = re.sub(r"\D", "", texto)
+                    if digits in only_digits:
+                        matches.append((sid, texto))
+            
+            if not matches:
+                tg_edit(chat, msg_id, f"❌ No se encontraron servicios para: <b>{query}</b>", botones())
+                return jsonify(ok=True)
+            if len(matches) == 1:
+                mostrar_servicio(chat, msg_id, matches[0][0])
+                return jsonify(ok=True)
+
+            # multiples coincidencias -> mostrar lista seleccionable
+            texto = f"🔎 <b>Resultados para:</b> {query}\n\n"
+            kb = {"inline_keyboard": []}
+            for sid, texto_serv in matches[:30]:
+                label = formato_lista_servicio(sid, texto_serv)
+                kb["inline_keyboard"].append([{"text": label, "callback_data": f"SEL_{sid}"}])
+            kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "CURSO"}])
+            tg_edit(chat, msg_id, texto, kb)
+            return jsonify(ok=True)
+
         if chat in SERV_STATE:
             msg_edit = SERV_STATE[chat]["msg_id"]
             if text.upper() == "TERMINAR":
@@ -667,33 +776,66 @@ def webhook():
         elif action == "CAMBIAR_TODOS":
             tg_edit(chat, msg_id, "🛠 Selecciona estado para todos los servicios", botones_todos_estados())
 
+        elif action == "BUSCAR_SERV":
+            BUSCAR_STATE[chat] = {"msg_id": msg_id}
+            tg_edit(chat, msg_id, "🔎 Escribe número de teléfono o parte de la dirección para buscar el servicio:\n\n(Escribe por ejemplo: 961234567 o AVENIDA DE LA CRUZ)", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "CURSO"}]]})
+
         elif action == "AUTO_TODOS":
             servicios = homeserve.obtener_curso()
             if not servicios:
                 tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
                 return jsonify(ok=True)
 
-            with get_db() as conn:
-                placeholders = ", ".join("?" for _ in servicios)
-                registros = conn.execute(
-                    f"SELECT sid, estado FROM seguimiento WHERE sid IN ({placeholders})",
-                    list(servicios.keys())
-                ).fetchall()
-
+            today = datetime.now().date()
             changed = 0
-            for r in registros:
-                nuevo_estado = siguiente_estado_automatico(r["estado"])
-                if nuevo_estado == r["estado"]:
-                    continue
-                ok, _ = homeserve.cambiar_estado(r["sid"], nuevo_estado)
-                if ok:
-                    changed += 1
+            skipped_not_due = 0
+            skipped_no_seguimiento = 0
+            no_change_needed = 0
+            errors = 0
+            changed_no_seguimiento = 0
+            failed_no_seguimiento = 0
 
-            mensaje = (
-                f"✅ Se han actualizado automáticamente {changed} servicios"
-                if changed > 0 else "ℹ️ No había servicios pendientes de cambio automático"
-            )
-            tg_edit(chat, msg_id, mensaje, botones())
+            with get_db() as conn:
+                for sid, texto in servicios.items():
+                    fecha_web = extraer_fecha_caducidad(texto)
+                    if not fecha_web or fecha_web > today:
+                        skipped_not_due += 1
+                        continue
+
+                    row = conn.execute("SELECT sid, estado FROM seguimiento WHERE sid=?", (sid,)).fetchone()
+                    if row:
+                        estado_actual = row["estado"]
+                        nuevo_estado = siguiente_estado_automatico(estado_actual)
+                        if nuevo_estado == estado_actual:
+                            no_change_needed += 1
+                            continue
+
+                        ok, _ = homeserve.cambiar_estado(sid, nuevo_estado)
+                        if ok:
+                            changed += 1
+                        else:
+                            errors += 1
+                    else:
+                        # No seguimiento: intentar cambiar a estado por defecto (318)
+                        skipped_no_seguimiento += 1
+                        default_target = "318"
+                        ok, _ = homeserve.cambiar_estado(sid, default_target)
+                        if ok:
+                            changed_no_seguimiento += 1
+                        else:
+                            failed_no_seguimiento += 1
+
+            parts = [f"✅ Actualizados (con seguimiento): {changed}"]
+            parts.append(f"✅ Actualizados (sin seguimiento): {changed_no_seguimiento}")
+            parts.append(f"❎ No caducados/pendientes: {skipped_not_due}")
+            parts.append(f"🟡 Sin seguimiento (intentados): {skipped_no_seguimiento}")
+            parts.append(f"ℹ️ Ya en siguiente estado: {no_change_needed}")
+            if failed_no_seguimiento:
+                parts.append(f"⚠️ Fallos al cambiar sin seguimiento: {failed_no_seguimiento}")
+            if errors:
+                parts.append(f"⚠️ Errores: {errors}")
+
+            tg_edit(chat, msg_id, "\n".join(parts), botones())
 
         elif action.startswith("TODOS_"):
             estado = action.split("_", 1)[1]
@@ -716,58 +858,27 @@ def webhook():
 
         elif action.startswith("SEL_"):
             sid = action.split("_")[1]
-            try:
-                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-                r = homeserve.session.get(url, timeout=15)
-                soup = BeautifulSoup(r.text, "html.parser")
-              
-                datos = {}
-                for tr in soup.find_all("tr"):
-                    tds = tr.find_all("td")
-                    if len(tds) >= 2:
-                        clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
-                        valor = tds[1].get_text(" ", strip=True)
-                        datos[clave] = valor
+            mostrar_servicio(chat, msg_id, sid)
 
-                servicio = datos.get("SERVICIO", sid)
-                cliente = datos.get("CLIENTE", "")
-                telefonos = datos.get("TELEFONOS", "")
-                domicilio = datos.get("DOMICILIO", "")
-                poblacion = datos.get("POBLACION-PROVINCIA", "")
-                comentarios = datos.get("COMENTARIOS", "")
-                comentarios = "\n".join(comentarios.splitlines()[:5])
-
-                direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
-                query_mapa = quote_plus(direccion_completa)
-                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
-
-                numeros = re.findall(r"\b\d{9}\b", telefonos)
-                telefonos_formateados = ""
-                for num in numeros:
-                    telefonos_formateados += f"📞 <a href='tel:+34{num}'>{num}</a> (Llamar)\n"
-                if not telefonos_formateados:
-                    telefonos_formateados = telefonos
-
-                texto = (
-                    f"📋 <b>SERVICIO:</b> {servicio}\n\n"
-                    f"👤 <b>CLIENTE:</b> {cliente}\n\n"
-                    f"📞 <b>TELÉFONOS:</b>\n{telefonos_formateados}\n"
-                    f"🏠 <b>DOMICILIO:</b> {domicilio}\n"
-                    f"📍 <b>POBLACIÓN:</b> {poblacion}\n\n"
-                    f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
-                )
-
-                inline_kb = [
-                    [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-                    [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "💾 Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
-                    [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
-                    [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
-                ]
-
-                tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
-            except Exception as e:
-                tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
+        elif action.startswith("NAV_"):
+            parts = action.split("_")
+            if len(parts) >= 3:
+                sid = parts[1]
+                direction = parts[2]
+                curso = homeserve.obtener_curso()
+                ordered = list(curso.keys())
+                if sid not in ordered:
+                    tg_edit(chat, msg_id, "❌ No se encontró el servicio en la lista actual.", botones())
+                else:
+                    idx = ordered.index(sid)
+                    if direction == "next":
+                        new_idx = (idx + 1) % len(ordered)
+                    else:
+                        new_idx = (idx - 1) % len(ordered)
+                    new_sid = ordered[new_idx]
+                    mostrar_servicio(chat, msg_id, new_sid)
+            else:
+                tg_edit(chat, msg_id, "❌ Acción de navegación inválida", botones())
 
         elif action.startswith("GUARDARSERV_"):
             sid = action.split("_")[1]
