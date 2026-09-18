@@ -680,19 +680,37 @@ def webhook():
             state_info = BUSCAR_STATE.pop(chat)
             msg_id = state_info.get("msg_id", msg_id)
             query = text.strip()
-            servicios = homeserve.obtener_curso()
-            matches = []
-            qlow = query.lower()
+            if not query:
+                tg_edit(chat, msg_id, "❌ Escribe un número o parte de la dirección para buscar.", botones())
+                return jsonify(ok=True)
+
+            qlow = query.lower().strip()
             digits = re.sub(r"\D", "", query)
+            matches = []
+            servicios = homeserve.obtener_curso()
+
             for sid, texto in servicios.items():
-                if qlow in texto.lower():
+                hay_coincidencia = False
+                if qlow and qlow in texto.lower():
+                    hay_coincidencia = True
+                if digits and digits in re.sub(r"\D", "", texto):
+                    hay_coincidencia = True
+
+                if not hay_coincidencia:
+                    try:
+                        url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+                        r = homeserve.session.get(url, timeout=15)
+                        detail_text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True).lower()
+                        if qlow and qlow in detail_text:
+                            hay_coincidencia = True
+                        if digits and digits in re.sub(r"\D", "", detail_text):
+                            hay_coincidencia = True
+                    except Exception:
+                        pass
+
+                if hay_coincidencia:
                     matches.append((sid, texto))
-                    continue
-                if digits:
-                    only_digits = re.sub(r"\D", "", texto)
-                    if digits in only_digits:
-                        matches.append((sid, texto))
-            
+
             if not matches:
                 tg_edit(chat, msg_id, f"❌ No se encontraron servicios para: <b>{query}</b>", botones())
                 return jsonify(ok=True)
@@ -700,7 +718,6 @@ def webhook():
                 mostrar_servicio(chat, msg_id, matches[0][0])
                 return jsonify(ok=True)
 
-            # multiples coincidencias -> mostrar lista seleccionable
             texto = f"🔎 <b>Resultados para:</b> {query}\n\n"
             kb = {"inline_keyboard": []}
             for sid, texto_serv in matches[:30]:
