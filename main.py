@@ -316,19 +316,40 @@ def botones_estado(sid):
     }
 
 
+def normalizar_texto(texto):
+    if not texto:
+        return ""
+    mapa = {
+        "á": "a", "à": "a", "ä": "a", "â": "a",
+        "é": "e", "è": "e", "ë": "e", "ê": "e",
+        "í": "i", "ì": "i", "ï": "i", "î": "i",
+        "ó": "o", "ò": "o", "ö": "o", "ô": "o",
+        "ú": "u", "ù": "u", "ü": "u", "û": "u",
+        "ñ": "n", "ç": "c",
+    }
+    txt = "".join(mapa.get(ch, ch) for ch in str(texto).lower())
+    txt = txt.replace("\n", " ")
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
+def obtener_datos_servicio(sid):
+    url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+    r = homeserve.session.get(url, timeout=15)
+    soup = BeautifulSoup(r.text, "html.parser")
+    datos = {}
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) >= 2:
+            clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
+            valor = tds[1].get_text(" ", strip=True)
+            datos[clave] = valor
+    return datos, r.text
+
+
 def mostrar_servicio(chat, msg_id, sid):
     try:
-        url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-        r = homeserve.session.get(url, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        datos = {}
-        for tr in soup.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) >= 2:
-                clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
-                valor = tds[1].get_text(" ", strip=True)
-                datos[clave] = valor
+        datos, raw_html = obtener_datos_servicio(sid)
 
         servicio = datos.get("SERVICIO", sid)
         cliente = datos.get("CLIENTE", "")
@@ -337,7 +358,7 @@ def mostrar_servicio(chat, msg_id, sid):
         poblacion = datos.get("POBLACION-PROVINCIA", "")
         comentarios = datos.get("COMENTARIOS", "")
         comentarios = "\n".join(comentarios.splitlines()[:5])
-        caducidad = extraer_fecha_caducidad(r.text)
+        caducidad = extraer_fecha_caducidad(raw_html)
         str_caducidad = caducidad.strftime("%d/%m/%Y") if caducidad else "No disponible"
 
         direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
@@ -362,13 +383,12 @@ def mostrar_servicio(chat, msg_id, sid):
             f"📝 <b>COMENTARIOS:</b>\n{comentarios}"
         )
 
-        # Prepare navigation buttons based on current course list
         curso = homeserve.obtener_curso()
         ordered = list(curso.keys())
         if sid in ordered:
             idx = ordered.index(sid)
             prev_sid = ordered[idx - 1] if idx > 0 else ordered[-1]
-            next_sid = ordered[idx + 1] if idx + 1 < len(ordered) else ordered[0]
+            next_sid = ordered[(idx + 1) % len(ordered)]
         else:
             prev_sid = sid
             next_sid = sid
@@ -377,11 +397,9 @@ def mostrar_servicio(chat, msg_id, sid):
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
             [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "💾 Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
             [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
-            [{"text": "⬅️ {prev}", "callback_data": f"NAV_{prev_sid}_prev"}, {"text": "{next} ➡️", "callback_data": f"NAV_{next_sid}_next"}],
+            [{"text": "", "callback_data": f"NAV_{prev_sid}_prev"}, {"text": "", "callback_data": f"NAV_{next_sid}_next"}],
             [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
         ]
-
-        # format prev/next labels (can't f-string the keys after building list)
         inline_kb[3][0]["text"] = f"⬅️ {prev_sid}"
         inline_kb[3][1]["text"] = f"{next_sid} ➡️"
 
@@ -608,6 +626,7 @@ def webhook():
     if "message" in data:
         chat = data["message"]["chat"]["id"]
         text = data["message"].get("text", "")
+        msg_id = data["message"].get("message_id")
 
         guardar_usuario(chat)
 
@@ -678,35 +697,36 @@ def webhook():
         # Búsqueda por servicio: teléfono o dirección
         if chat in BUSCAR_STATE:
             state_info = BUSCAR_STATE.pop(chat)
-            msg_id = state_info.get("msg_id", msg_id)
+            msg_id = state_info.get("msg_id") or msg_id
             query = text.strip()
             if not query:
                 tg_edit(chat, msg_id, "❌ Escribe un número o parte de la dirección para buscar.", botones())
                 return jsonify(ok=True)
 
-            qlow = query.lower().strip()
+            qnorm = normalizar_texto(query)
             digits = re.sub(r"\D", "", query)
             matches = []
             servicios = homeserve.obtener_curso()
 
             for sid, texto in servicios.items():
                 hay_coincidencia = False
-                if qlow and qlow in texto.lower():
-                    hay_coincidencia = True
-                if digits and digits in re.sub(r"\D", "", texto):
-                    hay_coincidencia = True
+                valores_total = texto
+                try:
+                    datos, _ = obtener_datos_servicio(sid)
+                    valores_total = " ".join(str(v) for v in datos.values()) + " " + texto
+                    cliente = normalizar_texto(datos.get("CLIENTE", ""))
+                    domicilio = normalizar_texto(datos.get("DOMICILIO", ""))
+                    telefonos = normalizar_texto(datos.get("TELEFONOS", ""))
+                    poblacion = normalizar_texto(datos.get("POBLACION-PROVINCIA", ""))
+                    valores_extra = " ".join(filter(None, [cliente, domicilio, telefonos, poblacion]))
+                    valores_total = f"{valores_extra} {texto}"
+                except Exception:
+                    pass
 
-                if not hay_coincidencia:
-                    try:
-                        url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-                        r = homeserve.session.get(url, timeout=15)
-                        detail_text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True).lower()
-                        if qlow and qlow in detail_text:
-                            hay_coincidencia = True
-                        if digits and digits in re.sub(r"\D", "", detail_text):
-                            hay_coincidencia = True
-                    except Exception:
-                        pass
+                if qnorm and qnorm in normalizar_texto(valores_total):
+                    hay_coincidencia = True
+                if digits and digits in re.sub(r"\D", "", valores_total):
+                    hay_coincidencia = True
 
                 if hay_coincidencia:
                     matches.append((sid, texto))
