@@ -485,8 +485,33 @@ def limpiar_direccion_importada(texto):
 def importar_ruta_desde_texto(chat_id, texto, fecha=None):
     texto = texto or ""
     fecha = fecha or datetime.now().date().isoformat()
-    lineas = [line.strip() for line in texto.splitlines() if line.strip()]
-    if not lineas:
+
+    # Soporta texto normal (una línea por servicio) y texto concatenado/incompleto
+    # generado por Telegram/Gemini: todos los servicios pueden venir en una sola cadena.
+    entradas = []
+    pattern = re.compile(r"(?<!\d)(\d{7,8})\s*\|\s*(.*?)(?=(?:\s*\d{7,8}\s*\|)|$)", flags=re.DOTALL)
+    for match in pattern.finditer(texto):
+        sid = match.group(1).strip()
+        direccion = match.group(2).strip()
+        if sid and direccion:
+            entradas.append((sid, direccion))
+
+    if not entradas:
+        lineas = [line.strip() for line in texto.splitlines() if line.strip()]
+        for idx, linea in enumerate(lineas):
+            sid = f"RUTA_{idx + 1:03d}"
+            direccion = linea
+            if "|" in linea:
+                partes = [p.strip() for p in linea.split("|", 1)]
+                if len(partes) == 2 and partes[1]:
+                    sid, direccion = partes[0] or sid, partes[1]
+            elif "\t" in linea:
+                partes = [p.strip() for p in linea.split("\t", 1)]
+                if len(partes) == 2 and partes[1]:
+                    sid, direccion = partes[0] or sid, partes[1]
+            entradas.append((sid, direccion))
+
+    if not entradas:
         return 0
 
     with get_db() as conn:
@@ -494,18 +519,7 @@ def importar_ruta_desde_texto(chat_id, texto, fecha=None):
         conn.commit()
 
     count = 0
-    for idx, linea in enumerate(lineas):
-        sid = f"RUTA_{idx + 1:03d}"
-        direccion = linea
-        if "|" in linea:
-            partes = [p.strip() for p in linea.split("|", 1)]
-            if len(partes) == 2 and partes[1]:
-                sid, direccion = partes[0] or sid, partes[1]
-        elif "\t" in linea:
-            partes = [p.strip() for p in linea.split("\t", 1)]
-            if len(partes) == 2 and partes[1]:
-                sid, direccion = partes[0] or sid, partes[1]
-
+    for idx, (sid, direccion) in enumerate(entradas):
         direccion = limpiar_direccion_importada(direccion)
         if not direccion:
             continue

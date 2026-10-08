@@ -267,6 +267,37 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(servicios["16038937"], "C/Barco 1635 46024-VALENCIA")
         self.assertEqual(servicios["16039424"], "C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL")
 
+    def test_importar_ruta_acepta_bloque_concatenado_sin_saltos(self):
+        from main import importar_ruta_desde_texto, obtener_ruta_diaria
+
+        chat_id = "ruta_import_concatenada"
+        texto = (
+            "16035845|C/CL. ESPIGOL 19 2 8 46980-PATERNA "
+            "16033015|C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA "
+            "16029364|C FILOMENA+BERNET, 2 , BAJ 2 46138-RAFELBUNYOL "
+            "16039424|C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL "
+            "16018743|C/CL/ VICENTE GALMES 34 1 1 46139-POBLA DE FARNALS, LA "
+            "15914657|AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS "
+            "16020450|C GORGOS, 11 , 13 B 46021-VALENCIA "
+            "16016046|C/ INGENIERO JOAQUIN BENLLOCH 00027 39 46006-VALENCIA "
+            "16038937|C/Barco 1635 46024-VALENCIA "
+            "16008003|Carrer Caravel-les, 46137, Valencia, España 46137 "
+            "15991779|AV/ BLASCO IBA?EZ 40A 3 2 9 46136-MUSEROS "
+            "16005226|C/ REI JAUME I 00046 14 46135-ALBALAT DELS SORELLS "
+            "16033892|C/ TRENCAT 32 20 46138-RAFELBU¥OL "
+            "16014090|CL MAESTRO+RODRIGO, 36 , 2 2 . 46130-MASSAMAGRELL"
+        )
+
+        count = importar_ruta_desde_texto(chat_id, texto)
+        rows = obtener_ruta_diaria(chat_id)
+
+        self.assertEqual(count, 14)
+        self.assertEqual({row["sid"] for row in rows}, {
+            "16035845", "16033015", "16029364", "16039424", "16018743", "15914657",
+            "16020450", "16016046", "16038937", "16008003", "15991779", "16005226",
+            "16033892", "16014090"
+        })
+
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
         from main import generar_ruta_dia, guardar_ruta_diaria, exportar_ruta_dia
 
