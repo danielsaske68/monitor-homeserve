@@ -127,11 +127,28 @@ def extraer_fecha_caducidad(texto):
 
 
 def parsear_servicios_texto(texto):
-    """Recupera el servicio con el texto visible real de la fila, pero dejando únicamente la dirección útil para la ruta."""
+    """Extrae la dirección real de cada servicio a partir de la fila visible o de líneas ID|dirección."""
     if texto is None:
         return {}
 
     text = str(texto).replace("\r", " ").replace("\u00a0", " ")
+
+    lineas_directas = {}
+    for linea in text.splitlines():
+        if "|" not in linea:
+            continue
+        match = re.match(r"^\s*(\d{7,8})\s*\|\s*(.+?)\s*$", linea)
+        if not match:
+            continue
+        sid = match.group(1)
+        valor = match.group(2).strip()
+        if not valor:
+            continue
+        direccion = extraer_direccion_servicio(valor)
+        if direccion and sid not in lineas_directas:
+            lineas_directas[sid] = direccion
+    if lineas_directas:
+        return lineas_directas
 
     if "<a" in text and "ver_servicioencurso" in text:
         soup = BeautifulSoup(text, "html.parser")
@@ -149,38 +166,18 @@ def parsear_servicios_texto(texto):
             if sid in servicios:
                 continue
 
-            partes = []
             row = link.find_parent("tr")
             if row is not None:
-                for td in row.find_all("td"):
-                    for node in td.contents:
-                        if getattr(node, "name", None) == "a" and "ver_servicioencurso" in str(node.get("href", "")):
-                            continue
-                        if hasattr(node, "get_text"):
-                            valor = node.get_text(" ", strip=True)
-                        else:
-                            valor = str(node).strip()
-                        if valor and valor != sid:
-                            partes.append(valor)
+                row_text = row.get_text(" ", strip=True)
             else:
-                for sib in link.next_siblings:
-                    if getattr(sib, "name", None) == "a" and "ver_servicioencurso" in str(sib.get("href", "")):
-                        break
-                    if hasattr(sib, "get_text"):
-                        valor = sib.get_text(" ", strip=True)
-                    elif isinstance(sib, str):
-                        valor = str(sib).strip()
-                    else:
-                        valor = ""
-                    if valor and valor != sid:
-                        partes.append(valor)
+                row_text = " ".join(part.get_text(" ", strip=True) for part in link.parent.find_all() if part.get_text(" ", strip=True)) if getattr(link.parent, "find_all", None) else ""
 
-            bloque = " ".join(partes).strip()
-            bloque = re.sub(r"\s+", " ", bloque).strip()
-            if bloque:
-                direccion = extraer_direccion_servicio(bloque) or bloque
-                if direccion and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", direccion):
-                    servicios[sid] = direccion
+            if not row_text:
+                continue
+            row_text = row_text.replace(sid, "", 1).strip(" -:|/")
+            direccion = extraer_direccion_servicio(row_text)
+            if direccion:
+                servicios[sid] = direccion
 
         if servicios:
             return servicios
@@ -195,10 +192,9 @@ def parsear_servicios_texto(texto):
         fin = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         bloque = text[match.start():fin]
         bloque = re.sub(r"\s+", " ", bloque).strip()
-        if bloque and sid not in servicios and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", bloque):
-            direccion = extraer_direccion_servicio(bloque) or bloque
-            if direccion and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", direccion):
-                servicios[sid] = direccion
+        direccion = extraer_direccion_servicio(bloque)
+        if direccion and sid not in servicios:
+            servicios[sid] = direccion
     return servicios
 
 
@@ -236,9 +232,8 @@ def limpiar_direccion(direccion):
         return ""
     texto = re.sub(r"\s+", " ", str(direccion)).strip()
     texto = re.sub(r"^(?:\d{6,8}\s+)+", "", texto)
+    texto = re.sub(r"\s+VALENCIA\s*\(\d{5}\)\s*$", "", texto, flags=re.IGNORECASE)
     texto = re.sub(r"^(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]*?\d{2}/\d{2}/\d{4}\s+)", "", texto, flags=re.IGNORECASE)
-    texto = re.sub(r"\s+(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?\s*\(\d{5}\))\s*$", "", texto, flags=re.IGNORECASE)
-    texto = re.sub(r"\s+(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?)\s*$", "", texto, flags=re.IGNORECASE)
     texto = texto.strip(" ,;:.-/")
     return texto
 
@@ -249,48 +244,62 @@ def extraer_direccion_servicio(texto):
 
     texto = str(texto).replace("\r", " ").replace("\n", " ")
     texto = re.sub(r"\s+", " ", texto).strip()
-    if not texto:
-        return ""
-    if not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", texto):
+    if not texto or not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", texto):
         return ""
 
     texto = re.sub(r"^\d{7,8}\s*(?:\|\s*)?", "", texto)
     texto = re.sub(r"^(?:manitas\s+fontanero|fontanero|manitas)\s*", "", texto, flags=re.IGNORECASE)
 
+    # Rechazo explícito de bloques de cita/horario que no son dirección.
+    if re.fullmatch(r"(?:Libre\s+Para\s+el\s+\d{2}/\d{2}/\d{2,4}\s+De\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}|\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}|\d{2}/\d{2}/\d{4}\s+.*\d{2}:\d{2}\s*a\s*\d{2}:\d{2}.*)", texto, flags=re.IGNORECASE):
+        return ""
+
     palabras_clave = [
-        "AVENIDA", "AVDA", "AV", "C/", "CL", "CALLE", "CARRER", "CARRERA",
-        "CR", "PASEO", "PLAZA", "PL", "TRAVESIA", "RONDA", "URB",
-        "URBANIZACION", "CAMI", "PZA", "RUA", "C"
+        "AVENIDA", "AVDA", "AVD", "AVINGUDA",
+        "CARRER", "CARRERA", "CRA", "CARRETERA", "CTRA", "CTR",
+        "C/CL", "C/ CL", "C / CL", "CALLE", "CL", "CR", "PASEO", "PLAZA",
+        "TRAVESIA", "TRAVESSIA", "RONDA", "URB", "URBANIZACION", "CAMI", "PZA", "RUA"
     ]
 
-    if "(" in texto and re.search(r"\(\d{5}\)", texto):
-        ciudad_match = re.search(r"(?i)(?<![ºª])([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?)\s*\(\d{5}\)", texto)
-        if ciudad_match:
-            antes = texto[:ciudad_match.start()]
-            despues = texto[ciudad_match.end():]
-            for segmento in [despues, antes]:
-                if not segmento:
-                    continue
-                for kw in palabras_clave:
-                    idx = re.search(rf"(?i){re.escape(kw)}", segmento)
-                    if not idx:
-                        continue
-                    base = segmento[idx.start():]
-                    base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN|EN\s+ESPERA\s+DE\s+PROFESIONAL|RGA|LDA|MUTUA|SINIETROS|REPSOL|BANSABADELL|INSTANT\s+COVER)\b", base, maxsplit=1)[0]
-                    direccion = limpiar_direccion(base)
-                    if direccion and re.search(r"\d", direccion):
-                        return direccion
-
+    pos = None
     for kw in palabras_clave:
-        idx = re.search(rf"(?i){re.escape(kw)}", texto)
-        if not idx:
-            continue
-        base = texto[idx.start():]
-        base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN|EN\s+ESPERA\s+DE\s+PROFESIONAL|RGA|LDA|MUTUA|SINIETROS|REPSOL|BANSABADELL|INSTANT\s+COVER)\b", base, maxsplit=1)[0]
-        direccion = limpiar_direccion(base)
-        if direccion and re.search(r"\d", direccion):
-            return direccion
+        pattern = r"(?i)" + re.escape(kw).replace(r"\ ", r"\s*")
+        match = re.search(pattern, texto)
+        if match:
+            pos = match.start() if pos is None else min(pos, match.start())
 
+    if pos is None:
+        patrones = [
+            r"(?i)\b(?:av(?:inguda)?|avd|avenida|carrer(?:a)?|cra|carretera|ctra|c\s*/\s*cl|calle|cami|paseo|plaza|ronda|trav(?:ess)?ia)\b",
+            r"(?i)\bc\s*/\s*cl\b",
+            r"(?i)\bc\s+\w+"
+        ]
+        for pattern in patrones:
+            match = re.search(pattern, texto)
+            if match:
+                pos = match.start() if pos is None else min(pos, match.start())
+
+    if pos is None:
+        pos = 0
+
+    base = texto[pos:]
+    base = re.split(r"(?i)\s+(?:en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro|por\s+pendiente\s+de\s+citar\s+al\s+cliente|atasco|averia|avería|informo|se\s+necesita|necesita)\b", base, maxsplit=1)[0]
+    base = re.sub(r"\s+\d{2}/\d{2}/\d{4}\s+(?:\d{2}/\d{2}/\d{4}\s+)?(?:de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2})?.*$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+\d{2}:\d{2}\s*a\s*\d{2}:\d{2}.*$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+\d{2}/\d{2}/\d{4}.*$", "", base)
+    base = re.sub(r"\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}.*$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+VALENCIA\s*\(\d{5}\)\s*$", "", base, flags=re.IGNORECASE)
+
+    direccion = limpiar_direccion(base)
+    if direccion and re.search(r"\d", direccion):
+        return direccion
+
+    if re.search(r"\d", texto):
+        candidato = limpiar_direccion(texto)
+        if candidato and re.search(r"\d", candidato) and not re.fullmatch(r".*\d{2}/\d{2}/\d{4}.*", candidato, flags=re.IGNORECASE):
+            return candidato
+        if not re.fullmatch(r".*\d{2}/\d{2}/\d{4}.*", texto, flags=re.IGNORECASE) and not re.search(r"(?:libre\s+para\s+el|en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro)", texto, flags=re.IGNORECASE):
+            return texto.strip(" -:|/.,;")
     return ""
 
 

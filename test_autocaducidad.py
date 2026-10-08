@@ -45,6 +45,21 @@ class AutoCaducidadTests(unittest.TestCase):
             "AVENIDA DEL MAR 31 3ºA"
         )
 
+    def test_extraer_direccion_servicio_acepta_prefijos_valencianos(self):
+        from main import parsear_servicios_texto
+
+        texto = (
+            "16045789|Carrer de la Verge 14 2 2 46001-Valencia\n"
+            "16045790|C/CL. MESTRE ALBERT 5 46006-Valencia\n"
+            "16045791|Avinguda del Mar 22 46012-Valencia\n"
+            "16045792|Carretera de Sagunto 12 46001-Valencia"
+        )
+        servicios = parsear_servicios_texto(texto)
+        self.assertEqual(servicios["16045789"], "Carrer de la Verge 14 2 2 46001-Valencia")
+        self.assertEqual(servicios["16045790"], "C/CL. MESTRE ALBERT 5 46006-Valencia")
+        self.assertEqual(servicios["16045791"], "Avinguda del Mar 22 46012-Valencia")
+        self.assertEqual(servicios["16045792"], "Carretera de Sagunto 12 46001-Valencia")
+
     def test_ordenar_ruta_servicios_prioriza_horario_y_zona(self):
         items = [
             ("A", "Paterna - Carrer Espigol 19"),
@@ -198,8 +213,22 @@ class AutoCaducidadTests(unittest.TestCase):
         '''
 
         servicios = parsear_servicios_texto(html)
-        self.assertEqual(servicios["16039424"], "07/10/2026 07/10/2026 de 08:00 a 20:00")
+        self.assertNotIn("16039424", servicios)
         self.assertIn("AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS", servicios["15914657"])
+
+    def test_parsear_servicios_id_pipe_rechaza_horario_y_coge_direccion(self):
+        from main import parsear_servicios_texto
+
+        texto = (
+            "16035845|C/CL. ESPIGOL 19 2 8 46980-PATERNA\n"
+            "16033015|C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA\n"
+            "16039424|07/10/2026 07/10/2026 de 08:00 a 20:00\n"
+        )
+
+        servicios = parsear_servicios_texto(texto)
+        self.assertEqual(servicios["16035845"], "C/CL. ESPIGOL 19 2 8 46980-PATERNA")
+        self.assertEqual(servicios["16033015"], "C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA")
+        self.assertNotIn("16039424", servicios)
 
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
         from main import generar_ruta_dia, guardar_ruta_diaria, exportar_ruta_dia
