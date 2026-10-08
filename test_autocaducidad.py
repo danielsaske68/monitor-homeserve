@@ -89,6 +89,23 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual([row["orden"] for row in rows], [0, 1, 2])
         self.assertEqual([f"{9 + row['orden']:02d}:00" for row in rows], ["09:00", "10:00", "11:00"])
 
+    def test_importar_ruta_limpia_direccion_y_descarta_estado(self):
+        from main import importar_ruta_desde_texto, obtener_ruta_diaria
+
+        chat_id = "ruta_import_limpieza"
+        texto = (
+            "16038937|C/Barco 1635 46024-VALENCIA "
+            "En espera de Profesional por confirmacion del Siniestro 08/10/2026 08/10/2026 de 08:00 a 20:00"
+        )
+
+        count = importar_ruta_desde_texto(chat_id, texto)
+        rows = obtener_ruta_diaria(chat_id)
+
+        self.assertEqual(count, 1)
+        self.assertTrue(rows[0]["direccion"].startswith("C/Barco 1635 46024-VALENCIA"))
+        self.assertNotIn("En espera de Profesional", rows[0]["direccion"])
+        self.assertNotIn("08:00 a 20:00", rows[0]["direccion"])
+
 
 if __name__ == "__main__":
     unittest.main()

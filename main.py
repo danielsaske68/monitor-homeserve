@@ -61,6 +61,7 @@ BAREMO_STATE = {}
 CITA_STATE = {}
 VIEW_STATE = {}
 BUSCAR_STATE = {}
+IMPORTAR_STATE = {}
 
 # Cache for curso list to avoid frequent HTTP calls (TTL in seconds)
 CURSO_CACHE = {"ts": None, "data": {}}
@@ -333,6 +334,26 @@ def exportar_ruta_dia(chat_id, fecha=None):
     return "\n".join(lines)
 
 
+def limpiar_direccion_importada(texto):
+    if texto is None:
+        return ""
+
+    texto = str(texto).strip()
+    if not texto:
+        return ""
+
+    texto = re.sub(r"^\s*\*+\s*", "", texto)
+    texto = re.sub(r"^\d{1,2}:\d{2}\s*[-–]\s*", "", texto)
+    texto = texto.split("|")[-1].strip() if "|" in texto else texto
+    texto = re.sub(r"(?i)\b(?:en espera de profesional|por confirmacion del siniestro|siniestro)\b.*$", "", texto)
+    texto = re.sub(r"\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}.*$", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\s+\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}.*$", "", texto)
+    texto = re.sub(r"\s+\d{2}/\d{2}/\d{4}.*$", "", texto)
+    texto = re.sub(r"\s+\d{2}:\d{2}\s*[-–]?\s*\d{2}:\d{2}.*$", "", texto)
+    texto = texto.strip(" \t\n\r-–—.,;:")
+    return texto
+
+
 def importar_ruta_desde_texto(chat_id, texto, fecha=None):
     texto = texto or ""
     fecha = fecha or datetime.now().date().isoformat()
@@ -357,6 +378,7 @@ def importar_ruta_desde_texto(chat_id, texto, fecha=None):
             if len(partes) == 2 and partes[1]:
                 sid, direccion = partes[0] or sid, partes[1]
 
+        direccion = limpiar_direccion_importada(direccion)
         if not direccion:
             continue
         guardar_ruta_diaria(chat_id, sid, direccion, fecha=fecha, orden=idx)
@@ -1076,6 +1098,15 @@ def webhook():
                 kb["inline_keyboard"].append([{"text": label, "callback_data": f"SEL_{sid}"}])
             kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "CURSO"}])
             tg_edit(chat, msg_id, texto, kb)
+            return jsonify(ok=True)
+
+        if chat in IMPORTAR_STATE:
+            msg_edit = IMPORTAR_STATE.pop(chat)["msg_id"]
+            count = importar_ruta_desde_texto(chat, text)
+            if count:
+                tg_edit(chat, msg_edit, f"✅ Ruta importada correctamente ({count} servicios)", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
+            else:
+                tg_edit(chat, msg_edit, "❌ No se pudieron leer direcciones válidas. Reenvía una lista con una dirección por línea.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
             return jsonify(ok=True)
 
         if chat in SERV_STATE:
