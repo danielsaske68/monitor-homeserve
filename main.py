@@ -232,6 +232,8 @@ def limpiar_direccion(direccion):
         return ""
     texto = re.sub(r"\s+", " ", str(direccion)).strip()
     texto = re.sub(r"^(?:\d{6,8}\s+)+", "", texto)
+    texto = re.sub(r"^(?:\d{1,2}:\d{2}\s+)+", "", texto)
+    texto = re.sub(r"^(?:[A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+)*)\s*\(\d{5}\)\s+", "", texto, flags=re.IGNORECASE)
     texto = re.sub(r"\s+VALENCIA\s*\(\d{5}\)\s*$", "", texto, flags=re.IGNORECASE)
     texto = re.sub(r"^(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]*?\d{2}/\d{2}/\d{4}\s+)", "", texto, flags=re.IGNORECASE)
     texto = texto.strip(" ,;:.-/")
@@ -242,64 +244,67 @@ def extraer_direccion_servicio(texto):
     if not texto:
         return ""
 
-    texto = str(texto).replace("\r", " ").replace("\n", " ")
-    texto = re.sub(r"\s+", " ", texto).strip()
-    if not texto or not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", texto):
+    txt = str(texto).replace("\r", " ").replace("\n", " ").replace("\u00a0", " ")
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if not txt or not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", txt):
         return ""
 
-    texto = re.sub(r"^\d{7,8}\s*(?:\|\s*)?", "", texto)
-    texto = re.sub(r"^(?:manitas\s+fontanero|fontanero|manitas)\s*", "", texto, flags=re.IGNORECASE)
+    txt = re.sub(r"^\d{7,8}\s*(?:\|\s*)?", "", txt)
+    txt = re.sub(r"^(?:manitas\s+fontanero|fontanero|manitas)\s*", "", txt, flags=re.IGNORECASE)
 
-    # Rechazo explícito de bloques de cita/horario que no son dirección.
-    if re.fullmatch(r"(?:Libre\s+Para\s+el\s+\d{2}/\d{2}/\d{2,4}\s+De\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}|\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}|\d{2}/\d{2}/\d{4}\s+.*\d{2}:\d{2}\s*a\s*\d{2}:\d{2}.*)", texto, flags=re.IGNORECASE):
-        return ""
+    if re.fullmatch(r"(?:Libre\s+Para\s+el\s+\d{2}/\d{2}/\d{2,4}\s+De\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}(?:\s+VALENCIA\s*\(\d{5}\))?|\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}(?:\s+VALENCIA\s*\(\d{5}\))?|\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}\s*a\s*\d{2}:\d{2}(?:\s+VALENCIA\s*\(\d{5}\))?)", txt, flags=re.IGNORECASE):
+        if not re.search(r"(?i)\b(?:avenida|avda|avd|avinguda|carrer|carrera|cra|carretera|ctra|ctr|c\s*/\s*cl|calle|cl|cr|paseo|plaza|travessia|travesia|ronda|urb|urbanizacion|cami|pza|rua)\b", txt):
+            return ""
 
     palabras_clave = [
-        "AVENIDA", "AVDA", "AVD", "AVINGUDA",
-        "CARRER", "CARRERA", "CRA", "CARRETERA", "CTRA", "CTR",
-        "C/CL", "C/ CL", "C / CL", "CALLE", "CL", "CR", "PASEO", "PLAZA",
+        "AVENIDA", "AVDA", "AVD", "AVINGUDA", "CARRER", "CARRERA", "CRA", "CARRETERA",
+        "CTRA", "CTR", "C/CL", "C/ CL", "C / CL", "CALLE", "CL", "CR", "PASEO", "PLAZA",
         "TRAVESIA", "TRAVESSIA", "RONDA", "URB", "URBANIZACION", "CAMI", "PZA", "RUA"
     ]
 
     pos = None
     for kw in palabras_clave:
         pattern = r"(?i)(?<![A-Za-zÁÉÍÓÚÑáéíóúñ])" + re.escape(kw).replace(r"\ ", r"\s*") + r"(?![A-Za-zÁÉÍÓÚÑáéíóúñ])"
-        match = re.search(pattern, texto)
+        match = re.search(pattern, txt)
         if match:
             pos = match.start() if pos is None else min(pos, match.start())
 
     if pos is None:
         patrones = [
-            r"(?i)\b(?:av(?:inguda)?|avd|avenida|carrer(?:a)?|cra|carretera|ctra|c\s*/\s*cl|calle|cami|paseo|plaza|ronda|trav(?:ess)?ia)\b",
+            r"(?i)\b(?:av(?:inguda)?|avd|avenida|carrer(?:a)?|cra|carretera|ctra|c\s*/\s*cl|calle|cami|paseo|plaza|ronda|trav(?:ess)?ia|pza)\b",
             r"(?i)\bc\s*/\s*cl\b",
             r"(?i)\bc\s+\w+"
         ]
         for pattern in patrones:
-            match = re.search(pattern, texto)
+            match = re.search(pattern, txt)
             if match:
                 pos = match.start() if pos is None else min(pos, match.start())
 
     if pos is None:
         pos = 0
 
-    base = texto[pos:]
-    base = re.split(r"(?i)\s+(?:en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro|por\s+pendiente\s+de\s+citar\s+al\s+cliente|atasco|averia|avería|informo|se\s+necesita|necesita)\b", base, maxsplit=1)[0]
+    base = txt[pos:]
+
+    base = re.sub(r"\s+(?:en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro|por\s+pendiente\s+de\s+citar\s+al\s+cliente|atasco|averia|avería|informo|se\s+necesita|necesita)\b.*$", "", base, flags=re.IGNORECASE)
     base = re.sub(r"\s+\d{2}/\d{2}/\d{4}\s+(?:\d{2}/\d{2}/\d{4}\s+)?(?:de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2})?.*$", "", base, flags=re.IGNORECASE)
     base = re.sub(r"\s+\d{2}:\d{2}\s*a\s*\d{2}:\d{2}.*$", "", base, flags=re.IGNORECASE)
     base = re.sub(r"\s+\d{2}/\d{2}/\d{4}.*$", "", base)
-    base = re.sub(r"\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}.*$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+\d{2}:\d{2}\s*\d{2}:\d{2}.*$", "", base)
+    base = re.sub(r"^(?:\d{1,2}:\d{2}\s+)+", "", base)
+    base = re.sub(r"^(?:[A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑa-záéíóúñ]+)*)\s*\(\d{5}\)\s+", "", base, flags=re.IGNORECASE)
     base = re.sub(r"\s+VALENCIA\s*\(\d{5}\)\s*$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+(?:MELIANA|PATERNA|RAFELBUNYOL|VALENCIA|ALBALAT\s+DELS\s+SORELLS|MASAMAGRELL|POBLA\s+DE\s+FARNALS)\s*[-,]?(?:\(?\d{5}\)?)?\s*$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+\d{5}-[A-ZÁÉÍÓÚÑ\s\-]+$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"\s+\(\d{5}\)\s*$", "", base)
 
     direccion = limpiar_direccion(base)
     if direccion and re.search(r"\d", direccion):
         return direccion
 
-    if re.search(r"\d", texto):
-        candidato = limpiar_direccion(texto)
+    if re.search(r"\d", txt):
+        candidato = limpiar_direccion(txt)
         if candidato and re.search(r"\d", candidato) and not re.fullmatch(r".*\d{2}/\d{2}/\d{4}.*", candidato, flags=re.IGNORECASE):
             return candidato
-        if not re.fullmatch(r".*\d{2}/\d{2}/\d{4}.*", texto, flags=re.IGNORECASE) and not re.search(r"(?:libre\s+para\s+el|en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro)", texto, flags=re.IGNORECASE):
-            return texto.strip(" -:|/.,;")
     return ""
 
 
@@ -310,7 +315,7 @@ def resumen_servicio_alerta(texto):
     texto_limpio = re.sub(r"\s+", " ", str(texto or "")).strip()
     if len(texto_limpio) > 180:
         texto_limpio = texto_limpio[:177] + "..."
-    return f"🆕 <b>Nuevo servicio</b>\n{texto_limpio}"
+    return f"🆕 <b>Nuevo servicio</b>\n📍 <b>Dirección:</b> {texto_limpio}"
 
 
 def init_db():
@@ -790,14 +795,9 @@ def botones_servicio(sid, texto_servicio=""):
 
     if texto_servicio:
         direccion = extraer_direccion_servicio(texto_servicio)
-        pob_match = re.search(r"(?i)([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?\s*\(\d{5}\))", texto_servicio)
-        pob_str = pob_match.group(1).strip() if pob_match else "VALENCIA (46020)"
 
         if direccion:
-            dir_limpia = direccion
-            if pob_str and pob_str.lower() not in dir_limpia.lower():
-                dir_limpia = f"{direccion}, {pob_str}"
-            dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
+            dir_limpia = re.sub(r"[\[\]\*\/\,\.]+", " ", direccion)
             dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
 
             if dir_limpia:
@@ -812,6 +812,7 @@ def botones_servicio(sid, texto_servicio=""):
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
+
 
 def botones_estado(sid):
     return {
