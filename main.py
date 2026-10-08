@@ -967,6 +967,38 @@ def lista_cambio(servicios):
 # HOMESERVE CLASS
 # =========================================================
 
+def extraer_servicios_html(html_text):
+    if not html_text:
+        return {}
+
+    soup = BeautifulSoup(str(html_text), "html.parser")
+    servicios = {}
+
+    for row in soup.find_all("tr"):
+        sid = None
+        for link in row.find_all("a", href=True):
+            href = link.get("href", "")
+            if "ver_servicioencurso" not in href or "Servicio=" not in href:
+                continue
+            match = re.search(r"Servicio=(\d{7,8})", href)
+            if match:
+                sid = match.group(1)
+                break
+
+        if sid is None:
+            continue
+
+        row_text = row.get_text(" ", strip=True)
+        if not row_text:
+            continue
+        row_text = row_text.replace(sid, "", 1).strip(" -:|/")
+        row_text = re.sub(r"\s+", " ", row_text).strip()
+        if row_text and sid not in servicios:
+            servicios[sid] = row_text
+
+    return servicios
+
+
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
@@ -997,6 +1029,9 @@ class HomeServe:
     def obtener(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
+            servicios = extraer_servicios_html(r.text)
+            if servicios:
+                return servicios
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
             return parsear_servicios_texto(text)
         except Exception as e:
@@ -1004,6 +1039,9 @@ class HomeServe:
             if self.login():
                 try:
                     r = self.session.get(ASIGNACION_URL, timeout=15)
+                    servicios = extraer_servicios_html(r.text)
+                    if servicios:
+                        return servicios
                     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
                     return parsear_servicios_texto(text)
                 except Exception as ex:
@@ -1014,6 +1052,9 @@ class HomeServe:
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
+            servicios = extraer_servicios_html(r.text)
+            if servicios:
+                return servicios
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
             return parsear_servicios_texto(text)
         except Exception as e:
