@@ -437,7 +437,9 @@ def importar_ruta_desde_texto(chat_id, texto, fecha=None):
 
 def generar_ruta_dia(chat_id, servicios=None, refrescar=False):
     today = datetime.now().date().isoformat()
-    if refrescar or not servicios:
+    rows = obtener_ruta_diaria(chat_id, today)
+
+    if refrescar or not rows:
         servicios = servicios or homeserve.obtener_curso() or {}
         rutas = []
         for sid, texto in servicios.items():
@@ -451,8 +453,8 @@ def generar_ruta_dia(chat_id, servicios=None, refrescar=False):
             conn.commit()
         for i, (sid, direccion) in enumerate(rutas_ordenadas):
             guardar_ruta_diaria(chat_id, sid, direccion, fecha=today, orden=i)
+        rows = obtener_ruta_diaria(chat_id, today)
 
-    rows = obtener_ruta_diaria(chat_id, today)
     active_rows = [r for r in rows if not r.get("completado")]
     return sorted(active_rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
 
@@ -1505,12 +1507,13 @@ def webhook():
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
 
         elif action == "RUTA_DEL_DIA":
-            servicios = homeserve.obtener_curso()
-            if not servicios:
-                tg_edit(chat, msg_id, "❌ No hay servicios para generar una ruta del día.", botones())
-                return jsonify(ok=True)
-
-            rows = generar_ruta_dia(chat, servicios, refrescar=True)
+            rows = generar_ruta_dia(chat)
+            if not rows:
+                servicios = homeserve.obtener_curso()
+                if not servicios:
+                    tg_edit(chat, msg_id, "❌ No hay servicios para generar una ruta del día.", botones())
+                    return jsonify(ok=True)
+                rows = generar_ruta_dia(chat, servicios, refrescar=True)
             if not rows:
                 tg_edit(chat, msg_id, "❌ No se han podido extraer direcciones válidas de los servicios activos.", botones())
                 return jsonify(ok=True)
@@ -1521,7 +1524,9 @@ def webhook():
                 orden = int(row.get("orden", idx - 1) or 0)
                 hora = 9 + orden
                 tiempo = f"{hora:02d}:00"
-                texto += f"{idx}. <b>{tiempo}</b> - {row['direccion']}\n"
+                sid = str(row.get("sid", "")).strip()
+                direccion = row.get("direccion", "")
+                texto += f"{idx}. <b>{tiempo}</b> - <b>{sid}</b> - {direccion}\n"
                 kb["inline_keyboard"].append([
                     {"text": f"📞 {tiempo}", "callback_data": f"RUTA_CITAR_{row['sid']}"},
                     {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"}

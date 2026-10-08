@@ -132,7 +132,7 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertIn("C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA", servicios["16033015"])
 
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
-        from main import generar_ruta_dia
+        from main import generar_ruta_dia, guardar_ruta_diaria
 
         chat_id = "ruta_refresco"
         servicios = {
@@ -141,9 +141,13 @@ class AutoCaducidadTests(unittest.TestCase):
             "16029364": "16029364 C FILOMENA+BERNET, 2 , BAJ 2 46138-RAFELBUNYOL",
         }
 
+        guardar_ruta_diaria(chat_id, "9999999", "Ruta vieja", fecha=datetime.now().date().isoformat(), orden=0)
         rows = generar_ruta_dia(chat_id, servicios, refrescar=True)
         self.assertEqual(len(rows), 3)
         self.assertEqual({row["sid"] for row in rows}, {"16039424", "16033015", "16029364"})
+
+        existe_vieja = any(row["sid"] == "9999999" for row in generar_ruta_dia(chat_id))
+        self.assertFalse(existe_vieja)
 
 
 if __name__ == "__main__":
