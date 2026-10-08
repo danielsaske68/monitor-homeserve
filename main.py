@@ -4,7 +4,6 @@ import threading
 import logging
 import re
 import requests
-import concurrent.futures
 import sqlite3
 from urllib.parse import quote_plus
 from requests.adapters import HTTPAdapter
@@ -63,26 +62,6 @@ VIEW_STATE = {}
 BUSCAR_STATE = {}
 IMPORTAR_STATE = {}
 
-# Cache for curso list to avoid frequent HTTP calls (TTL in seconds)
-CURSO_CACHE = {"ts": None, "data": {}}
-CURSO_TTL = int(os.getenv("CURSO_TTL_SECONDS", 20))  # default 20s
-
-def obtener_curso_cached(ttl=CURSO_TTL):
-    """Devuelve la lista de servicios en curso usando un caché en memoria con TTL."""
-    now = time.time()
-    if CURSO_CACHE.get("ts") and (now - CURSO_CACHE["ts"]) < ttl and CURSO_CACHE.get("data"):
-        return CURSO_CACHE["data"]
-    # actualizar caché
-    try:
-        data = homeserve.obtener_curso()
-        CURSO_CACHE["data"] = data
-        CURSO_CACHE["ts"] = now
-        return data
-    except Exception as e:
-        logger.warning(f"obtener_curso_cached fallo: {e}")
-        # devolver lo que había en caché si existe
-        return CURSO_CACHE.get("data", {})
-
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -124,6 +103,10 @@ def extraer_fecha_caducidad(texto):
         return max(datetime.strptime(f, "%d/%m/%Y").date() for f in fechas)
     except ValueError:
         return None
+
+
+def siguiente_estado_automatico(estado):
+    return "318" if estado in ("348", "320") else estado
 
 
 def parsear_servicios_texto(texto):
@@ -200,10 +183,6 @@ def parsear_servicios_texto(texto):
         if direccion and sid not in servicios:
             servicios[sid] = direccion
     return servicios
-
-
-def siguiente_estado_automatico(estado):
-    return "318" if estado in ("348", "320") else estado
 
 
 def ordenar_ruta_servicios(items):
@@ -356,7 +335,6 @@ def init_db():
             conn.execute("ALTER TABLE seguimiento ADD COLUMN fecha_caducidad TIMESTAMP")
         conn.commit()
 
-
 def guardar_ruta_diaria(chat_id, sid, direccion, fecha=None, orden=None):
     fecha = fecha or datetime.now().date().isoformat()
     with get_db() as conn:
@@ -497,8 +475,6 @@ def importar_ruta_desde_texto(chat_id, texto, fecha=None):
     texto = texto or ""
     fecha = fecha or datetime.now().date().isoformat()
 
-    # Soporta texto normal (una línea por servicio) y texto concatenado/incompleto
-    # generado por Telegram/Gemini: todos los servicios pueden venir en una sola cadena.
     entradas = []
     pattern = re.compile(r"(?<!\d)(\d{7,8})\s*\|\s*(.*?)(?=(?:\s*\d{7,8}\s*\|)|$)", flags=re.DOTALL)
     for match in pattern.finditer(texto):
@@ -752,7 +728,7 @@ def botones():
     return {
         "inline_keyboard": [
             [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}],
-            [{"text": "🆕 Nuevos servicios", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
+            [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
             [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}, {"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
             [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
@@ -798,18 +774,26 @@ def botones_usuarios():
 def botones_servicio(sid, texto_servicio=""):
     gmaps_url = "https://www.google.com/maps"
     waze_url = "https://waze.com"
-
+    
     if texto_servicio:
-        direccion = extraer_direccion_servicio(texto_servicio)
-
-        if direccion:
-            dir_limpia = re.sub(r"[\[\]\*\/\,\.]+", " ", direccion)
-            dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
-
-            if dir_limpia:
-                query_mapa = quote_plus(dir_limpia)
-                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+        pob_match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\))", texto_servicio, re.IGNORECASE)
+        pob_str = pob_match.group(1) if pob_match else "VALENCIA (46020)"
+        
+        if pob_match:
+            resto = texto_servicio[pob_match.end():].strip()
+            cortes = r"(?i)\b(ES:|PL:|PT:|PISO|PUERTA|BL|ESC|Tuber[ií]a|Aver[ií]a|Da[nñ]o|El\s+asegurado|Servicio|Encargo)\b"
+            partes = re.split(cortes, resto)
+            direccion_bruta = partes[0].strip() if partes else ""
+            
+            if direccion_bruta:
+                dir_limpia = f"{direccion_bruta}, {pob_str}"
+                dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
+                dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
+                
+                if dir_limpia:
+                    query_mapa = quote_plus(dir_limpia)
+                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                    waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
     return {
         "inline_keyboard": [
@@ -818,7 +802,6 @@ def botones_servicio(sid, texto_servicio=""):
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
-
 
 def botones_estado(sid):
     return {
@@ -967,38 +950,6 @@ def lista_cambio(servicios):
 # HOMESERVE CLASS
 # =========================================================
 
-def extraer_servicios_html(html_text):
-    if not html_text:
-        return {}
-
-    soup = BeautifulSoup(str(html_text), "html.parser")
-    servicios = {}
-
-    for row in soup.find_all("tr"):
-        sid = None
-        for link in row.find_all("a", href=True):
-            href = link.get("href", "")
-            if "ver_servicioencurso" not in href or "Servicio=" not in href:
-                continue
-            match = re.search(r"Servicio=(\d{7,8})", href)
-            if match:
-                sid = match.group(1)
-                break
-
-        if sid is None:
-            continue
-
-        row_text = row.get_text(" ", strip=True)
-        if not row_text:
-            continue
-        row_text = row_text.replace(sid, "", 1).strip(" -:|/")
-        row_text = re.sub(r"\s+", " ", row_text).strip()
-        if row_text and sid not in servicios:
-            servicios[sid] = row_text
-
-    return servicios
-
-
 class HomeServe:
     def __init__(self):
         self.session = requests.Session()
@@ -1029,21 +980,27 @@ class HomeServe:
     def obtener(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
-            servicios = extraer_servicios_html(r.text)
-            if servicios:
-                return servicios
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            return parsear_servicios_texto(text)
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+            servicios = {}
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+            return servicios
         except Exception as e:
             logger.warning(f"Error obtener, re-intentando login: {e}")
             if self.login():
                 try:
                     r = self.session.get(ASIGNACION_URL, timeout=15)
-                    servicios = extraer_servicios_html(r.text)
-                    if servicios:
-                        return servicios
                     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-                    return parsear_servicios_texto(text)
+                    bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+                    servicios = {}
+                    for b in bloques:
+                        m = re.search(r"\b\d{7,8}\b", b)
+                        if m:
+                            servicios[m.group(0)] = " ".join(b.split())
+                    return servicios
                 except Exception as ex:
                     logger.error(f"Error definitivo obtener: {ex}")
             return {}
@@ -1052,11 +1009,14 @@ class HomeServe:
         try:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
-            servicios = extraer_servicios_html(r.text)
-            if servicios:
-                return servicios
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            return parsear_servicios_texto(text)
+            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
+            servicios = {}
+            for b in bloques:
+                m = re.search(r"\b\d{7,8}\b", b)
+                if m:
+                    servicios[m.group(0)] = " ".join(b.split())
+            return servicios
         except Exception as e:
             logger.error(f"Error obtener_curso: {e}")
             self.login()
@@ -1119,7 +1079,7 @@ def loop():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
                     for u in obtener_usuarios():
-                        tg_send(u, txt, botones_servicio(sid, txt))
+                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid, txt))
             
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -1236,7 +1196,7 @@ def webhook():
             tg_edit(chat, msg_id, respuesta, kb)
             return jsonify(ok=True)
 
-        # Búsqueda por servicio: teléfono o dirección (optimizada)
+        # Búsqueda por servicio: teléfono o dirección
         if chat in BUSCAR_STATE:
             state_info = BUSCAR_STATE.pop(chat)
             msg_id = state_info.get("msg_id") or msg_id
@@ -1247,64 +1207,35 @@ def webhook():
 
             qnorm = normalizar_texto(query)
             digits = re.sub(r"\D", "", query)
-            tail9 = digits[-9:] if len(digits) >= 9 else digits
-
             matches = []
-            servicios = obtener_curso_cached()
+            servicios = homeserve.obtener_curso()
 
-            # 1) Primera pasada: comprobar coincidencias en el texto resumen (rápido, sin HTTP extra)
             for sid, texto in servicios.items():
-                norm_texto = normalizar_texto(texto)
-                digits_texto = re.sub(r"\D", "", texto)
-                if qnorm and qnorm in norm_texto:
+                hay_coincidencia = False
+                valores_total = texto
+                try:
+                    datos, _ = obtener_datos_servicio(sid)
+                    valores_total = " ".join(str(v) for v in datos.values()) + " " + texto
+                    cliente = normalizar_texto(datos.get("CLIENTE", ""))
+                    domicilio = normalizar_texto(datos.get("DOMICILIO", ""))
+                    telefonos = normalizar_texto(datos.get("TELEFONOS", ""))
+                    poblacion = normalizar_texto(datos.get("POBLACION-PROVINCIA", ""))
+                    valores_extra = " ".join(filter(None, [cliente, domicilio, telefonos, poblacion]))
+                    valores_total = f"{valores_extra} {texto}"
+                except Exception:
+                    pass
+
+                if qnorm and qnorm in normalizar_texto(valores_total):
+                    hay_coincidencia = True
+                if digits and digits in re.sub(r"\D", "", valores_total):
+                    hay_coincidencia = True
+
+                if hay_coincidencia:
                     matches.append((sid, texto))
-                    continue
-                if digits and (digits in digits_texto or (tail9 and tail9 in digits_texto)):
-                    matches.append((sid, texto))
-                    continue
-
-            # Si encontramos coincidencias en resumen, usamos esas y evitamos pedir detalles
-            if not matches:
-                # 2) Segunda pasada: buscar en detalles, en paralelo limitado para acelerar
-                servicios_items = list(servicios.items())
-                max_workers = 6
-                max_detail_checks = int(os.getenv("BUSCAR_MAX_DETAIL", 60))
-                checked = 0
-
-                def check_detail(item):
-                    nonlocal checked
-                    sid, resumen = item
-                    try:
-                        datos, _ = obtener_datos_servicio(sid)
-                        checked += 1
-                        cliente = normalizar_texto(datos.get("CLIENTE", ""))
-                        domicilio = normalizar_texto(datos.get("DOMICILIO", ""))
-                        telefonos = normalizar_texto(datos.get("TELEFONOS", ""))
-                        poblacion = normalizar_texto(datos.get("POBLACION-PROVINCIA", ""))
-                        valores = " ".join(filter(None, [cliente, domicilio, telefonos, poblacion, resumen]))
-                        norm_valores = normalizar_texto(valores)
-                        digits_valores = re.sub(r"\D", "", valores)
-                        if qnorm and qnorm in norm_valores:
-                            return (sid, resumen)
-                        if digits and (digits in digits_valores or (tail9 and tail9 in digits_valores)):
-                            return (sid, resumen)
-                    except Exception:
-                        return None
-                    return None
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-                    futures = []
-                    for item in servicios_items[:max_detail_checks]:
-                        futures.append(ex.submit(check_detail, item))
-                    for fut in concurrent.futures.as_completed(futures):
-                        res = fut.result()
-                        if res:
-                            matches.append(res)
 
             if not matches:
                 tg_edit(chat, msg_id, f"❌ No se encontraron servicios para: <b>{query}</b>", botones())
                 return jsonify(ok=True)
-
             if len(matches) == 1:
                 mostrar_servicio(chat, msg_id, matches[0][0])
                 return jsonify(ok=True)
@@ -1573,9 +1504,9 @@ def webhook():
 
                 dir_limpia = domicilio.strip() if domicilio else "su domicilio"
                 pob_limpia = poblacion.strip() if poblacion else ""
-                ubicacion_str = f"{dir_limpia}, {pob_limpia}".strip(", ")
+                ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
 
-                base_mensaje = f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {ubicacion_str}"
+                base_mensaje = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
 
                 kb = {
                     "inline_keyboard": [
@@ -1607,9 +1538,9 @@ def webhook():
 
             dir_limpia = datos.get("DOMICILIO", "").strip()
             pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"{dir_limpia}, {pob_limpia}".strip(", ")
+            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
 
-            mensaje_final = f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {ubicacion_str} para el día de mañana a las 9 am."
+            mensaje_final = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}."
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
 
             kb = {
@@ -1639,9 +1570,9 @@ def webhook():
 
             dir_limpia = datos.get("DOMICILIO", "").strip()
             pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"{dir_limpia}, {pob_limpia}".strip(", ")
+            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
 
-            base_msg = f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {ubicacion_str}"
+            base_msg = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
 
             CITA_STATE[chat] = {
                 "msg_id": msg_id,
@@ -1847,23 +1778,15 @@ def nube():
     <!doctype html>
     <html>
     <head><title>Nube Railway</title>
-    <style>body{font-family:Arial;margin:40px;} button{padding:8px;} a{margin:5px;} .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:10px 0;}</style>
+    <style>body{font-family:Arial;margin:40px;} button{padding:8px;} a{margin:5px;}</style>
     </head>
     <body>
     <h1>☁️ Nube Railway</h1>
     <h3>/data</h3>
-    <div class="row">
-        <form action="/subir" method="post" enctype="multipart/form-data" style="display:inline-block; margin:0;">
-            <input type="file" name="archivo">
-            <button type="submit">📥 Subir</button>
-        </form>
-        <form action="/importar_ruta" method="post" enctype="multipart/form-data" style="display:inline-block; margin:0;">
-            <input type="file" name="archivo" accept=".txt,.csv">
-            <button type="submit">📥 Importar</button>
-        </form>
-        <a href="/exportar_ruta"><button type="button">📤 Exportar</button></a>
-        <a href="/limpiar_ruta" onclick="return confirm('¿Borrar la ruta del día actual?')"><button type="button">🧹 Limpiar</button></a>
-    </div>
+    <form action="/subir" method="post" enctype="multipart/form-data">
+        <input type="file" name="archivo">
+        <button>📥 Subir</button>
+    </form>
     <hr>
     {% for archivo in archivos %}
     <p>
@@ -1888,52 +1811,6 @@ def subir_archivo():
         archivo.save(os.path.join(DATA_DIR, filename))
 
     return 'Archivo subido correctamente<br><a href="/">Volver</a>'
-
-@app.route("/exportar_ruta")
-def exportar_ruta():
-    if not comprobar_login():
-        return "No autorizado", 401
-
-    chat_web = "web_ruta"
-    texto = exportar_ruta_dia(chat_web)
-    if not texto:
-        return '❌ No hay direcciones para exportar<br><a href="/">Volver</a>'
-
-    nombre = f"ruta_dia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    path = os.path.join(DATA_DIR, nombre)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(texto)
-    return send_from_directory(DATA_DIR, nombre, as_attachment=True)
-
-@app.route("/importar_ruta", methods=["POST"])
-def importar_ruta():
-    if not comprobar_login():
-        return "No autorizado", 401
-
-    archivo = request.files.get("archivo")
-    if not archivo or not archivo.filename:
-        return '❌ No se seleccionó ningún archivo<br><a href="/">Volver</a>'
-
-    try:
-        contenido = archivo.read().decode("utf-8", errors="ignore")
-    except Exception:
-        contenido = archivo.read().decode("latin-1", errors="ignore")
-
-    chat_web = "web_ruta"
-    count = importar_ruta_desde_texto(chat_web, contenido)
-    if count == 0:
-        return '❌ El archivo no contiene direcciones válidas<br><a href="/">Volver</a>'
-
-    return f'✅ Ruta importada correctamente ({count} servicios)<br><a href="/">Volver</a>'
-
-@app.route("/limpiar_ruta")
-def limpiar_ruta():
-    if not comprobar_login():
-        return "No autorizado", 401
-
-    chat_web = "web_ruta"
-    deleted = limpiar_ruta_dia(chat_web)
-    return f'✅ Ruta del día borrada ({deleted} servicios)<br><a href="/">Volver</a>'
 
 @app.route("/descargar/<nombre>")
 def descargar_archivo(nombre):
