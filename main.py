@@ -1073,9 +1073,8 @@ def loop():
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
-                    alerta = resumen_servicio_alerta(txt)
                     for u in obtener_usuarios():
-                        tg_send(u, alerta, botones_servicio(sid, txt))
+                        tg_send(u, txt, botones_servicio(sid, txt))
             
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
