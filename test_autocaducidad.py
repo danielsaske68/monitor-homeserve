@@ -230,6 +230,43 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(servicios["16033015"], "C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA")
         self.assertNotIn("16039424", servicios)
 
+    def test_parsear_servicios_id_pipe_reconoce_el_bloque_completo_del_usuario(self):
+        from main import parsear_servicios_texto
+
+        texto = (
+            "16035845|C/CL. ESPIGOL 19 2 8 46980-PATERNA\n"
+            "16033015|C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA\n"
+            "16029364|C FILOMENA+BERNET, 2 , BAJ 2 46138-RAFELBUNYOL\n"
+            "16018743|C/CL/ VICENTE GALMES 34 1 1 46139-POBLA DE FARNALS, LA\n"
+            "15914657|AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS\n"
+            "16020450|C GORGOS, 11 , 13 B 46021-VALENCIA\n"
+            "16016046|C/ INGENIERO JOAQUIN BENLLOCH 00027 39 46006-VALENCIA\n"
+            "16008003|Carrer Caravel-les, 46137, Valencia, España 46137\n"
+            "15991779|AV/ BLASCO IBA?EZ 40A 3 2 9 46136-MUSEROS\n"
+            "16005226|C/ REI JAUME I 00046 14 46135-ALBALAT DELS SORELLS\n"
+            "16033892|C/ TRENCAT 32 20 46138-RAFELBU¥OL\n"
+            "16014090|CL MAESTRO+RODRIGO, 36 , 2 2 . 46130-MASSAMAGRELL\n"
+        )
+
+        servicios = parsear_servicios_texto(texto)
+        self.assertEqual(len(servicios), 12)
+        self.assertEqual(list(servicios.keys())[:3], ["16035845", "16033015", "16029364"])
+        self.assertIn("16014090", servicios)
+        self.assertIn("15991779", servicios)
+
+    def test_parsear_servicios_no_corta_en_cliente_ni_siniestros(self):
+        from main import parsear_servicios_texto
+
+        texto = (
+            "16038937|C/Barco 1635 46024-VALENCIA En espera de Profesional por Pendiente de citar al cliente 06/10/2026 08/10/2026 08/10/2026 de 08:00 a 20:00 Repsol - Asistencias con cobertura\n"
+            "16039424|C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL En espera de Profesional por Pendiente de citar al cliente 06/10/2026 07/10/2026 07/10/2026 de 08:00 a 20:00 LDA Siniestros\n"
+        )
+
+        servicios = parsear_servicios_texto(texto)
+        self.assertEqual(len(servicios), 2)
+        self.assertEqual(servicios["16038937"], "C/Barco 1635 46024-VALENCIA")
+        self.assertEqual(servicios["16039424"], "C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL")
+
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
         from main import generar_ruta_dia, guardar_ruta_diaria, exportar_ruta_dia
 

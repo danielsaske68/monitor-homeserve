@@ -263,7 +263,7 @@ def extraer_direccion_servicio(texto):
 
     pos = None
     for kw in palabras_clave:
-        pattern = r"(?i)" + re.escape(kw).replace(r"\ ", r"\s*")
+        pattern = r"(?i)(?<![A-Za-zÁÉÍÓÚÑáéíóúñ])" + re.escape(kw).replace(r"\ ", r"\s*") + r"(?![A-Za-zÁÉÍÓÚÑáéíóúñ])"
         match = re.search(pattern, texto)
         if match:
             pos = match.start() if pos is None else min(pos, match.start())
