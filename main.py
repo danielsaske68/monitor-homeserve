@@ -127,9 +127,23 @@ def extraer_fecha_caducidad(texto):
 
 
 def parsear_servicios_texto(texto):
-    """Recupera servicios reales del HTML usando los enlaces del servicio y la fila asociada, no números sueltos del texto."""
+    """Recupera servicios reales del HTML usando los enlaces del servicio y la fila asociada, no números sueltos ni bloques de fecha/hora."""
     if texto is None:
         return {}
+
+    def bloque_es_direccion_valida(bloque):
+        if not bloque:
+            return False
+        texto_bloque = re.sub(r"\s+", " ", str(bloque)).strip()
+        if not texto_bloque:
+            return False
+        if not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", texto_bloque):
+            return False
+        if re.fullmatch(r"(?:\d{2}/\d{2}/\d{4}\s+){1,3}(?:de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2})?", texto_bloque, flags=re.IGNORECASE):
+            return False
+        if re.fullmatch(r"\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}", texto_bloque, flags=re.IGNORECASE):
+            return False
+        return True
 
     text = str(texto).replace("\r", " ").replace("\u00a0", " ")
 
@@ -159,7 +173,9 @@ def parsear_servicios_texto(texto):
                         celdas.append(txt)
                 bloque = " ".join(celdas).strip()
                 if bloque:
-                    servicios[sid] = re.sub(r"\s+", " ", bloque)
+                    bloque = re.sub(r"\s+", " ", bloque)
+                    if bloque_es_direccion_valida(bloque) and sid not in servicios:
+                        servicios[sid] = bloque
                     continue
 
             partes = []
@@ -176,8 +192,10 @@ def parsear_servicios_texto(texto):
                     if txt:
                         partes.append(txt)
             bloque = " ".join(partes).strip()
-            if bloque and sid not in servicios:
-                servicios[sid] = re.sub(r"\s+", " ", bloque)
+            if bloque:
+                bloque = re.sub(r"\s+", " ", bloque)
+                if bloque_es_direccion_valida(bloque) and sid not in servicios:
+                    servicios[sid] = bloque
 
         if servicios:
             return servicios
@@ -192,7 +210,7 @@ def parsear_servicios_texto(texto):
         fin = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         bloque = text[match.start():fin]
         bloque = re.sub(r"\s+", " ", bloque).strip()
-        if bloque and sid not in servicios:
+        if bloque and sid not in servicios and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", bloque):
             servicios[sid] = bloque
     return servicios
 
@@ -245,6 +263,8 @@ def extraer_direccion_servicio(texto):
     texto = str(texto).replace("\r", " ").replace("\n", " ")
     texto = re.sub(r"\s+", " ", texto).strip()
     if not texto:
+        return ""
+    if not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", texto):
         return ""
 
     palabras_clave = [
@@ -352,6 +372,17 @@ def obtener_ruta_diaria(chat_id, fecha=None):
             (str(chat_id), fecha),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def limpiar_ruta_dia(chat_id, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?",
+            (str(chat_id), fecha),
+        )
+        conn.commit()
+    return int(cursor.rowcount or 0)
 
 
 def activar_ruta_diaria(chat_id, sid, fecha=None):
@@ -1565,7 +1596,7 @@ def webhook():
                     "🧭 <b>Ruta del día</b>\n\nPulsa <b>Exportar</b> para sacar los servicios activos de la web y luego importa la lista ordenada.",
                     {"inline_keyboard": [
                         [{"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"}, {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}],
-                        [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+                        [{"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}, {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
                     ]}
                 )
                 return jsonify(ok=True)
@@ -1587,8 +1618,15 @@ def webhook():
                 {"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"},
                 {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}
             ])
-            kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+            kb["inline_keyboard"].append([
+                {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"},
+                {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
+            ])
             tg_edit(chat, msg_id, texto, kb)
+
+        elif action == "LIMPIAR_RUTA":
+            deleted = limpiar_ruta_dia(chat, datetime.now().date().isoformat())
+            tg_edit(chat, msg_id, f"🧹 Ruta del día borrada. {deleted} servicios eliminados.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]]})
 
         elif action == "EXPORTAR_RUTA":
             servicios = homeserve.obtener_curso() or {}
@@ -1720,6 +1758,7 @@ def nube():
             <button type="submit">📥 Importar</button>
         </form>
         <a href="/exportar_ruta"><button type="button">📤 Exportar</button></a>
+        <a href="/limpiar_ruta" onclick="return confirm('¿Borrar la ruta del día actual?')"><button type="button">🧹 Limpiar</button></a>
     </div>
     <hr>
     {% for archivo in archivos %}
@@ -1782,6 +1821,15 @@ def importar_ruta():
         return '❌ El archivo no contiene direcciones válidas<br><a href="/">Volver</a>'
 
     return f'✅ Ruta importada correctamente ({count} servicios)<br><a href="/">Volver</a>'
+
+@app.route("/limpiar_ruta")
+def limpiar_ruta():
+    if not comprobar_login():
+        return "No autorizado", 401
+
+    chat_web = "web_ruta"
+    deleted = limpiar_ruta_dia(chat_web)
+    return f'✅ Ruta del día borrada ({deleted} servicios)<br><a href="/">Volver</a>'
 
 @app.route("/descargar/<nombre>")
 def descargar_archivo(nombre):

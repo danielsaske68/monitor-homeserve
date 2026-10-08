@@ -76,6 +76,20 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertIn(b"Exportar", response.data)
         self.assertIn(b"Importar", response.data)
 
+    def test_limpiar_ruta_dia_borra_servicios_guardados(self):
+        from main import guardar_ruta_diaria, limpiar_ruta_dia, obtener_ruta_diaria
+
+        chat_id = "ruta_limpiar_test"
+        fecha = datetime.now().date().isoformat()
+        guardar_ruta_diaria(chat_id, "160001", "Calle A 1", fecha=fecha, orden=0)
+        guardar_ruta_diaria(chat_id, "160002", "Calle B 2", fecha=fecha, orden=1)
+
+        deleted = limpiar_ruta_dia(chat_id, fecha)
+        rows = obtener_ruta_diaria(chat_id, fecha)
+
+        self.assertEqual(deleted, 2)
+        self.assertEqual(rows, [])
+
     def test_importar_ruta_asigna_horarios_con_margen_de_1_hora(self):
         from main import importar_ruta_desde_texto, obtener_ruta_diaria
 
@@ -166,6 +180,26 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(set(servicios.keys()), {"16039424", "15914657"})
         self.assertIn("C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL", servicios["16039424"])
         self.assertIn("AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS", servicios["15914657"])
+
+    def test_parsear_servicios_html_descarta_bloques_solo_fecha_y_hora(self):
+        from main import parsear_servicios_texto
+
+        html = '''
+        <table>
+            <tr>
+                <td><a href="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio=16039424&Pag=1">16039424</a></td>
+                <td>07/10/2026 07/10/2026 de 08:00 a 20:00</td>
+            </tr>
+            <tr>
+                <td><a href="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio=15914657&Pag=1">15914657</a></td>
+                <td><font color="#000000">AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS</font></td>
+            </tr>
+        </table>
+        '''
+
+        servicios = parsear_servicios_texto(html)
+        self.assertNotIn("16039424", servicios)
+        self.assertIn("15914657", servicios)
 
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
         from main import generar_ruta_dia, guardar_ruta_diaria, exportar_ruta_dia
