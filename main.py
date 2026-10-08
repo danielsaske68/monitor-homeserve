@@ -127,7 +127,7 @@ def extraer_fecha_caducidad(texto):
 
 
 def parsear_servicios_texto(texto):
-    """Devuelve el texto visible real de cada fila del HTML de Servicios en curso, sin simplificar ni limpiar nada."""
+    """Recupera el servicio con el texto visible real de la fila, pero dejando únicamente la dirección útil para la ruta."""
     if texto is None:
         return {}
 
@@ -178,7 +178,9 @@ def parsear_servicios_texto(texto):
             bloque = " ".join(partes).strip()
             bloque = re.sub(r"\s+", " ", bloque).strip()
             if bloque:
-                servicios[sid] = bloque
+                direccion = extraer_direccion_servicio(bloque) or bloque
+                if direccion and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", direccion):
+                    servicios[sid] = direccion
 
         if servicios:
             return servicios
@@ -194,7 +196,9 @@ def parsear_servicios_texto(texto):
         bloque = text[match.start():fin]
         bloque = re.sub(r"\s+", " ", bloque).strip()
         if bloque and sid not in servicios and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", bloque):
-            servicios[sid] = bloque
+            direccion = extraer_direccion_servicio(bloque) or bloque
+            if direccion and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", direccion):
+                servicios[sid] = direccion
     return servicios
 
 
@@ -250,6 +254,9 @@ def extraer_direccion_servicio(texto):
     if not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", texto):
         return ""
 
+    texto = re.sub(r"^\d{7,8}\s*(?:\|\s*)?", "", texto)
+    texto = re.sub(r"^(?:manitas\s+fontanero|fontanero|manitas)\s*", "", texto, flags=re.IGNORECASE)
+
     palabras_clave = [
         "AVENIDA", "AVDA", "AV", "C/", "CL", "CALLE", "CARRER", "CARRERA",
         "CR", "PASEO", "PLAZA", "PL", "TRAVESIA", "RONDA", "URB",
@@ -269,7 +276,7 @@ def extraer_direccion_servicio(texto):
                     if not idx:
                         continue
                     base = segmento[idx.start():]
-                    base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN)\b", base, maxsplit=1)[0]
+                    base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN|EN\s+ESPERA\s+DE\s+PROFESIONAL|RGA|LDA|MUTUA|SINIETROS|REPSOL|BANSABADELL|INSTANT\s+COVER)\b", base, maxsplit=1)[0]
                     direccion = limpiar_direccion(base)
                     if direccion and re.search(r"\d", direccion):
                         return direccion
@@ -279,7 +286,7 @@ def extraer_direccion_servicio(texto):
         if not idx:
             continue
         base = texto[idx.start():]
-        base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN)\b", base, maxsplit=1)[0]
+        base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN|EN\s+ESPERA\s+DE\s+PROFESIONAL|RGA|LDA|MUTUA|SINIETROS|REPSOL|BANSABADELL|INSTANT\s+COVER)\b", base, maxsplit=1)[0]
         direccion = limpiar_direccion(base)
         if direccion and re.search(r"\d", direccion):
             return direccion
