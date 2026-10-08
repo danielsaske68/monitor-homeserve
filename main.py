@@ -321,7 +321,7 @@ def exportar_ruta_dia(chat_id, fecha=None):
     rows = sorted(rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
     lines = []
     for row in rows:
-        direccion = str(row.get("direccion", "") or "").strip()
+        direccion = limpiar_direccion_importada(row.get("direccion", ""))
         sid = str(row.get("sid", "") or "").strip()
         if not direccion:
             continue
@@ -351,6 +351,16 @@ def limpiar_direccion_importada(texto):
     texto = re.sub(r"\s+\d{2}/\d{2}/\d{4}.*$", "", texto)
     texto = re.sub(r"\s+\d{2}:\d{2}\s*[-–]?\s*\d{2}:\d{2}.*$", "", texto)
     texto = texto.strip(" \t\n\r-–—.,;:")
+    texto = re.sub(r"\s+", " ", texto)
+
+    if re.fullmatch(r"\d{2}/\d{2}/\d{4}", texto):
+        return ""
+    if re.fullmatch(r"\d{8,}", texto):
+        return ""
+    if not re.search(r"[A-Za-zÁÉÍÓÚáéíóúÑñ]", texto):
+        return ""
+    if re.search(r"\b(?:de|del|por|para|en)\b\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}", texto, flags=re.IGNORECASE):
+        return ""
     return texto
 
 
