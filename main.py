@@ -127,7 +127,11 @@ def extraer_fecha_caducidad(texto):
 
 
 def parsear_servicios_texto(texto):
-    """Extrae la dirección real de cada servicio a partir de la fila visible o de líneas ID|dirección."""
+    """Extrae la dirección completa del servicio para exportar/importar rutas.
+
+    La dirección completa incluye código postal y población cuando están presentes.
+    La limpieza estricta para Google Maps/Waze sigue viviendo en extraer_direccion_servicio().
+    """
     if texto is None:
         return {}
 
@@ -144,7 +148,7 @@ def parsear_servicios_texto(texto):
         valor = match.group(2).strip()
         if not valor:
             continue
-        direccion = extraer_direccion_servicio(valor)
+        direccion = limpiar_direccion_importada(valor) or extraer_direccion_servicio(valor)
         if direccion and sid not in lineas_directas:
             lineas_directas[sid] = direccion
     if lineas_directas:
@@ -175,7 +179,7 @@ def parsear_servicios_texto(texto):
             if not row_text:
                 continue
             row_text = row_text.replace(sid, "", 1).strip(" -:|/")
-            direccion = extraer_direccion_servicio(row_text)
+            direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text)
             if direccion:
                 servicios[sid] = direccion
 
@@ -192,7 +196,7 @@ def parsear_servicios_texto(texto):
         fin = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         bloque = text[match.start():fin]
         bloque = re.sub(r"\s+", " ", bloque).strip()
-        direccion = extraer_direccion_servicio(bloque)
+        direccion = limpiar_direccion_importada(bloque) or extraer_direccion_servicio(bloque)
         if direccion and sid not in servicios:
             servicios[sid] = direccion
     return servicios
