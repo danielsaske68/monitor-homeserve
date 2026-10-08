@@ -127,23 +127,9 @@ def extraer_fecha_caducidad(texto):
 
 
 def parsear_servicios_texto(texto):
-    """Recupera servicios reales del HTML usando los enlaces del servicio y la fila asociada, no números sueltos ni bloques de fecha/hora."""
+    """Devuelve el texto visible real de cada fila del HTML de Servicios en curso, sin simplificar ni limpiar nada."""
     if texto is None:
         return {}
-
-    def bloque_es_direccion_valida(bloque):
-        if not bloque:
-            return False
-        texto_bloque = re.sub(r"\s+", " ", str(bloque)).strip()
-        if not texto_bloque:
-            return False
-        if not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", texto_bloque):
-            return False
-        if re.fullmatch(r"(?:\d{2}/\d{2}/\d{4}\s+){1,3}(?:de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2})?", texto_bloque, flags=re.IGNORECASE):
-            return False
-        if re.fullmatch(r"\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}", texto_bloque, flags=re.IGNORECASE):
-            return False
-        return True
 
     text = str(texto).replace("\r", " ").replace("\u00a0", " ")
 
@@ -160,42 +146,39 @@ def parsear_servicios_texto(texto):
                 continue
 
             sid = match_sid.group(1)
-            row = link.find_parent("tr")
-            if row is not None:
-                celdas = []
-                for td in row.find_all("td"):
-                    txt = td.get_text(" ", strip=True)
-                    if not txt:
-                        continue
-                    if link in td.find_all("a", href=True):
-                        continue
-                    if txt and txt != sid:
-                        celdas.append(txt)
-                bloque = " ".join(celdas).strip()
-                if bloque:
-                    bloque = re.sub(r"\s+", " ", bloque)
-                    if bloque_es_direccion_valida(bloque) and sid not in servicios:
-                        servicios[sid] = bloque
-                    continue
+            if sid in servicios:
+                continue
 
             partes = []
-            for sib in link.next_siblings:
-                if getattr(sib, "name", None) == "a" and "ver_servicioencurso" in str(sib.get("href", "")):
-                    break
-                if getattr(sib, "name", None) == "font":
-                    txt = sib.get_text(" ", strip=True)
-                    if txt:
-                        partes.append(txt)
-                    continue
-                if isinstance(sib, str):
-                    txt = str(sib).strip()
-                    if txt:
-                        partes.append(txt)
+            row = link.find_parent("tr")
+            if row is not None:
+                for td in row.find_all("td"):
+                    for node in td.contents:
+                        if getattr(node, "name", None) == "a" and "ver_servicioencurso" in str(node.get("href", "")):
+                            continue
+                        if hasattr(node, "get_text"):
+                            valor = node.get_text(" ", strip=True)
+                        else:
+                            valor = str(node).strip()
+                        if valor and valor != sid:
+                            partes.append(valor)
+            else:
+                for sib in link.next_siblings:
+                    if getattr(sib, "name", None) == "a" and "ver_servicioencurso" in str(sib.get("href", "")):
+                        break
+                    if hasattr(sib, "get_text"):
+                        valor = sib.get_text(" ", strip=True)
+                    elif isinstance(sib, str):
+                        valor = str(sib).strip()
+                    else:
+                        valor = ""
+                    if valor and valor != sid:
+                        partes.append(valor)
+
             bloque = " ".join(partes).strip()
+            bloque = re.sub(r"\s+", " ", bloque).strip()
             if bloque:
-                bloque = re.sub(r"\s+", " ", bloque)
-                if bloque_es_direccion_valida(bloque) and sid not in servicios:
-                    servicios[sid] = bloque
+                servicios[sid] = bloque
 
         if servicios:
             return servicios
@@ -426,9 +409,9 @@ def exportar_ruta_dia(chat_id, fecha=None, refrescar=False):
         servicios = homeserve.obtener_curso() or {}
         rutas = []
         for sid, texto in servicios.items():
-            direccion = extraer_direccion_servicio(texto)
-            if direccion:
-                rutas.append((sid, direccion))
+            bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
+            if bloque:
+                rutas.append((sid, bloque))
         rutas_ordenadas = ordenar_ruta_servicios(rutas)
         with get_db() as conn:
             conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), fecha))
@@ -524,9 +507,9 @@ def generar_ruta_dia(chat_id, servicios=None, refrescar=False):
         servicios = servicios or homeserve.obtener_curso() or {}
         rutas = []
         for sid, texto in servicios.items():
-            direccion = extraer_direccion_servicio(texto)
-            if direccion:
-                rutas.append((sid, direccion))
+            bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
+            if bloque:
+                rutas.append((sid, bloque))
 
         rutas_ordenadas = ordenar_ruta_servicios(rutas)
         with get_db() as conn:
@@ -1632,9 +1615,9 @@ def webhook():
             servicios = homeserve.obtener_curso() or {}
             rutas = []
             for sid, texto in servicios.items():
-                direccion = extraer_direccion_servicio(texto)
-                if direccion:
-                    rutas.append((sid, direccion))
+                bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
+                if bloque:
+                    rutas.append((sid, bloque))
             rutas_ordenadas = ordenar_ruta_servicios(rutas)
             texto = "\n".join(f"{sid}|{direccion}" for sid, direccion in rutas_ordenadas)
             if not texto:

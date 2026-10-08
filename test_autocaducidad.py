@@ -181,7 +181,7 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertIn("C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL", servicios["16039424"])
         self.assertIn("AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS", servicios["15914657"])
 
-    def test_parsear_servicios_html_descarta_bloques_solo_fecha_y_hora(self):
+    def test_parsear_servicios_html_toma_el_texto_visible_de_la_fila(self):
         from main import parsear_servicios_texto
 
         html = '''
@@ -198,8 +198,8 @@ class AutoCaducidadTests(unittest.TestCase):
         '''
 
         servicios = parsear_servicios_texto(html)
-        self.assertNotIn("16039424", servicios)
-        self.assertIn("15914657", servicios)
+        self.assertEqual(servicios["16039424"], "07/10/2026 07/10/2026 de 08:00 a 20:00")
+        self.assertIn("AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS", servicios["15914657"])
 
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
         from main import generar_ruta_dia, guardar_ruta_diaria, exportar_ruta_dia
