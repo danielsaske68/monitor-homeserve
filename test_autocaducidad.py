@@ -45,6 +45,22 @@ class AutoCaducidadTests(unittest.TestCase):
             "AVENIDA DEL MAR 31 3ºA"
         )
 
+    def test_resumen_servicio_alerta_incluye_comentario_y_mapa_solo_direccion(self):
+        from main import botones_servicio, resumen_servicio_alerta
+
+        texto = (
+            "16037705 Manitas fontanero Libre Para el 07/10/26 De 08:00 a 20:00 "
+            "VALENCIA (46007) C/ CL CALLOSA D'EN SARRIA 2B atasco en fregadero de la cocina "
+            "se necesita bomba de presión informo de las condiciones"
+        )
+
+        resumen = resumen_servicio_alerta(texto)
+        self.assertIn("atasco en fregadero de la cocina", resumen.lower())
+        self.assertIn("C/ CL CALLOSA D'EN SARRIA 2B", resumen)
+        self.assertIn("google.com/maps/search", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"])
+        self.assertNotIn("VALENCIA", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"].upper())
+        self.assertNotIn("20:00", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"].upper())
+
     def test_extraer_direccion_servicio_acepta_prefijos_valencianos(self):
         from main import parsear_servicios_texto
 

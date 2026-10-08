@@ -310,12 +310,14 @@ def extraer_direccion_servicio(texto):
 
 def resumen_servicio_alerta(texto):
     direccion = extraer_direccion_servicio(texto)
-    if direccion:
-        return f"🆕 <b>Nuevo servicio</b>\n📍 <b>Dirección:</b> {direccion}"
     texto_limpio = re.sub(r"\s+", " ", str(texto or "")).strip()
-    if len(texto_limpio) > 180:
-        texto_limpio = texto_limpio[:177] + "..."
-    return f"🆕 <b>Nuevo servicio</b>\n📍 <b>Dirección:</b> {texto_limpio}"
+    if len(texto_limpio) > 300:
+        texto_limpio = texto_limpio[:297] + "..."
+
+    if direccion:
+        return f"🆕 <b>Nuevo servicio</b>\n📍 <b>Dirección:</b> {direccion}\n📝 <b>Comentario:</b> {texto_limpio}"
+
+    return f"🆕 <b>Nuevo servicio</b>\n📝 <b>Comentario:</b> {texto_limpio}"
 
 
 def init_db():
