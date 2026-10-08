@@ -302,36 +302,110 @@ def completar_ruta_diaria(chat_id, sid, fecha=None):
         conn.commit()
 
 
+def exportar_ruta_dia(chat_id, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    rows = obtener_ruta_diaria(chat_id, fecha)
+    if not rows:
+        servicios = homeserve.obtener_curso() or {}
+        rutas = []
+        for sid, texto in servicios.items():
+            direccion = extraer_direccion_servicio(texto)
+            if direccion:
+                rutas.append((sid, direccion))
+        rutas_ordenadas = ordenar_ruta_servicios(rutas)
+        for idx, (sid, direccion) in enumerate(rutas_ordenadas):
+            guardar_ruta_diaria(chat_id, sid, direccion, fecha=fecha, orden=idx)
+        rows = obtener_ruta_diaria(chat_id, fecha)
+
+    rows = sorted(rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
+    lines = []
+    for row in rows:
+        direccion = str(row.get("direccion", "") or "").strip()
+        sid = str(row.get("sid", "") or "").strip()
+        if not direccion:
+            continue
+        if sid and sid.upper().startswith("RUTA_"):
+            lines.append(direccion)
+        elif sid:
+            lines.append(f"{sid}|{direccion}")
+        else:
+            lines.append(direccion)
+    return "\n".join(lines)
+
+
+def importar_ruta_desde_texto(chat_id, texto, fecha=None):
+    texto = texto or ""
+    fecha = fecha or datetime.now().date().isoformat()
+    lineas = [line.strip() for line in texto.splitlines() if line.strip()]
+    if not lineas:
+        return 0
+
+    with get_db() as conn:
+        conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), fecha))
+        conn.commit()
+
+    count = 0
+    for idx, linea in enumerate(lineas):
+        sid = f"RUTA_{idx + 1:03d}"
+        direccion = linea
+        if "|" in linea:
+            partes = [p.strip() for p in linea.split("|", 1)]
+            if len(partes) == 2 and partes[1]:
+                sid, direccion = partes[0] or sid, partes[1]
+        elif "\t" in linea:
+            partes = [p.strip() for p in linea.split("\t", 1)]
+            if len(partes) == 2 and partes[1]:
+                sid, direccion = partes[0] or sid, partes[1]
+
+        if not direccion:
+            continue
+        guardar_ruta_diaria(chat_id, sid, direccion, fecha=fecha, orden=idx)
+        count += 1
+
+    return count
+
+
 def generar_ruta_dia(chat_id, servicios=None):
-    servicios = servicios or homeserve.obtener_curso()
+    today = datetime.now().date().isoformat()
+    rows = obtener_ruta_diaria(chat_id, today)
+    if rows:
+        active_rows = [r for r in rows if not r.get("completado")]
+        return sorted(active_rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
+
+    servicios = servicios or homeserve.obtener_curso() or {}
     rutas = []
     for sid, texto in servicios.items():
         direccion = extraer_direccion_servicio(texto)
-        if not direccion:
-            continue
-        guardar_ruta_diaria(chat_id, sid, direccion)
-        rutas.append((sid, direccion))
+        if direccion:
+            rutas.append((sid, direccion))
 
     rutas_ordenadas = ordenar_ruta_servicios(rutas)
-    today = datetime.now().date().isoformat()
-    rows = obtener_ruta_diaria(chat_id, today)
-    by_sid = {row["sid"]: row for row in rows}
-
     for i, (sid, direccion) in enumerate(rutas_ordenadas):
-        row = by_sid.get(sid)
-        if row is None or row.get("completado"):
-            continue
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE ruta_diaria SET orden = ? WHERE chat_id=? AND sid=? AND fecha=?",
-                (i, str(chat_id), str(sid), today),
-            )
-            conn.commit()
+        guardar_ruta_diaria(chat_id, sid, direccion, fecha=today, orden=i)
 
-    active_rows = obtener_ruta_diaria(chat_id, today)
-    active_rows = [r for r in active_rows if not r.get("completado")]
-    active_rows = sorted(active_rows, key=lambda r: (r.get("orden", 999), str(r.get("sid", ""))))
-    return active_rows
+    rows = obtener_ruta_diaria(chat_id, today)
+    active_rows = [r for r in rows if not r.get("completado")]
+    return sorted(active_rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
+
+
+def validar_orden_ruta(rows):
+    """Comprueba que la ruta tiene orden secuencial desde las 09:00."""
+    if not rows:
+        return {"ok": True, "issues": [], "hora_esperada": []}
+
+    issues = []
+    esperadas = []
+    for idx, row in enumerate(rows):
+        hora = 9 + idx
+        esperadas.append(f"{hora:02d}:00")
+        orden = int(row.get("orden", idx) or 0)
+        if orden != idx:
+            issues.append(f"orden[{idx}]={orden} no coincide con la posición esperada {idx}")
+        if not str(row.get("direccion", "")).strip():
+            issues.append(f"fila[{idx}] sin dirección válida")
+
+    ok = not issues
+    return {"ok": ok, "issues": issues, "hora_esperada": esperadas}
 
 
 def generar_mensaje_cita_sid(sid, fecha_hora=None):
@@ -455,11 +529,10 @@ def tg_answer(callback_id):
 def botones():
     return {
         "inline_keyboard": [
-            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
-            [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
+            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🌐 Web", "callback_data": "WEB"}],
+            [{"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}, {"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}],
-            [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
+            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}, {"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
             [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
         ]
     }
@@ -1385,27 +1458,36 @@ def webhook():
             texto = "🧭 <b>Ruta del día</b>\n\n"
             kb = {"inline_keyboard": []}
             for idx, row in enumerate(rows[:20], start=1):
-                hora = 9 + idx - 1
+                orden = int(row.get("orden", idx - 1) or 0)
+                hora = 9 + orden
                 tiempo = f"{hora:02d}:00"
                 texto += f"{idx}. <b>{tiempo}</b> - {row['direccion']}\n"
                 kb["inline_keyboard"].append([
                     {"text": f"📞 {tiempo}", "callback_data": f"RUTA_CITAR_{row['sid']}"},
-                    {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"},
-                    {"text": "🔄", "callback_data": f"RUTA_REACT_{row['sid']}"}
+                    {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"}
                 ])
             kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
             tg_edit(chat, msg_id, texto, kb)
 
         elif action.startswith("RUTA_CITAR_"):
             sid = action.split("_")[-1]
-            info = generar_mensaje_cita_sid(sid)
+            fecha_hoy = datetime.now().date().strftime("%d/%m/%Y")
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT orden FROM ruta_diaria WHERE chat_id=? AND sid=? AND fecha=?",
+                    (str(chat), str(sid), datetime.now().date().isoformat()),
+                ).fetchone()
+
+            orden = int((row["orden"] if row else 0) or 0)
+            hora_orden = 9 + orden
+            fecha_hora = f"{fecha_hoy} {hora_orden:02d}:00"
+
+            info = generar_mensaje_cita_sid(sid, fecha_hora)
             if not info:
                 tg_edit(chat, msg_id, f"❌ No se pudo preparar la cita para {sid}.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
                 return jsonify(ok=True)
 
-            telefono, base_msg = info
-            hora = datetime.now().strftime("%d/%m/%Y %H:%M")
-            mensaje_final = f"{base_msg}. Quedamos el {hora}."
+            telefono, mensaje_final = info
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
             kb = {
                 "inline_keyboard": [
@@ -1484,15 +1566,22 @@ def nube():
     <!doctype html>
     <html>
     <head><title>Nube Railway</title>
-    <style>body{font-family:Arial;margin:40px;} button{padding:8px;} a{margin:5px;}</style>
+    <style>body{font-family:Arial;margin:40px;} button{padding:8px;} a{margin:5px;} .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:10px 0;}</style>
     </head>
     <body>
     <h1>☁️ Nube Railway</h1>
     <h3>/data</h3>
-    <form action="/subir" method="post" enctype="multipart/form-data">
-        <input type="file" name="archivo">
-        <button>📥 Subir</button>
-    </form>
+    <div class="row">
+        <form action="/subir" method="post" enctype="multipart/form-data" style="display:inline-block; margin:0;">
+            <input type="file" name="archivo">
+            <button type="submit">📥 Subir</button>
+        </form>
+        <form action="/importar_ruta" method="post" enctype="multipart/form-data" style="display:inline-block; margin:0;">
+            <input type="file" name="archivo" accept=".txt,.csv">
+            <button type="submit">📥 Importar</button>
+        </form>
+        <a href="/exportar_ruta"><button type="button">📤 Exportar</button></a>
+    </div>
     <hr>
     {% for archivo in archivos %}
     <p>
@@ -1517,6 +1606,43 @@ def subir_archivo():
         archivo.save(os.path.join(DATA_DIR, filename))
 
     return 'Archivo subido correctamente<br><a href="/">Volver</a>'
+
+@app.route("/exportar_ruta")
+def exportar_ruta():
+    if not comprobar_login():
+        return "No autorizado", 401
+
+    chat_web = "web_ruta"
+    texto = exportar_ruta_dia(chat_web)
+    if not texto:
+        return '❌ No hay direcciones para exportar<br><a href="/">Volver</a>'
+
+    nombre = f"ruta_dia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    path = os.path.join(DATA_DIR, nombre)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(texto)
+    return send_from_directory(DATA_DIR, nombre, as_attachment=True)
+
+@app.route("/importar_ruta", methods=["POST"])
+def importar_ruta():
+    if not comprobar_login():
+        return "No autorizado", 401
+
+    archivo = request.files.get("archivo")
+    if not archivo or not archivo.filename:
+        return '❌ No se seleccionó ningún archivo<br><a href="/">Volver</a>'
+
+    try:
+        contenido = archivo.read().decode("utf-8", errors="ignore")
+    except Exception:
+        contenido = archivo.read().decode("latin-1", errors="ignore")
+
+    chat_web = "web_ruta"
+    count = importar_ruta_desde_texto(chat_web, contenido)
+    if count == 0:
+        return '❌ El archivo no contiene direcciones válidas<br><a href="/">Volver</a>'
+
+    return f'✅ Ruta importada correctamente ({count} servicios)<br><a href="/">Volver</a>'
 
 @app.route("/descargar/<nombre>")
 def descargar_archivo(nombre):
