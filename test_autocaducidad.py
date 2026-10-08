@@ -131,6 +131,42 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(len(servicios), 6)
         self.assertIn("C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA", servicios["16033015"])
 
+    def test_parsear_servicios_html_no_pierde_direccion_clara(self):
+        from main import parsear_servicios_texto
+
+        html = (
+            '<a href="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio=15914657&Pag=1">15914657</a>'
+            '<font color="#000000">AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS</font>'
+            '<a href="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio=16039424&Pag=1">16039424</a>'
+            '<font color="#000000">C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL</font>'
+        )
+
+        servicios = parsear_servicios_texto(html)
+        self.assertEqual(len(servicios), 2)
+        self.assertIn("AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS", servicios["15914657"])
+        self.assertIn("C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL", servicios["16039424"])
+
+    def test_parsear_servicios_html_con_patron_real_homeserve(self):
+        from main import parsear_servicios_texto
+
+        html = '''
+        <table>
+        <tr>
+        <td><a href="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio=16039424&Pag=1">16039424</a></td>
+        <td><font color="#000000">C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL</font></td>
+        </tr>
+        <tr>
+        <td><a href="https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=ver_servicioencurso&Servicio=15914657&Pag=1">15914657</a></td>
+        <td><font color="#000000">AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS</font></td>
+        </tr>
+        </table>
+        '''
+
+        servicios = parsear_servicios_texto(html)
+        self.assertEqual(set(servicios.keys()), {"16039424", "15914657"})
+        self.assertIn("C MAGDALENA, 111 , 1 4 46138-RAFELBUNYOL", servicios["16039424"])
+        self.assertIn("AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS", servicios["15914657"])
+
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
         from main import generar_ruta_dia, guardar_ruta_diaria, exportar_ruta_dia
 

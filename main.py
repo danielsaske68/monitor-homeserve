@@ -127,11 +127,61 @@ def extraer_fecha_caducidad(texto):
 
 
 def parsear_servicios_texto(texto):
-    """Recupera todos los servicios del texto basándose en los IDs numéricos, sin depender de que cada servicio empiece en una línea nueva."""
+    """Recupera servicios reales del HTML usando los enlaces del servicio y la fila asociada, no números sueltos del texto."""
     if texto is None:
         return {}
 
     text = str(texto).replace("\r", " ").replace("\u00a0", " ")
+
+    if "<a" in text and "ver_servicioencurso" in text:
+        soup = BeautifulSoup(text, "html.parser")
+        servicios = {}
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if "ver_servicioencurso" not in href or "Servicio=" not in href:
+                continue
+
+            match_sid = re.search(r"Servicio=(\d{7,8})", href)
+            if not match_sid:
+                continue
+
+            sid = match_sid.group(1)
+            row = link.find_parent("tr")
+            if row is not None:
+                celdas = []
+                for td in row.find_all("td"):
+                    txt = td.get_text(" ", strip=True)
+                    if not txt:
+                        continue
+                    if link in td.find_all("a", href=True):
+                        continue
+                    if txt and txt != sid:
+                        celdas.append(txt)
+                bloque = " ".join(celdas).strip()
+                if bloque:
+                    servicios[sid] = re.sub(r"\s+", " ", bloque)
+                    continue
+
+            partes = []
+            for sib in link.next_siblings:
+                if getattr(sib, "name", None) == "a" and "ver_servicioencurso" in str(sib.get("href", "")):
+                    break
+                if getattr(sib, "name", None) == "font":
+                    txt = sib.get_text(" ", strip=True)
+                    if txt:
+                        partes.append(txt)
+                    continue
+                if isinstance(sib, str):
+                    txt = str(sib).strip()
+                    if txt:
+                        partes.append(txt)
+            bloque = " ".join(partes).strip()
+            if bloque and sid not in servicios:
+                servicios[sid] = re.sub(r"\s+", " ", bloque)
+
+        if servicios:
+            return servicios
+
     matches = list(re.finditer(r"\b\d{7,8}\b", text))
     if not matches:
         return {}
