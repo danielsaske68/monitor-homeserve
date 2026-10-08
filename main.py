@@ -529,8 +529,8 @@ def tg_answer(callback_id):
 def botones():
     return {
         "inline_keyboard": [
-            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🌐 Web", "callback_data": "WEB"}],
-            [{"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
+            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}],
+            [{"text": "🆕 Nuevos servicios", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
             [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}, {"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
             [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
@@ -1466,8 +1466,23 @@ def webhook():
                     {"text": f"📞 {tiempo}", "callback_data": f"RUTA_CITAR_{row['sid']}"},
                     {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"}
                 ])
+            kb["inline_keyboard"].append([
+                {"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"},
+                {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}
+            ])
             kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
             tg_edit(chat, msg_id, texto, kb)
+
+        elif action == "EXPORTAR_RUTA":
+            texto = exportar_ruta_dia(chat)
+            if not texto:
+                tg_edit(chat, msg_id, "❌ No hay direcciones para exportar.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+                return jsonify(ok=True)
+            tg_edit(chat, msg_id, f"📤 <b>Direcciones exportadas</b>\n\n<code>{texto}</code>", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+
+        elif action == "IMPORTAR_RUTA":
+            IMPORTAR_STATE[chat] = {"msg_id": msg_id}
+            tg_edit(chat, msg_id, "📥 Envíame la lista ordenada de direcciones para importarla a la ruta del día.\n\nRegla: una dirección por línea y sin texto extra.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action.startswith("RUTA_CITAR_"):
             sid = action.split("_")[-1]
