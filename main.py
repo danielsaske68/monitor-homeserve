@@ -4,6 +4,7 @@ import threading
 import logging
 import re
 import requests
+import concurrent.futures
 import sqlite3
 from urllib.parse import quote_plus
 from requests.adapters import HTTPAdapter
@@ -61,6 +62,26 @@ CITA_STATE = {}
 VIEW_STATE = {}
 BUSCAR_STATE = {}
 
+# Cache for curso list to avoid frequent HTTP calls (TTL in seconds)
+CURSO_CACHE = {"ts": None, "data": {}}
+CURSO_TTL = int(os.getenv("CURSO_TTL_SECONDS", 20))  # default 20s
+
+def obtener_curso_cached(ttl=CURSO_TTL):
+    """Devuelve la lista de servicios en curso usando un caché en memoria con TTL."""
+    now = time.time()
+    if CURSO_CACHE.get("ts") and (now - CURSO_CACHE["ts"]) < ttl and CURSO_CACHE.get("data"):
+        return CURSO_CACHE["data"]
+    # actualizar caché
+    try:
+        data = homeserve.obtener_curso()
+        CURSO_CACHE["data"] = data
+        CURSO_CACHE["ts"] = now
+        return data
+    except Exception as e:
+        logger.warning(f"obtener_curso_cached fallo: {e}")
+        # devolver lo que había en caché si existe
+        return CURSO_CACHE.get("data", {})
+
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -108,6 +129,99 @@ def siguiente_estado_automatico(estado):
     return "318" if estado in ("348", "320") else estado
 
 
+def ordenar_ruta_servicios(items):
+    """Devuelve los servicios ordenados por zona y horario para una ruta del día."""
+    prioridad = {
+        "paterna": 0,
+        "meliana": 1,
+        "rafelbunyol": 2,
+        "pobla de farnals": 3,
+        "valencia": 4,
+    }
+
+    def score(item):
+        sid, texto = item
+        texto_norm = normalizar_texto(str(texto or ""))
+        direccion = extraer_direccion_servicio(texto) or texto_norm
+        direccion_norm = normalizar_texto(direccion)
+        prior = 99
+        for nombre, value in prioridad.items():
+            if nombre in texto_norm or nombre in direccion_norm:
+                prior = value
+                break
+        return (prior, direccion_norm, sid)
+
+    return sorted(items, key=score)
+
+
+def limpiar_direccion(direccion):
+    if not direccion:
+        return ""
+    texto = re.sub(r"\s+", " ", str(direccion)).strip()
+    texto = re.sub(r"^(?:\d{6,8}\s+)+", "", texto)
+    texto = re.sub(r"^(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]*?\d{2}/\d{2}/\d{4}\s+)", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\s+(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?\s*\(\d{5}\))\s*$", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\s+(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?)\s*$", "", texto, flags=re.IGNORECASE)
+    texto = texto.strip(" ,;:.-/")
+    return texto
+
+
+def extraer_direccion_servicio(texto):
+    if not texto:
+        return ""
+
+    texto = str(texto).replace("\r", " ").replace("\n", " ")
+    texto = re.sub(r"\s+", " ", texto).strip()
+    if not texto:
+        return ""
+
+    palabras_clave = [
+        "AVENIDA", "AVDA", "AV", "C/", "CL", "CALLE", "CARRER", "CARRERA",
+        "CR", "PASEO", "PLAZA", "PL", "TRAVESIA", "RONDA", "URB",
+        "URBANIZACION", "CAMI", "PZA", "RUA", "C"
+    ]
+
+    if "(" in texto and re.search(r"\(\d{5}\)", texto):
+        ciudad_match = re.search(r"(?i)(?<![ºª])([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?)\s*\(\d{5}\)", texto)
+        if ciudad_match:
+            antes = texto[:ciudad_match.start()]
+            despues = texto[ciudad_match.end():]
+            for segmento in [despues, antes]:
+                if not segmento:
+                    continue
+                for kw in palabras_clave:
+                    idx = re.search(rf"(?i){re.escape(kw)}", segmento)
+                    if not idx:
+                        continue
+                    base = segmento[idx.start():]
+                    base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN)\b", base, maxsplit=1)[0]
+                    direccion = limpiar_direccion(base)
+                    if direccion and re.search(r"\d", direccion):
+                        return direccion
+
+    for kw in palabras_clave:
+        idx = re.search(rf"(?i){re.escape(kw)}", texto)
+        if not idx:
+            continue
+        base = texto[idx.start():]
+        base = re.split(r"(?i)\s+(?:SE\s+NECESITA|NECESITA|INFORMO|ATASCO|AVERIA|AVERÍA|FUGA|PISO|PUERTA|ESCALERA|SERVICIO|CLIENTE|OBSERVACIONES|COMENTARIOS|DIRECCION|DIRECCIÓN)\b", base, maxsplit=1)[0]
+        direccion = limpiar_direccion(base)
+        if direccion and re.search(r"\d", direccion):
+            return direccion
+
+    return ""
+
+
+def resumen_servicio_alerta(texto):
+    direccion = extraer_direccion_servicio(texto)
+    if direccion:
+        return f"🆕 <b>Nuevo servicio</b>\n📍 <b>Dirección:</b> {direccion}"
+    texto_limpio = re.sub(r"\s+", " ", str(texto or "")).strip()
+    if len(texto_limpio) > 180:
+        texto_limpio = texto_limpio[:177] + "..."
+    return f"🆕 <b>Nuevo servicio</b>\n{texto_limpio}"
+
+
 def init_db():
     with get_db() as conn:
         conn.execute("""
@@ -124,10 +238,127 @@ def init_db():
                 fecha_caducidad TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ruta_diaria (
+                chat_id TEXT,
+                sid TEXT,
+                fecha TEXT,
+                direccion TEXT,
+                orden INTEGER,
+                completado INTEGER DEFAULT 0,
+                PRIMARY KEY (chat_id, sid, fecha)
+            )
+        """)
         columnas = [r[1] for r in conn.execute("PRAGMA table_info(seguimiento)").fetchall()]
         if "fecha_caducidad" not in columnas:
             conn.execute("ALTER TABLE seguimiento ADD COLUMN fecha_caducidad TIMESTAMP")
         conn.commit()
+
+
+def guardar_ruta_diaria(chat_id, sid, direccion, fecha=None, orden=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO ruta_diaria (chat_id, sid, fecha, direccion, orden, completado)
+            VALUES (?, ?, ?, ?, ?, 0)
+            ON CONFLICT(chat_id, sid, fecha) DO UPDATE SET
+                direccion=excluded.direccion,
+                orden=COALESCE(excluded.orden, ruta_diaria.orden),
+                completado=COALESCE(ruta_diaria.completado, 0)
+            """,
+            (str(chat_id), str(sid), fecha, direccion, orden if orden is not None else 999)
+        )
+        conn.commit()
+
+
+def obtener_ruta_diaria(chat_id, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT sid, direccion, orden, completado FROM ruta_diaria WHERE chat_id=? AND fecha=? ORDER BY orden ASC, sid ASC",
+            (str(chat_id), fecha),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def activar_ruta_diaria(chat_id, sid, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE ruta_diaria SET completado = 0 WHERE chat_id=? AND sid=? AND fecha=?",
+            (str(chat_id), str(sid), fecha),
+        )
+        conn.commit()
+
+
+def completar_ruta_diaria(chat_id, sid, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE ruta_diaria SET completado = 1 WHERE chat_id=? AND sid=? AND fecha=?",
+            (str(chat_id), str(sid), fecha),
+        )
+        conn.commit()
+
+
+def generar_ruta_dia(chat_id, servicios=None):
+    servicios = servicios or homeserve.obtener_curso()
+    rutas = []
+    for sid, texto in servicios.items():
+        direccion = extraer_direccion_servicio(texto)
+        if not direccion:
+            continue
+        guardar_ruta_diaria(chat_id, sid, direccion)
+        rutas.append((sid, direccion))
+
+    rutas_ordenadas = ordenar_ruta_servicios(rutas)
+    today = datetime.now().date().isoformat()
+    rows = obtener_ruta_diaria(chat_id, today)
+    by_sid = {row["sid"]: row for row in rows}
+
+    for i, (sid, direccion) in enumerate(rutas_ordenadas):
+        row = by_sid.get(sid)
+        if row is None or row.get("completado"):
+            continue
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE ruta_diaria SET orden = ? WHERE chat_id=? AND sid=? AND fecha=?",
+                (i, str(chat_id), str(sid), today),
+            )
+            conn.commit()
+
+    active_rows = obtener_ruta_diaria(chat_id, today)
+    active_rows = [r for r in active_rows if not r.get("completado")]
+    active_rows = sorted(active_rows, key=lambda r: (r.get("orden", 999), str(r.get("sid", ""))))
+    return active_rows
+
+
+def generar_mensaje_cita_sid(sid, fecha_hora=None):
+    try:
+        datos, _ = obtener_datos_servicio(sid)
+    except Exception:
+        return None
+
+    telefonos = datos.get("TELEFONOS", "")
+    numeros = re.findall(r"\b\d{9}\b", telefonos)
+    if not numeros:
+        return None
+
+    telefono = numeros[0]
+    dir_limpia = (datos.get("DOMICILIO", "") or "").strip()
+    pob_limpia = (datos.get("POBLACION-PROVINCIA", "") or "").strip()
+    ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
+
+    hora_actual = datetime.now().hour
+    saludo = "días" if 6 <= hora_actual < 12 else ("tardes" if 12 <= hora_actual < 21 else "noches")
+
+    base_msg = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
+    if fecha_hora:
+        return telefono, f"{base_msg}. Quedamos el {fecha_hora}."
+    return telefono, base_msg
+
+
 def guardar_usuario(chat_id):
     with get_db() as conn:
         conn.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
@@ -227,7 +458,7 @@ def botones():
             [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🔄 Refresh", "callback_data": "REFRESH"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
+            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}, {"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}],
             [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
             [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
         ]
@@ -272,26 +503,23 @@ def botones_usuarios():
 def botones_servicio(sid, texto_servicio=""):
     gmaps_url = "https://www.google.com/maps"
     waze_url = "https://waze.com"
-    
+
     if texto_servicio:
-        pob_match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\))", texto_servicio, re.IGNORECASE)
-        pob_str = pob_match.group(1) if pob_match else "VALENCIA (46020)"
-        
-        if pob_match:
-            resto = texto_servicio[pob_match.end():].strip()
-            cortes = r"(?i)\b(ES:|PL:|PT:|PISO|PUERTA|BL|ESC|Tuber[ií]a|Aver[ií]a|Da[nñ]o|El\s+asegurado|Servicio|Encargo)\b"
-            partes = re.split(cortes, resto)
-            direccion_bruta = partes[0].strip() if partes else ""
-            
-            if direccion_bruta:
-                dir_limpia = f"{direccion_bruta}, {pob_str}"
-                dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
-                dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
-                
-                if dir_limpia:
-                    query_mapa = quote_plus(dir_limpia)
-                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                    waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+        direccion = extraer_direccion_servicio(texto_servicio)
+        pob_match = re.search(r"(?i)([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s'\.\-]*?\s*\(\d{5}\))", texto_servicio)
+        pob_str = pob_match.group(1).strip() if pob_match else "VALENCIA (46020)"
+
+        if direccion:
+            dir_limpia = direccion
+            if pob_str and pob_str.lower() not in dir_limpia.lower():
+                dir_limpia = f"{direccion}, {pob_str}"
+            dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
+            dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
+
+            if dir_limpia:
+                query_mapa = quote_plus(dir_limpia)
+                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
     return {
         "inline_keyboard": [
@@ -576,8 +804,9 @@ def loop():
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
+                    alerta = resumen_servicio_alerta(txt)
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid, txt))
+                        tg_send(u, alerta, botones_servicio(sid, txt))
             
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -694,7 +923,7 @@ def webhook():
             tg_edit(chat, msg_id, respuesta, kb)
             return jsonify(ok=True)
 
-        # Búsqueda por servicio: teléfono o dirección
+        # Búsqueda por servicio: teléfono o dirección (optimizada)
         if chat in BUSCAR_STATE:
             state_info = BUSCAR_STATE.pop(chat)
             msg_id = state_info.get("msg_id") or msg_id
@@ -705,35 +934,64 @@ def webhook():
 
             qnorm = normalizar_texto(query)
             digits = re.sub(r"\D", "", query)
+            tail9 = digits[-9:] if len(digits) >= 9 else digits
+
             matches = []
-            servicios = homeserve.obtener_curso()
+            servicios = obtener_curso_cached()
 
+            # 1) Primera pasada: comprobar coincidencias en el texto resumen (rápido, sin HTTP extra)
             for sid, texto in servicios.items():
-                hay_coincidencia = False
-                valores_total = texto
-                try:
-                    datos, _ = obtener_datos_servicio(sid)
-                    valores_total = " ".join(str(v) for v in datos.values()) + " " + texto
-                    cliente = normalizar_texto(datos.get("CLIENTE", ""))
-                    domicilio = normalizar_texto(datos.get("DOMICILIO", ""))
-                    telefonos = normalizar_texto(datos.get("TELEFONOS", ""))
-                    poblacion = normalizar_texto(datos.get("POBLACION-PROVINCIA", ""))
-                    valores_extra = " ".join(filter(None, [cliente, domicilio, telefonos, poblacion]))
-                    valores_total = f"{valores_extra} {texto}"
-                except Exception:
-                    pass
-
-                if qnorm and qnorm in normalizar_texto(valores_total):
-                    hay_coincidencia = True
-                if digits and digits in re.sub(r"\D", "", valores_total):
-                    hay_coincidencia = True
-
-                if hay_coincidencia:
+                norm_texto = normalizar_texto(texto)
+                digits_texto = re.sub(r"\D", "", texto)
+                if qnorm and qnorm in norm_texto:
                     matches.append((sid, texto))
+                    continue
+                if digits and (digits in digits_texto or (tail9 and tail9 in digits_texto)):
+                    matches.append((sid, texto))
+                    continue
+
+            # Si encontramos coincidencias en resumen, usamos esas y evitamos pedir detalles
+            if not matches:
+                # 2) Segunda pasada: buscar en detalles, en paralelo limitado para acelerar
+                servicios_items = list(servicios.items())
+                max_workers = 6
+                max_detail_checks = int(os.getenv("BUSCAR_MAX_DETAIL", 60))
+                checked = 0
+
+                def check_detail(item):
+                    nonlocal checked
+                    sid, resumen = item
+                    try:
+                        datos, _ = obtener_datos_servicio(sid)
+                        checked += 1
+                        cliente = normalizar_texto(datos.get("CLIENTE", ""))
+                        domicilio = normalizar_texto(datos.get("DOMICILIO", ""))
+                        telefonos = normalizar_texto(datos.get("TELEFONOS", ""))
+                        poblacion = normalizar_texto(datos.get("POBLACION-PROVINCIA", ""))
+                        valores = " ".join(filter(None, [cliente, domicilio, telefonos, poblacion, resumen]))
+                        norm_valores = normalizar_texto(valores)
+                        digits_valores = re.sub(r"\D", "", valores)
+                        if qnorm and qnorm in norm_valores:
+                            return (sid, resumen)
+                        if digits and (digits in digits_valores or (tail9 and tail9 in digits_valores)):
+                            return (sid, resumen)
+                    except Exception:
+                        return None
+                    return None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futures = []
+                    for item in servicios_items[:max_detail_checks]:
+                        futures.append(ex.submit(check_detail, item))
+                    for fut in concurrent.futures.as_completed(futures):
+                        res = fut.result()
+                        if res:
+                            matches.append(res)
 
             if not matches:
                 tg_edit(chat, msg_id, f"❌ No se encontraron servicios para: <b>{query}</b>", botones())
                 return jsonify(ok=True)
+
             if len(matches) == 1:
                 mostrar_servicio(chat, msg_id, matches[0][0])
                 return jsonify(ok=True)
@@ -1112,6 +1370,60 @@ def webhook():
                 ]
             }
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
+
+        elif action == "RUTA_DEL_DIA":
+            servicios = homeserve.obtener_curso()
+            if not servicios:
+                tg_edit(chat, msg_id, "❌ No hay servicios para generar una ruta del día.", botones())
+                return jsonify(ok=True)
+
+            rows = generar_ruta_dia(chat, servicios)
+            if not rows:
+                tg_edit(chat, msg_id, "❌ No se han podido extraer direcciones válidas de los servicios activos.", botones())
+                return jsonify(ok=True)
+
+            texto = "🧭 <b>Ruta del día</b>\n\n"
+            kb = {"inline_keyboard": []}
+            for idx, row in enumerate(rows[:20], start=1):
+                hora = 9 + idx - 1
+                tiempo = f"{hora:02d}:00"
+                texto += f"{idx}. <b>{tiempo}</b> - {row['direccion']}\n"
+                kb["inline_keyboard"].append([
+                    {"text": f"📞 {tiempo}", "callback_data": f"RUTA_CITAR_{row['sid']}"},
+                    {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"},
+                    {"text": "🔄", "callback_data": f"RUTA_REACT_{row['sid']}"}
+                ])
+            kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+            tg_edit(chat, msg_id, texto, kb)
+
+        elif action.startswith("RUTA_CITAR_"):
+            sid = action.split("_")[-1]
+            info = generar_mensaje_cita_sid(sid)
+            if not info:
+                tg_edit(chat, msg_id, f"❌ No se pudo preparar la cita para {sid}.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+                return jsonify(ok=True)
+
+            telefono, base_msg = info
+            hora = datetime.now().strftime("%d/%m/%Y %H:%M")
+            mensaje_final = f"{base_msg}. Quedamos el {hora}."
+            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "💬 Enviar por WhatsApp", "url": whatsapp_url}],
+                    [{"text": "⬅️ Volver a ruta", "callback_data": "RUTA_DEL_DIA"}]
+                ]
+            }
+            tg_edit(chat, msg_id, f"📞 <b>Cita lista</b>\n\n<code>{mensaje_final}</code>", kb)
+
+        elif action.startswith("RUTA_CHECK_"):
+            sid = action.split("_")[-1]
+            completar_ruta_diaria(chat, sid)
+            tg_edit(chat, msg_id, f"✅ Servicio {sid} marcado como completado en la ruta del día.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+
+        elif action.startswith("RUTA_REACT_"):
+            sid = action.split("_")[-1]
+            activar_ruta_diaria(chat, sid)
+            tg_edit(chat, msg_id, f"🔄 Servicio {sid} reactivado para la ruta del día.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "USUARIOS":
             tg_edit(chat, msg_id, "👥 Usuarios", botones_usuarios())
