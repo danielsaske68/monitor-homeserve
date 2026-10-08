@@ -573,6 +573,45 @@ def validar_orden_ruta(rows):
     return {"ok": ok, "issues": issues, "hora_esperada": esperadas}
 
 
+def saludo_actual():
+    hora_actual = datetime.now().hour
+    if 6 <= hora_actual < 12:
+        return "buenos días"
+    if 12 <= hora_actual < 21:
+        return "buenas tardes"
+    return "buenas noches"
+
+
+def formatear_hora_humana(hora_texto):
+    try:
+        hora_str = str(hora_texto).strip()
+        if not hora_str:
+            return "9 am"
+        hh, mm = hora_str.split(":", 1)
+        h = int(hh)
+        m = int(mm)
+        suffix = "am" if h < 12 else "pm"
+        if h == 0:
+            h = 12
+        elif h > 12:
+            h -= 12
+        return f"{h}:{m:02d} {suffix}"
+    except Exception:
+        return str(hora_texto).strip() or "9 am"
+
+
+def construir_mensaje_cita(direccion, hora_texto, fecha_texto=None):
+    direccion = (direccion or "su domicilio").strip()
+    hora_texto = str(hora_texto or "9:00").strip()
+    fecha_texto = str(fecha_texto or "").strip()
+    hora_humana = formatear_hora_humana(hora_texto)
+    saludo = saludo_actual()
+
+    if fecha_texto:
+        return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el día {fecha_texto} a las {hora_humana}."
+    return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el día de mañana a las {hora_humana}."
+
+
 def generar_mensaje_cita_sid(sid, fecha_hora=None):
     try:
         datos, _ = obtener_datos_servicio(sid)
@@ -585,17 +624,24 @@ def generar_mensaje_cita_sid(sid, fecha_hora=None):
         return None
 
     telefono = numeros[0]
-    dir_limpia = (datos.get("DOMICILIO", "") or "").strip()
-    pob_limpia = (datos.get("POBLACION-PROVINCIA", "") or "").strip()
-    ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
+    direccion = (datos.get("DOMICILIO", "") or "").strip()
+    poblacion = (datos.get("POBLACION-PROVINCIA", "") or "").strip()
+    ubicacion_str = f"{direccion}, {poblacion}".strip(", ")
 
-    hora_actual = datetime.now().hour
-    saludo = "días" if 6 <= hora_actual < 12 else ("tardes" if 12 <= hora_actual < 21 else "noches")
-
-    base_msg = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
     if fecha_hora:
-        return telefono, f"{base_msg}. Quedamos el {fecha_hora}."
-    return telefono, base_msg
+        try:
+            dt = datetime.strptime(str(fecha_hora), "%d/%m/%Y %H:%M")
+            fecha_fmt = dt.strftime("%d/%m/%Y")
+            hora_fmt = dt.strftime("%H:%M")
+        except ValueError:
+            fecha_fmt = "mañana"
+            hora_fmt = str(fecha_hora).split()[-1] if " " in str(fecha_hora) else "9:00"
+    else:
+        fecha_fmt = "mañana"
+        hora_fmt = "09:00"
+
+    mensaje = construir_mensaje_cita(ubicacion_str, hora_fmt, fecha_fmt if fecha_fmt != "mañana" else None)
+    return telefono, mensaje
 
 
 def guardar_usuario(chat_id):
@@ -1480,9 +1526,9 @@ def webhook():
 
                 dir_limpia = domicilio.strip() if domicilio else "su domicilio"
                 pob_limpia = poblacion.strip() if poblacion else ""
-                ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
+                ubicacion_str = f"{dir_limpia}, {pob_limpia}".strip(", ")
 
-                base_mensaje = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
+                base_mensaje = f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {ubicacion_str}"
 
                 kb = {
                     "inline_keyboard": [
@@ -1514,9 +1560,9 @@ def webhook():
 
             dir_limpia = datos.get("DOMICILIO", "").strip()
             pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
+            ubicacion_str = f"{dir_limpia}, {pob_limpia}".strip(", ")
 
-            mensaje_final = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}."
+            mensaje_final = f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {ubicacion_str} para el día de mañana a las 9 am."
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
 
             kb = {
@@ -1546,9 +1592,9 @@ def webhook():
 
             dir_limpia = datos.get("DOMICILIO", "").strip()
             pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
+            ubicacion_str = f"{dir_limpia}, {pob_limpia}".strip(", ")
 
-            base_msg = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
+            base_msg = f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {ubicacion_str}"
 
             CITA_STATE[chat] = {
                 "msg_id": msg_id,
@@ -1601,7 +1647,7 @@ def webhook():
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
 
         elif action == "RUTA_DEL_DIA":
-            rows = obtener_ruta_diaria(chat, datetime.now().date().isoformat())
+            rows = [r for r in obtener_ruta_diaria(chat, datetime.now().date().isoformat()) if not r.get("completado")]
             if not rows:
                 tg_edit(
                     chat,
@@ -1622,7 +1668,7 @@ def webhook():
                 tiempo = f"{hora:02d}:00"
                 sid = str(row.get("sid", "")).strip()
                 direccion = row.get("direccion", "")
-                texto += f"{idx}. <b>{tiempo}</b> - <b>{sid}</b> - {direccion}\n"
+                texto += f"{idx}. <b>{sid}</b> - {direccion}\n"
                 kb["inline_keyboard"].append([
                     {"text": f"📞 {tiempo}", "callback_data": f"RUTA_CITAR_{row['sid']}"},
                     {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"}
@@ -1661,16 +1707,17 @@ def webhook():
 
         elif action.startswith("RUTA_CITAR_"):
             sid = action.split("_")[-1]
-            fecha_hoy = datetime.now().date().strftime("%d/%m/%Y")
+            fecha_hoy = datetime.now().date()
             with get_db() as conn:
                 row = conn.execute(
                     "SELECT orden FROM ruta_diaria WHERE chat_id=? AND sid=? AND fecha=?",
-                    (str(chat), str(sid), datetime.now().date().isoformat()),
+                    (str(chat), str(sid), fecha_hoy.isoformat()),
                 ).fetchone()
 
             orden = int((row["orden"] if row else 0) or 0)
             hora_orden = 9 + orden
-            fecha_hora = f"{fecha_hoy} {hora_orden:02d}:00"
+            fecha_cita = fecha_hoy + timedelta(days=1)
+            fecha_hora = f"{fecha_cita.strftime('%d/%m/%Y')} {hora_orden:02d}:00"
 
             info = generar_mensaje_cita_sid(sid, fecha_hora)
             if not info:
