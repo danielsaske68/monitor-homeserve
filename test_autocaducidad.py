@@ -113,6 +113,24 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertTrue(es_servicio_bloqueado("CANDADO servicio bloqueado"))
         self.assertFalse(es_servicio_bloqueado("C/Barco 1635 46024-VALENCIA"))
 
+    def test_parsear_servicios_en_texto_lee_todos_los_ids(self):
+        from main import parsear_servicios_texto
+
+        texto = (
+            "16033015|C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA\n"
+            "16029364|C FILOMENA+BERNET, 2 , BAJ 2 46138-RAFELBUNYOL\n"
+            "16018743|C/CL/ VICENTE GALMES 34 1 1 46139-POBLA DE FARNALS, LA\n"
+            "15914657|AVD BLASCO IBAÑEZ 18A 1 1 A 46136 MUSEROS VALENCIA 46136-MUSEROS\n"
+            "16008003|avel-les, 46137, Valencia, España 46137\n"
+            "16020450|C GORGOS, 11 , 13 B 46021-VALENCIA"
+        )
+
+        servicios = parsear_servicios_texto(texto)
+
+        self.assertEqual(list(servicios.keys())[:3], ["16033015", "16029364", "16018743"])
+        self.assertEqual(len(servicios), 6)
+        self.assertIn("C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA", servicios["16033015"])
+
 
 if __name__ == "__main__":
     unittest.main()

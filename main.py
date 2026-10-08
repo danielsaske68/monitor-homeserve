@@ -126,6 +126,27 @@ def extraer_fecha_caducidad(texto):
         return None
 
 
+def parsear_servicios_texto(texto):
+    """Recupera todos los servicios del texto basándose en los IDs numéricos, sin depender de que cada servicio empiece en una línea nueva."""
+    if texto is None:
+        return {}
+
+    text = str(texto).replace("\r", " ").replace("\u00a0", " ")
+    matches = list(re.finditer(r"\b\d{7,8}\b", text))
+    if not matches:
+        return {}
+
+    servicios = {}
+    for idx, match in enumerate(matches):
+        sid = match.group(0)
+        fin = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        bloque = text[match.start():fin]
+        bloque = re.sub(r"\s+", " ", bloque).strip()
+        if bloque and sid not in servicios:
+            servicios[sid] = bloque
+    return servicios
+
+
 def siguiente_estado_automatico(estado):
     return "318" if estado in ("348", "320") else estado
 
@@ -830,26 +851,14 @@ class HomeServe:
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
-            servicios = {}
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    servicios[m.group(0)] = " ".join(b.split())
-            return servicios
+            return parsear_servicios_texto(text)
         except Exception as e:
             logger.warning(f"Error obtener, re-intentando login: {e}")
             if self.login():
                 try:
                     r = self.session.get(ASIGNACION_URL, timeout=15)
                     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-                    bloques = re.split(r"\n(?=\d{7,8}\s)", text)
-                    servicios = {}
-                    for b in bloques:
-                        m = re.search(r"\b\d{7,8}\b", b)
-                        if m:
-                            servicios[m.group(0)] = " ".join(b.split())
-                    return servicios
+                    return parsear_servicios_texto(text)
                 except Exception as ex:
                     logger.error(f"Error definitivo obtener: {ex}")
             return {}
@@ -859,13 +868,7 @@ class HomeServe:
             r = self.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
-            bloques = re.split(r"\n(?=\d{7,8}\s)", text)
-            servicios = {}
-            for b in bloques:
-                m = re.search(r"\b\d{7,8}\b", b)
-                if m:
-                    servicios[m.group(0)] = " ".join(b.split())
-            return servicios
+            return parsear_servicios_texto(text)
         except Exception as e:
             logger.error(f"Error obtener_curso: {e}")
             self.login()
