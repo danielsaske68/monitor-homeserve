@@ -303,6 +303,20 @@ def completar_ruta_diaria(chat_id, sid, fecha=None):
         conn.commit()
 
 
+def es_servicio_bloqueado(texto):
+    if texto is None:
+        return False
+    normalizado = normalizar_texto(str(texto)).lower()
+    tokens = [
+        "candado",
+        "bloqueado",
+        "servicio bloqueado",
+        "en tratamiento por homeserve",
+        "tratamiento por homeserve",
+    ]
+    return any(token in normalizado for token in tokens)
+
+
 def exportar_ruta_dia(chat_id, fecha=None):
     fecha = fecha or datetime.now().date().isoformat()
     rows = obtener_ruta_diaria(chat_id, fecha)
@@ -310,6 +324,8 @@ def exportar_ruta_dia(chat_id, fecha=None):
         servicios = homeserve.obtener_curso() or {}
         rutas = []
         for sid, texto in servicios.items():
+            if es_servicio_bloqueado(texto):
+                continue
             direccion = extraer_direccion_servicio(texto)
             if direccion:
                 rutas.append((sid, direccion))
@@ -407,6 +423,8 @@ def generar_ruta_dia(chat_id, servicios=None):
     servicios = servicios or homeserve.obtener_curso() or {}
     rutas = []
     for sid, texto in servicios.items():
+        if es_servicio_bloqueado(texto):
+            continue
         direccion = extraer_direccion_servicio(texto)
         if direccion:
             rutas.append((sid, direccion))

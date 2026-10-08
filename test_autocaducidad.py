@@ -106,6 +106,13 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertNotIn("En espera de Profesional", rows[0]["direccion"])
         self.assertNotIn("08:00 a 20:00", rows[0]["direccion"])
 
+    def test_export_no_incluye_servicios_en_tratamiento(self):
+        from main import es_servicio_bloqueado
+
+        self.assertTrue(es_servicio_bloqueado("En tratamiento por Homeserve"))
+        self.assertTrue(es_servicio_bloqueado("CANDADO servicio bloqueado"))
+        self.assertFalse(es_servicio_bloqueado("C/Barco 1635 46024-VALENCIA"))
+
 
 if __name__ == "__main__":
     unittest.main()
