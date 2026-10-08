@@ -338,19 +338,20 @@ def es_servicio_bloqueado(texto):
     return any(token in normalizado for token in tokens)
 
 
-def exportar_ruta_dia(chat_id, fecha=None):
+def exportar_ruta_dia(chat_id, fecha=None, refrescar=False):
     fecha = fecha or datetime.now().date().isoformat()
     rows = obtener_ruta_diaria(chat_id, fecha)
-    if not rows:
+    if refrescar or not rows:
         servicios = homeserve.obtener_curso() or {}
         rutas = []
         for sid, texto in servicios.items():
-            if es_servicio_bloqueado(texto):
-                continue
             direccion = extraer_direccion_servicio(texto)
             if direccion:
                 rutas.append((sid, direccion))
         rutas_ordenadas = ordenar_ruta_servicios(rutas)
+        with get_db() as conn:
+            conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), fecha))
+            conn.commit()
         for idx, (sid, direccion) in enumerate(rutas_ordenadas):
             guardar_ruta_diaria(chat_id, sid, direccion, fecha=fecha, orden=idx)
         rows = obtener_ruta_diaria(chat_id, fecha)
@@ -434,25 +435,22 @@ def importar_ruta_desde_texto(chat_id, texto, fecha=None):
     return count
 
 
-def generar_ruta_dia(chat_id, servicios=None):
+def generar_ruta_dia(chat_id, servicios=None, refrescar=False):
     today = datetime.now().date().isoformat()
-    rows = obtener_ruta_diaria(chat_id, today)
-    if rows:
-        active_rows = [r for r in rows if not r.get("completado")]
-        return sorted(active_rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
+    if refrescar or not servicios:
+        servicios = servicios or homeserve.obtener_curso() or {}
+        rutas = []
+        for sid, texto in servicios.items():
+            direccion = extraer_direccion_servicio(texto)
+            if direccion:
+                rutas.append((sid, direccion))
 
-    servicios = servicios or homeserve.obtener_curso() or {}
-    rutas = []
-    for sid, texto in servicios.items():
-        if es_servicio_bloqueado(texto):
-            continue
-        direccion = extraer_direccion_servicio(texto)
-        if direccion:
-            rutas.append((sid, direccion))
-
-    rutas_ordenadas = ordenar_ruta_servicios(rutas)
-    for i, (sid, direccion) in enumerate(rutas_ordenadas):
-        guardar_ruta_diaria(chat_id, sid, direccion, fecha=today, orden=i)
+        rutas_ordenadas = ordenar_ruta_servicios(rutas)
+        with get_db() as conn:
+            conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), today))
+            conn.commit()
+        for i, (sid, direccion) in enumerate(rutas_ordenadas):
+            guardar_ruta_diaria(chat_id, sid, direccion, fecha=today, orden=i)
 
     rows = obtener_ruta_diaria(chat_id, today)
     active_rows = [r for r in rows if not r.get("completado")]
@@ -1512,7 +1510,7 @@ def webhook():
                 tg_edit(chat, msg_id, "❌ No hay servicios para generar una ruta del día.", botones())
                 return jsonify(ok=True)
 
-            rows = generar_ruta_dia(chat, servicios)
+            rows = generar_ruta_dia(chat, servicios, refrescar=True)
             if not rows:
                 tg_edit(chat, msg_id, "❌ No se han podido extraer direcciones válidas de los servicios activos.", botones())
                 return jsonify(ok=True)
@@ -1536,7 +1534,7 @@ def webhook():
             tg_edit(chat, msg_id, texto, kb)
 
         elif action == "EXPORTAR_RUTA":
-            texto = exportar_ruta_dia(chat)
+            texto = exportar_ruta_dia(chat, refrescar=True)
             if not texto:
                 tg_edit(chat, msg_id, "❌ No hay direcciones para exportar.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
                 return jsonify(ok=True)

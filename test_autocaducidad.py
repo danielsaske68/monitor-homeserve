@@ -131,6 +131,20 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(len(servicios), 6)
         self.assertIn("C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA", servicios["16033015"])
 
+    def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
+        from main import generar_ruta_dia
+
+        chat_id = "ruta_refresco"
+        servicios = {
+            "16039424": "16039424 C/ LARGO 45 46003-VALENCIA",
+            "16033015": "16033015 C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA",
+            "16029364": "16029364 C FILOMENA+BERNET, 2 , BAJ 2 46138-RAFELBUNYOL",
+        }
+
+        rows = generar_ruta_dia(chat_id, servicios, refrescar=True)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({row["sid"] for row in rows}, {"16039424", "16033015", "16029364"})
+
 
 if __name__ == "__main__":
     unittest.main()
