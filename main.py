@@ -1660,15 +1660,12 @@ def webhook():
                 )
                 return jsonify(ok=True)
 
-            texto = "🧭 <b>Ruta del día</b>\n\n"
+            texto = "🧭 <b>Ruta del día</b>"
             kb = {"inline_keyboard": []}
             for idx, row in enumerate(rows[:20], start=1):
                 orden = int(row.get("orden", idx - 1) or 0)
                 hora = 9 + orden
                 tiempo = f"{hora:02d}:00"
-                sid = str(row.get("sid", "")).strip()
-                direccion = row.get("direccion", "")
-                texto += f"{idx}. <b>{sid}</b> - {direccion}\n"
                 kb["inline_keyboard"].append([
                     {"text": f"📞 {tiempo}", "callback_data": f"RUTA_CITAR_{row['sid']}"},
                     {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"}
