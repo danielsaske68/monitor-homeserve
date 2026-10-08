@@ -1507,15 +1507,17 @@ def webhook():
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
 
         elif action == "RUTA_DEL_DIA":
-            rows = generar_ruta_dia(chat)
+            rows = obtener_ruta_diaria(chat, datetime.now().date().isoformat())
             if not rows:
-                servicios = homeserve.obtener_curso()
-                if not servicios:
-                    tg_edit(chat, msg_id, "❌ No hay servicios para generar una ruta del día.", botones())
-                    return jsonify(ok=True)
-                rows = generar_ruta_dia(chat, servicios, refrescar=True)
-            if not rows:
-                tg_edit(chat, msg_id, "❌ No se han podido extraer direcciones válidas de los servicios activos.", botones())
+                tg_edit(
+                    chat,
+                    msg_id,
+                    "🧭 <b>Ruta del día</b>\n\nPulsa <b>Exportar</b> para sacar los servicios activos de la web y luego importa la lista ordenada.",
+                    {"inline_keyboard": [
+                        [{"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"}, {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}],
+                        [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+                    ]}
+                )
                 return jsonify(ok=True)
 
             texto = "🧭 <b>Ruta del día</b>\n\n"
@@ -1539,7 +1541,14 @@ def webhook():
             tg_edit(chat, msg_id, texto, kb)
 
         elif action == "EXPORTAR_RUTA":
-            texto = exportar_ruta_dia(chat, refrescar=True)
+            servicios = homeserve.obtener_curso() or {}
+            rutas = []
+            for sid, texto in servicios.items():
+                direccion = extraer_direccion_servicio(texto)
+                if direccion:
+                    rutas.append((sid, direccion))
+            rutas_ordenadas = ordenar_ruta_servicios(rutas)
+            texto = "\n".join(f"{sid}|{direccion}" for sid, direccion in rutas_ordenadas)
             if not texto:
                 tg_edit(chat, msg_id, "❌ No hay direcciones para exportar.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
                 return jsonify(ok=True)

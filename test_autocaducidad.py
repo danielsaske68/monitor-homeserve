@@ -1,7 +1,7 @@
 import base64
-import base64
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 
 from main import (
     calcular_fecha_caducidad,
@@ -132,7 +132,7 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertIn("C/CL. GLORIES VALENCIANES 8 4 10 46133-MELIANA", servicios["16033015"])
 
     def test_generar_ruta_recarga_desde_web_y_no_filtra_por_bloqueo(self):
-        from main import generar_ruta_dia, guardar_ruta_diaria
+        from main import generar_ruta_dia, guardar_ruta_diaria, exportar_ruta_dia
 
         chat_id = "ruta_refresco"
         servicios = {
@@ -146,8 +146,11 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual({row["sid"] for row in rows}, {"16039424", "16033015", "16029364"})
 
-        existe_vieja = any(row["sid"] == "9999999" for row in generar_ruta_dia(chat_id))
-        self.assertFalse(existe_vieja)
+        with patch("main.homeserve.obtener_curso", return_value=servicios):
+            text = exportar_ruta_dia(chat_id, refrescar=True)
+        self.assertIn("16039424|", text)
+        self.assertIn("16033015|", text)
+        self.assertNotIn("9999999|", text)
 
 
 if __name__ == "__main__":
