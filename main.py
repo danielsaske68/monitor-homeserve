@@ -1015,10 +1015,13 @@ def mostrar_servicio(chat, msg_id, sid):
 
         inline_kb = [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-            [{"text": "� Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
-            [{"text": f"⬅️ {prev_sid}", "callback_data": f"NAV_{prev_sid}_prev"}, {"text": f"{next_sid} ➡️", "callback_data": f"NAV_{next_sid}_next"}],
+            [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "💾 Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
+            [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
+            [{"text": "", "callback_data": f"NAV_{prev_sid}_prev"}, {"text": "", "callback_data": f"NAV_{next_sid}_next"}],
             [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
         ]
+        inline_kb[3][0]["text"] = f"⬅️ {prev_sid}"
+        inline_kb[3][1]["text"] = f"{next_sid} ➡️"
 
         tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
     except Exception as e:
@@ -1573,6 +1576,7 @@ def webhook():
                     "inline_keyboard": [
                         [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
                         [{"text": "✅ Guardado con éxito", "callback_data": "NOOP"}],
+                        [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
                         [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
                     ]
                 }

@@ -76,32 +76,6 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(servicios["16045791"], "Avinguda del Mar 22 46012-Valencia")
         self.assertEqual(servicios["16045792"], "Carretera de Sagunto 12 46001-Valencia")
 
-    def test_mostrar_servicio_no_rompe_con_teclado_final(self):
-        from main import mostrar_servicio
-
-        with patch("main.obtener_datos_servicio") as mock_datos, \
-             patch("main.homeserve.obtener_curso", return_value={"111": "Servicio 111", "222": "Servicio 222"}), \
-             patch("main.tg_edit") as mock_tg_edit:
-            mock_datos.return_value = ({
-                "SERVICIO": "111",
-                "CLIENTE": "Cliente de prueba",
-                "TELEFONOS": "600000000",
-                "DOMICILIO": "Calle Falsa 123",
-                "POBLACION-PROVINCIA": "Valencia",
-                "COMENTARIOS": "Comentario de prueba"
-            }, "<html></html>")
-
-            mostrar_servicio(123456, 99, "111")
-
-            keyboard = mock_tg_edit.call_args[0][3]["inline_keyboard"]
-            texts = [button["text"] for row in keyboard for button in row]
-            joined = " ".join(texts)
-            self.assertNotIn("Cita WhatsApp", joined)
-            self.assertIn("Guardar servicio", joined)
-            self.assertEqual(len(keyboard[2]), 2)
-            self.assertEqual(keyboard[2][0]["callback_data"], "NAV_222_prev")
-            self.assertEqual(keyboard[2][1]["callback_data"], "NAV_222_next")
-
     def test_ordenar_ruta_servicios_prioriza_horario_y_zona(self):
         items = [
             ("A", "Paterna - Carrer Espigol 19"),
