@@ -172,13 +172,35 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertNotIn("Para", etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1)))
 
     def test_construir_mensaje_cita_usa_misma_etiqueta_de_fecha(self):
-        from main import construir_mensaje_cita, etiqueta_fecha_ruta
+        from main import construir_mensaje_cita
 
-        fecha = datetime.now().date() + timedelta(days=1)
-        texto = construir_mensaje_cita("Calle Falsa 123", "09:00", etiqueta_fecha_ruta(fecha))
+        texto = construir_mensaje_cita("Calle Falsa 123", "09:00", "Hoy")
 
-        self.assertIn(f"para el {etiqueta_fecha_ruta(fecha)}", texto)
+        self.assertIn("para Hoy", texto)
+        self.assertNotIn("para el", texto.lower())
         self.assertNotIn("para el día", texto.lower())
+
+    def test_webhook_cita_sin_articulo_antes_de_hoy(self):
+        from main import app, CITA_STATE
+
+        CITA_STATE[999] = {
+            "msg_id": 7,
+            "sid": "160001",
+            "telefono": "600000000",
+            "base_msg": "Hola buenas tardes, soy el fontanero del seguro. Le llamo por el servicio que tiene en Calle Falsa 123"
+        }
+
+        with patch("main.tg_send") as mock_tg_send:
+            response = app.test_client().post(
+                "/telegram_webhook",
+                json={"message": {"chat": {"id": 999}, "message_id": 55, "text": "Hoy"}},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        sent_text = mock_tg_send.call_args[0][1]
+        self.assertIn("para Hoy", sent_text)
+        self.assertNotIn("para el", sent_text.lower())
+        CITA_STATE.pop(999, None)
 
     def test_mover_ruta_fecha_no_borra_si_es_la_misma_fecha(self):
         from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha
