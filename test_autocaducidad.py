@@ -202,6 +202,20 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(len(rows_origen), 2)
         self.assertEqual(len(rows_destino), 2)
 
+    def test_ajustar_fecha_misma_fecha_actualiza_estado_sin_error(self):
+        from main import RUTA_FECHA_STATE, actualizar_fecha_ruta_estado, guardar_ruta_diaria
+
+        chat_id = "ruta_ajuste_misma_fecha"
+        fecha = datetime.now().date().isoformat()
+        RUTA_FECHA_STATE[chat_id] = fecha
+        guardar_ruta_diaria(chat_id, "160001", "Calle A 1", fecha=fecha, orden=0)
+
+        resultado = actualizar_fecha_ruta_estado(chat_id, fecha)
+
+        self.assertTrue(resultado["updated"])
+        self.assertTrue(resultado["same_date"])
+        self.assertEqual(RUTA_FECHA_STATE[chat_id], fecha)
+
     def test_export_no_incluye_servicios_en_tratamiento(self):
         from main import es_servicio_bloqueado
 

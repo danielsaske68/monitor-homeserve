@@ -445,6 +445,22 @@ def mover_ruta_fecha(chat_id, fecha_origen, fecha_destino):
     return len(rows)
 
 
+def actualizar_fecha_ruta_estado(chat_id, fecha_destino, fecha_origen=None):
+    fecha_origen = fecha_origen or RUTA_FECHA_STATE.get(chat_id, datetime.now().date().isoformat())
+    fecha_destino = fecha_destino.isoformat() if hasattr(fecha_destino, "isoformat") else str(fecha_destino)
+
+    if fecha_origen == fecha_destino:
+        RUTA_FECHA_STATE[chat_id] = fecha_destino
+        return {"updated": True, "same_date": True, "moved": 0}
+
+    moved = mover_ruta_fecha(chat_id, fecha_origen, fecha_destino)
+    if moved:
+        RUTA_FECHA_STATE[chat_id] = fecha_destino
+        return {"updated": True, "same_date": False, "moved": moved}
+
+    return {"updated": False, "same_date": False, "moved": 0}
+
+
 def activar_ruta_diaria(chat_id, sid, fecha=None):
     fecha = fecha or datetime.now().date().isoformat()
     with get_db() as conn:
@@ -1364,9 +1380,8 @@ def webhook():
 
             fecha_destino = fecha_obj.isoformat()
             fecha_label = formatear_fecha_ruta(fecha_obj)
-            moved = mover_ruta_fecha(chat, fecha_origen, fecha_destino)
-            if moved:
-                RUTA_FECHA_STATE[chat] = fecha_destino
+            resultado = actualizar_fecha_ruta_estado(chat, fecha_destino, fecha_origen)
+            if resultado["updated"]:
                 tg_edit(chat, state_info["msg_id"], f"✅ Ruta ajustada para el {fecha_label}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, state_info["msg_id"], "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
@@ -1794,9 +1809,8 @@ def webhook():
             fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
             fecha_obj = datetime.now().date()
             fecha_destino = fecha_obj.isoformat()
-            moved = mover_ruta_fecha(chat, fecha_origen, fecha_destino)
-            if moved:
-                RUTA_FECHA_STATE[chat] = fecha_destino
+            resultado = actualizar_fecha_ruta_estado(chat, fecha_destino, fecha_origen)
+            if resultado["updated"]:
                 tg_edit(chat, msg_id, "✅ Ruta ajustada para hoy. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
@@ -1805,9 +1819,8 @@ def webhook():
             fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
             fecha_obj = datetime.now().date() + timedelta(days=1)
             fecha_destino = fecha_obj.isoformat()
-            moved = mover_ruta_fecha(chat, fecha_origen, fecha_destino)
-            if moved:
-                RUTA_FECHA_STATE[chat] = fecha_destino
+            resultado = actualizar_fecha_ruta_estado(chat, fecha_destino, fecha_origen)
+            if resultado["updated"]:
                 tg_edit(chat, msg_id, f"✅ Ruta ajustada para el {formatear_fecha_ruta(fecha_obj)}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
