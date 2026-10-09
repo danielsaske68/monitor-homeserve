@@ -1,6 +1,6 @@
 import base64
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from main import (
@@ -164,6 +164,12 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(rows[0]["sid"], "16016046")
         self.assertTrue(rows[0]["direccion"].startswith("Carrer INGENIERO JOAQUIN BENLLOCH 27"))
         self.assertNotIn("16016046", rows[0]["direccion"])
+
+    def test_etiqueta_ruta_muestra_hoy_o_dia_siguiente(self):
+        from main import etiqueta_fecha_ruta
+
+        self.assertEqual(etiqueta_fecha_ruta(datetime.now().date()), "Para hoy")
+        self.assertTrue(etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1)).startswith("Para el "))
 
     def test_export_no_incluye_servicios_en_tratamiento(self):
         from main import es_servicio_bloqueado

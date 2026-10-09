@@ -386,12 +386,25 @@ def formatear_fecha_ruta(fecha=None):
     return fecha.strftime("%d/%b").lower()
 
 
+def etiqueta_fecha_ruta(fecha=None):
+    if fecha is None:
+        fecha = datetime.now().date()
+    if isinstance(fecha, str):
+        fecha = parsear_fecha_ruta(fecha)
+    hoy = datetime.now().date()
+    if fecha == hoy:
+        return "Para hoy"
+    return f"Para el {formatear_fecha_ruta(fecha)}"
+
+
 def parsear_fecha_ruta(texto):
     valor = (texto or "").strip()
     if not valor:
         return datetime.now().date() + timedelta(days=1)
 
     clave = valor.lower()
+    if clave in {"hoy", "today", "actual", "current"}:
+        return datetime.now().date()
     if clave in {"mañana", "dia siguiente", "día siguiente", "siguiente", "next"}:
         return datetime.now().date() + timedelta(days=1)
 
@@ -1728,7 +1741,7 @@ def webhook():
         elif action == "RUTA_DEL_DIA":
             fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
             rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
-            fecha_label = formatear_fecha_ruta(fecha_actual)
+            fecha_label = etiqueta_fecha_ruta(fecha_actual)
 
             if not rows:
                 tg_edit(
@@ -1768,11 +1781,23 @@ def webhook():
 
         elif action == "AJUSTAR_RUTA":
             AJUSTAR_RUTA_STATE[chat] = {"msg_id": msg_id}
-            tg_edit(chat, msg_id, "📅 Ajusta la fecha de la ruta.\n\nPuedes escribir: <code>15/10</code>, <code>15/10/2026</code> o <code>mañana</code>\n\nLa hora se mantiene por defecto según el sistema.", {
+            tg_edit(chat, msg_id, "📅 Ajusta la fecha de la ruta.\n\nPuedes escribir: <code>15/10</code>, <code>15/10/2026</code>, <code>hoy</code> o <code>mañana</code>\n\nLa hora se mantiene por defecto según el sistema.", {
                 "inline_keyboard": [
-                    [{"text": "📅 Mañana", "callback_data": "AJUSTAR_RUTA_MANANA"}, {"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]
+                    [{"text": "📅 Hoy", "callback_data": "AJUSTAR_RUTA_HOY"}, {"text": "📅 Mañana", "callback_data": "AJUSTAR_RUTA_MANANA"}],
+                    [{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]
                 ]
             })
+
+        elif action == "AJUSTAR_RUTA_HOY":
+            fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_obj = datetime.now().date()
+            fecha_destino = fecha_obj.isoformat()
+            moved = mover_ruta_fecha(chat, fecha_origen, fecha_destino)
+            if moved:
+                RUTA_FECHA_STATE[chat] = fecha_destino
+                tg_edit(chat, msg_id, "✅ Ruta ajustada para hoy. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
+            else:
+                tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "AJUSTAR_RUTA_MANANA":
             fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
