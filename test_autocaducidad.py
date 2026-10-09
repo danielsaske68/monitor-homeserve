@@ -171,6 +171,21 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(etiqueta_fecha_ruta(datetime.now().date()), "Hoy")
         self.assertNotIn("Para", etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1)))
 
+    def test_generar_mensaje_cita_sid_usa_fecha_activa_ruta(self):
+        from unittest.mock import patch
+        from main import generar_mensaje_cita_sid, etiqueta_fecha_ruta
+
+        fecha = datetime.now().date() + timedelta(days=1)
+        with patch("main.obtener_datos_servicio", return_value=({
+            "TELEFONOS": "600123456",
+            "DOMICILIO": "Calle Falsa 123",
+            "POBLACION-PROVINCIA": "Valencia",
+        }, None)):
+            telefono, mensaje = generar_mensaje_cita_sid("16000001", fecha.strftime("%d/%m/%Y") + " 09:00")
+
+        self.assertEqual(telefono, "600123456")
+        self.assertIn(f"para el {etiqueta_fecha_ruta(fecha)}", mensaje.lower())
+
     def test_mover_ruta_fecha_no_borra_si_es_la_misma_fecha(self):
         from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha
 
