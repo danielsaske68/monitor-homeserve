@@ -687,8 +687,11 @@ def construir_mensaje_cita(direccion, hora_texto, fecha_texto=None):
     saludo = saludo_actual()
 
     if fecha_texto:
-        return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el día {fecha_texto} a las {hora_humana}."
-    return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el día de mañana a las {hora_humana}."
+        fecha_texto = fecha_texto.strip()
+        if fecha_texto.lower() == "hoy":
+            fecha_texto = "Hoy"
+        return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el {fecha_texto} a las {hora_humana}."
+    return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el {etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))} a las {hora_humana}."
 
 
 def generar_mensaje_cita_sid(sid, fecha_hora=None):
@@ -710,16 +713,16 @@ def generar_mensaje_cita_sid(sid, fecha_hora=None):
     if fecha_hora:
         try:
             dt = datetime.strptime(str(fecha_hora), "%d/%m/%Y %H:%M")
-            fecha_fmt = dt.strftime("%d/%m/%Y")
+            fecha_fmt = etiqueta_fecha_ruta(dt.date())
             hora_fmt = dt.strftime("%H:%M")
         except ValueError:
-            fecha_fmt = "mañana"
+            fecha_fmt = etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))
             hora_fmt = str(fecha_hora).split()[-1] if " " in str(fecha_hora) else "9:00"
     else:
-        fecha_fmt = "mañana"
+        fecha_fmt = etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))
         hora_fmt = "09:00"
 
-    mensaje = construir_mensaje_cita(ubicacion_str, hora_fmt, fecha_fmt if fecha_fmt != "mañana" else None)
+    mensaje = construir_mensaje_cita(ubicacion_str, hora_fmt, fecha_fmt)
     return telefono, mensaje
 
 
@@ -1811,7 +1814,7 @@ def webhook():
             fecha_destino = fecha_obj.isoformat()
             resultado = actualizar_fecha_ruta_estado(chat, fecha_destino, fecha_origen)
             if resultado["updated"]:
-                tg_edit(chat, msg_id, "✅ Ruta ajustada para hoy. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
+                tg_edit(chat, msg_id, f"✅ Ruta ajustada para {etiqueta_fecha_ruta(fecha_obj)}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
@@ -1821,7 +1824,7 @@ def webhook():
             fecha_destino = fecha_obj.isoformat()
             resultado = actualizar_fecha_ruta_estado(chat, fecha_destino, fecha_origen)
             if resultado["updated"]:
-                tg_edit(chat, msg_id, f"✅ Ruta ajustada para el {formatear_fecha_ruta(fecha_obj)}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
+                tg_edit(chat, msg_id, f"✅ Ruta ajustada para {etiqueta_fecha_ruta(fecha_obj)}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
