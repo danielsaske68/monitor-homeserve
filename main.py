@@ -386,12 +386,29 @@ def formatear_fecha_ruta(fecha=None):
     return fecha.strftime("%d/%b").lower()
 
 
+def etiqueta_fecha_ruta(fecha=None):
+    return f"para el {formatear_fecha_ruta(fecha)}"
+
+
+def fecha_ruta_predeterminada():
+    return (datetime.now().date() + timedelta(days=1)).isoformat()
+
+
+def fecha_ruta_activa(chat_id):
+    fecha = RUTA_FECHA_STATE.get(chat_id)
+    if fecha:
+        return fecha
+    return fecha_ruta_predeterminada()
+
+
 def parsear_fecha_ruta(texto):
     valor = (texto or "").strip()
     if not valor:
         return datetime.now().date() + timedelta(days=1)
 
     clave = valor.lower()
+    if clave in {"hoy", "today", "actual", "current"}:
+        return datetime.now().date()
     if clave in {"mañana", "dia siguiente", "día siguiente", "siguiente", "next"}:
         return datetime.now().date() + timedelta(days=1)
 
@@ -679,13 +696,13 @@ def generar_mensaje_cita_sid(sid, fecha_hora=None):
     if fecha_hora:
         try:
             dt = datetime.strptime(str(fecha_hora), "%d/%m/%Y %H:%M")
-            fecha_fmt = dt.strftime("%d/%m/%Y")
+            fecha_fmt = dt.strftime("%d/%b").lower()
             hora_fmt = dt.strftime("%H:%M")
         except ValueError:
             fecha_fmt = "mañana"
             hora_fmt = str(fecha_hora).split()[-1] if " " in str(fecha_hora) else "9:00"
     else:
-        fecha_fmt = "mañana"
+        fecha_fmt = (datetime.now().date() + timedelta(days=1)).strftime("%d/%b").lower()
         hora_fmt = "09:00"
 
     mensaje = construir_mensaje_cita(ubicacion_str, hora_fmt, fecha_fmt if fecha_fmt != "mañana" else None)
@@ -1331,7 +1348,7 @@ def webhook():
             msg_edit = state_info["msg_id"]
             count = importar_ruta_desde_texto(chat, text)
             if count:
-                RUTA_FECHA_STATE[chat] = datetime.now().date().isoformat()
+                RUTA_FECHA_STATE[chat] = fecha_ruta_predeterminada()
                 tg_edit(chat, msg_edit, f"✅ Ruta importada correctamente ({count} servicios)", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, msg_edit, "❌ No se pudieron leer direcciones válidas. Reenvía una lista con una dirección por línea.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
@@ -1726,9 +1743,9 @@ def webhook():
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
 
         elif action == "RUTA_DEL_DIA":
-            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_actual = fecha_ruta_activa(chat)
             rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
-            fecha_label = formatear_fecha_ruta(fecha_actual)
+            fecha_label = etiqueta_fecha_ruta(fecha_actual)
 
             if not rows:
                 tg_edit(
@@ -1762,17 +1779,29 @@ def webhook():
             tg_edit(chat, msg_id, texto, kb)
 
         elif action == "LIMPIAR_RUTA":
-            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_actual = fecha_ruta_activa(chat)
             deleted = limpiar_ruta_dia(chat, fecha_actual)
             tg_edit(chat, msg_id, f"🧹 Ruta del día borrada. {deleted} servicios eliminados.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]]})
 
         elif action == "AJUSTAR_RUTA":
             AJUSTAR_RUTA_STATE[chat] = {"msg_id": msg_id}
-            tg_edit(chat, msg_id, "📅 Ajusta la fecha de la ruta.\n\nPuedes escribir: <code>15/10</code>, <code>15/10/2026</code> o <code>mañana</code>\n\nLa hora se mantiene por defecto según el sistema.", {
+            tg_edit(chat, msg_id, "📅 Ajusta la fecha de la ruta.\n\nPuedes escribir: <code>15/10</code>, <code>15/10/2026</code>, <code>hoy</code> o <code>mañana</code>\n\nLa hora se mantiene por defecto según el sistema.", {
                 "inline_keyboard": [
-                    [{"text": "📅 Mañana", "callback_data": "AJUSTAR_RUTA_MANANA"}, {"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]
+                    [{"text": "📅 Hoy", "callback_data": "AJUSTAR_RUTA_HOY"}, {"text": "📅 Mañana", "callback_data": "AJUSTAR_RUTA_MANANA"}],
+                    [{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]
                 ]
             })
+
+        elif action == "AJUSTAR_RUTA_HOY":
+            fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_obj = datetime.now().date()
+            fecha_destino = fecha_obj.isoformat()
+            moved = mover_ruta_fecha(chat, fecha_origen, fecha_destino)
+            if moved:
+                RUTA_FECHA_STATE[chat] = fecha_destino
+                tg_edit(chat, msg_id, f"✅ Ruta ajustada para el {formatear_fecha_ruta(fecha_obj)}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
+            else:
+                tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "AJUSTAR_RUTA_MANANA":
             fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
@@ -1805,8 +1834,8 @@ def webhook():
 
         elif action.startswith("RUTA_CITAR_"):
             sid = action.split("_")[-1]
-            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
-            fecha_ruta = datetime.strptime(fecha_actual, "%Y-%m-%d").date()
+            fecha_actual = fecha_ruta_activa(chat)
+            fecha_ruta = datetime.strptime(fecha_actual, "%Y-%m-%d").date() + timedelta(days=1)
             with get_db() as conn:
                 row = conn.execute(
                     "SELECT orden FROM ruta_diaria WHERE chat_id=? AND sid=? AND fecha=?",
@@ -1834,13 +1863,13 @@ def webhook():
 
         elif action.startswith("RUTA_CHECK_"):
             sid = action.split("_")[-1]
-            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_actual = fecha_ruta_activa(chat)
             completar_ruta_diaria(chat, sid, fecha=fecha_actual)
             tg_edit(chat, msg_id, f"✅ Servicio {sid} marcado como completado en la ruta del día.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action.startswith("RUTA_REACT_"):
             sid = action.split("_")[-1]
-            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_actual = fecha_ruta_activa(chat)
             activar_ruta_diaria(chat, sid, fecha=fecha_actual)
             tg_edit(chat, msg_id, f"🔄 Servicio {sid} reactivado para la ruta del día.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
