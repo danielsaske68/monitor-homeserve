@@ -775,6 +775,16 @@ def tg_edit(chat, msg_id, text, markup=None):
     except Exception as e:
         logger.error(f"Error tg_edit: {e}")
 
+
+def tg_delete_message(chat, msg_id):
+    if msg_id is None:
+        return
+    try:
+        tg_session.post(f"{TELEGRAM_API}/deleteMessage", json={"chat_id": chat, "message_id": msg_id}, timeout=5)
+    except Exception as e:
+        logger.error(f"Error tg_delete_message: {e}")
+
+
 def tg_answer(callback_id):
     try:
         tg_session.post(f"{TELEGRAM_API}/answerCallbackQuery", json={"callback_query_id": callback_id}, timeout=5)
@@ -1317,13 +1327,15 @@ def webhook():
             return jsonify(ok=True)
 
         if chat in IMPORTAR_STATE:
-            msg_edit = IMPORTAR_STATE.pop(chat)["msg_id"]
+            state_info = IMPORTAR_STATE.pop(chat)
+            msg_edit = state_info["msg_id"]
             count = importar_ruta_desde_texto(chat, text)
             if count:
                 RUTA_FECHA_STATE[chat] = datetime.now().date().isoformat()
                 tg_edit(chat, msg_edit, f"✅ Ruta importada correctamente ({count} servicios)", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, msg_edit, "❌ No se pudieron leer direcciones válidas. Reenvía una lista con una dirección por línea.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+            tg_delete_message(chat, msg_id)
             return jsonify(ok=True)
 
         if chat in AJUSTAR_RUTA_STATE:
@@ -1332,6 +1344,7 @@ def webhook():
             fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
             if not fecha_obj:
                 tg_edit(chat, state_info["msg_id"], "❌ Fecha no válida. Ejemplos: 15/10, 15/10/2026 o 'mañana'.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+                tg_delete_message(chat, msg_id)
                 return jsonify(ok=True)
 
             fecha_destino = fecha_obj.isoformat()
@@ -1342,6 +1355,7 @@ def webhook():
                 tg_edit(chat, state_info["msg_id"], f"✅ Ruta ajustada para el {fecha_label}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, state_info["msg_id"], "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+            tg_delete_message(chat, msg_id)
             return jsonify(ok=True)
 
         if chat in SERV_STATE:
@@ -1754,7 +1768,22 @@ def webhook():
 
         elif action == "AJUSTAR_RUTA":
             AJUSTAR_RUTA_STATE[chat] = {"msg_id": msg_id}
-            tg_edit(chat, msg_id, "📅 Ajusta la fecha de la ruta.\n\nPuedes escribir: <code>15/10</code>, <code>15/10/2026</code> o <code>mañana</code>\n\nLa hora se mantiene por defecto según el sistema.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+            tg_edit(chat, msg_id, "📅 Ajusta la fecha de la ruta.\n\nPuedes escribir: <code>15/10</code>, <code>15/10/2026</code> o <code>mañana</code>\n\nLa hora se mantiene por defecto según el sistema.", {
+                "inline_keyboard": [
+                    [{"text": "📅 Mañana", "callback_data": "AJUSTAR_RUTA_MANANA"}, {"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]
+                ]
+            })
+
+        elif action == "AJUSTAR_RUTA_MANANA":
+            fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_obj = datetime.now().date() + timedelta(days=1)
+            fecha_destino = fecha_obj.isoformat()
+            moved = mover_ruta_fecha(chat, fecha_origen, fecha_destino)
+            if moved:
+                RUTA_FECHA_STATE[chat] = fecha_destino
+                tg_edit(chat, msg_id, f"✅ Ruta ajustada para el {formatear_fecha_ruta(fecha_obj)}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
+            else:
+                tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "EXPORTAR_RUTA":
             servicios = homeserve.obtener_curso() or {}
