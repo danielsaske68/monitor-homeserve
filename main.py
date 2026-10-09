@@ -68,44 +68,6 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-
-def parse_datetime(value):
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(str(value), fmt)
-        except ValueError:
-            continue
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return datetime.now()
-
-
-def calcular_fecha_caducidad(fecha_estado):
-    fecha = fecha_estado.date() + timedelta(days=3)
-    while fecha.weekday() >= 5:
-        fecha += timedelta(days=1)
-    return fecha
-
-
-def extraer_fecha_caducidad(texto):
-    fechas = re.findall(r"\b\d{2}/\d{2}/\d{4}\b", texto or "")
-    if not fechas:
-        return None
-    try:
-        return max(datetime.strptime(f, "%d/%m/%Y").date() for f in fechas)
-    except ValueError:
-        return None
-
-
-def siguiente_estado_automatico(estado):
-    return "318" if estado in ("348", "320") else estado
-
-
 def init_db():
     with get_db() as conn:
         conn.execute("""
@@ -118,14 +80,11 @@ def init_db():
                 sid TEXT PRIMARY KEY,
                 estado TEXT,
                 fecha_cambio TIMESTAMP,
-                ultimo_aviso TIMESTAMP,
-                fecha_caducidad TIMESTAMP
+                ultimo_aviso TIMESTAMP
             )
         """)
-        columnas = [r[1] for r in conn.execute("PRAGMA table_info(seguimiento)").fetchall()]
-        if "fecha_caducidad" not in columnas:
-            conn.execute("ALTER TABLE seguimiento ADD COLUMN fecha_caducidad TIMESTAMP")
         conn.commit()
+
 def guardar_usuario(chat_id):
     with get_db() as conn:
         conn.execute("INSERT OR IGNORE INTO usuarios (chat_id) VALUES (?)", (str(chat_id),))
@@ -141,19 +100,17 @@ def eliminar_usuario(chat_id):
         conn.execute("DELETE FROM usuarios WHERE chat_id=?", (str(chat_id),))
         conn.commit()
 
-def registrar_seguimiento(sid, estado, fecha_caducidad=None):
+def registrar_seguimiento(sid, estado):
     with get_db() as conn:
         ahora = datetime.now()
-        fecha_cad = fecha_caducidad or calcular_fecha_caducidad(ahora)
         conn.execute("""
-            INSERT INTO seguimiento (sid, estado, fecha_cambio, ultimo_aviso, fecha_caducidad)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO seguimiento (sid, estado, fecha_cambio, ultimo_aviso)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(sid) DO UPDATE SET
                 estado=excluded.estado,
                 fecha_cambio=excluded.fecha_cambio,
-                ultimo_aviso=excluded.ultimo_aviso,
-                fecha_caducidad=excluded.fecha_caducidad
-        """, (sid, estado, ahora, ahora, fecha_cad))
+                ultimo_aviso=excluded.ultimo_aviso
+        """, (sid, estado, ahora, ahora))
         conn.commit()
 
 init_db()
@@ -231,23 +188,8 @@ def botones():
         ]
     }
 
-
-def botones_todos_estados():
+def botones_num_serv():
     return {
-        "inline_keyboard": [
-            [
-                {"text": "🔴 Todos: cliente", "callback_data": "TODOS_348"},
-                {"text": "🟢 Todos: confirmación", "callback_data": "TODOS_318"}
-            ],
-            [
-                {"text": "🟠 Todos: otro gremio", "callback_data": "TODOS_320"}
-            ],
-            [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
-        ]
-    }
-
-
-def botones_num_serv():    return {
         "inline_keyboard": [
             [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
             [{"text": "🗑 Eliminar archivo", "callback_data": "DEL_SERV"}],
@@ -313,42 +255,13 @@ def botones_estado(sid):
         ]
     }
 
-def formato_lista_servicio(sid, texto=""):
-    fecha = extraer_fecha_caducidad(texto)
-    if fecha:
-        return f"👁 {sid} | Cad. {fecha.strftime('%d/%m/%Y')}"
-    return f"👁 {sid}"
-
-
-def formato_lista_cambio(sid, texto=""):
-    fecha = extraer_fecha_caducidad(texto)
-    if fecha:
-        return f"🛠 {sid} | Cad. {fecha.strftime('%d/%m/%Y')}"
-    return f"🛠 {sid}"
-
-
 def lista_curso(servicios):
-    botones_lista = [
-        [{"text": formato_lista_servicio(sid, texto), "callback_data": f"SEL_{sid}"}]
-        for sid, texto in servicios.items()
-    ]
-    botones_lista.append([
-        {"text": "🔁 Auto todos", "callback_data": "AUTO_TODOS"},
-        {"text": "🛠 Cambiar todos", "callback_data": "CAMBIAR_TODOS"}
-    ])
+    botones_lista = [[{"text": f"👁 {sid}", "callback_data": f"SEL_{sid}"}] for sid in servicios]
     botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
     return {"inline_keyboard": botones_lista}
 
-
 def lista_cambio(servicios):
-    botones_lista = [
-        [{"text": formato_lista_cambio(sid, texto), "callback_data": f"CAMSEL_{sid}"}]
-        for sid, texto in servicios.items()
-    ]
-    botones_lista.append([
-        {"text": "🔁 Auto todos", "callback_data": "AUTO_TODOS"},
-        {"text": "🛠 Cambiar todos", "callback_data": "CAMBIAR_TODOS"}
-    ])
+    botones_lista = [[{"text": f"🛠 {sid}", "callback_data": f"CAMSEL_{sid}"}] for sid in servicios]
     botones_lista.append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
     return {"inline_keyboard": botones_lista}
 
@@ -437,7 +350,6 @@ class HomeServe:
                 fecha += timedelta(days=1)
 
             fecha_str = fecha.strftime("%d/%m/%Y")
-            fecha_caducidad = calcular_fecha_caducidad(datetime.now())
 
             if estado == "348":
                 obs = "Pendiente de localizar a asegurado"
@@ -460,7 +372,7 @@ class HomeServe:
             }
 
             self.session.post(BASE_URL, data=payload, timeout=10)
-            registrar_seguimiento(sid, estado, fecha_caducidad)
+            registrar_seguimiento(sid, estado)
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
         except Exception as e:
             return False, f"❌ Error: {e}"
@@ -663,52 +575,6 @@ def webhook():
                 "🛠 Selecciona servicio",
                 lista_cambio(curso) if curso else botones()
             )
-
-        elif action == "CAMBIAR_TODOS":
-            tg_edit(chat, msg_id, "🛠 Selecciona estado para todos los servicios", botones_todos_estados())
-
-        elif action == "AUTO_TODOS":
-            servicios = homeserve.obtener_curso()
-            if not servicios:
-                tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
-                return jsonify(ok=True)
-
-            with get_db() as conn:
-                placeholders = ", ".join("?" for _ in servicios)
-                registros = conn.execute(
-                    f"SELECT sid, estado FROM seguimiento WHERE sid IN ({placeholders})",
-                    list(servicios.keys())
-                ).fetchall()
-
-            changed = 0
-            for r in registros:
-                nuevo_estado = siguiente_estado_automatico(r["estado"])
-                if nuevo_estado == r["estado"]:
-                    continue
-                ok, _ = homeserve.cambiar_estado(r["sid"], nuevo_estado)
-                if ok:
-                    changed += 1
-
-            mensaje = (
-                f"✅ Se han actualizado automáticamente {changed} servicios"
-                if changed > 0 else "ℹ️ No había servicios pendientes de cambio automático"
-            )
-            tg_edit(chat, msg_id, mensaje, botones())
-
-        elif action.startswith("TODOS_"):
-            estado = action.split("_", 1)[1]
-            servicios = homeserve.obtener_curso()
-            if not servicios:
-                tg_edit(chat, msg_id, "❌ No hay servicios en curso", botones())
-                return jsonify(ok=True)
-
-            ok_count = 0
-            for sid in servicios:
-                ok, _ = homeserve.cambiar_estado(sid, estado)
-                if ok:
-                    ok_count += 1
-
-            tg_edit(chat, msg_id, f"✅ Cambiados {ok_count}/{len(servicios)} servicios al estado {estado}", botones())
 
         elif action.startswith("CAMSEL_"):
             sid = action.split("_")[1]
