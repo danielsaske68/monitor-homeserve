@@ -121,12 +121,15 @@ def parsear_servicios_texto(texto):
         return {}
 
     text = str(texto).replace("\r", " ").replace("\u00a0", " ")
+    text = text.replace("**", "").replace("`", "")
 
     lineas_directas = {}
     for linea in text.splitlines():
         linea_limpia = linea.strip()
         if not linea_limpia:
             continue
+        linea_limpia = re.sub(r"^\s*\d+\.\s*", "", linea_limpia)
+        linea_limpia = linea_limpia.replace("**", "").replace("`", "")
         match = re.match(r"^\s*(\d{7,8})\s*(?:\|\s*|[-–—:]\s*)(.+?)\s*$", linea_limpia)
         if not match:
             continue

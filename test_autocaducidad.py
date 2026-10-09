@@ -179,6 +179,21 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertIn("Carrer INGENIERO JOAQUIN BENLLOCH 27", rows[0]["direccion"])
         self.assertNotIn("Fontanero", rows[0]["direccion"])
 
+    def test_parsear_servicios_texto_reconoce_formatos_reales_con_id_repetido_y_markdown(self):
+        from main import parsear_servicios_texto
+
+        texto = (
+            "16016046|16016046 Fontanero C/ INGENIERO JOAQUIN BENLLOCH 00027 39 46006-VALENCIA En espera de Profesional por confirmacion del Siniestro 28/09/2026 08/10/2026 28/09/2026 de 14:21 a 16:21 Segurcaixa Siniestros\n"
+            "**1.** `16016046` - Carrer INGENIERO JOAQUIN BENLLOCH 27, València\n"
+            "16038937|16038937 Manitas fontanero C/Barco 1635 46024-VALENCIA En espera de Profesional por Pendiente de citar al cliente 06/10/2026 08/10/2026 08/10/2026 de 08:00 a 20:00 Repsol - Asistencias con cobertura"
+        )
+
+        servicios = parsear_servicios_texto(texto)
+
+        self.assertIn("16016046", servicios)
+        self.assertIn("C/ INGENIERO JOAQUIN BENLLOCH", servicios["16016046"])
+        self.assertIn("C/Barco 1635", servicios["16038937"])
+
     def test_fecha_ruta_acepta_hoy_y_formatea_etiqueta_explicativa(self):
         from main import formatear_fecha_ruta, parsear_fecha_ruta
 
