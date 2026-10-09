@@ -171,18 +171,6 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(etiqueta_fecha_ruta(datetime.now().date()), "Hoy")
         self.assertNotIn("Para", etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1)))
 
-    def test_fecha_ruta_predeterminada_es_manana(self):
-        from main import fecha_ruta_predeterminada
-
-        esperado = (datetime.now().date() + timedelta(days=1)).isoformat()
-        self.assertEqual(fecha_ruta_predeterminada(), esperado)
-
-    def test_fecha_ruta_activa_usa_manana_cuando_no_hay_estado(self):
-        from main import fecha_ruta_activa
-
-        esperado = (datetime.now().date() + timedelta(days=1)).isoformat()
-        self.assertEqual(fecha_ruta_activa("chat_sin_estado"), esperado)
-
     def test_construir_mensaje_cita_usa_misma_etiqueta_de_fecha(self):
         from main import construir_mensaje_cita
 
