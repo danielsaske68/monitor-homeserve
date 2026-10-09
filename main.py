@@ -1137,20 +1137,51 @@ class HomeServe:
             self.login()
             return {}
 
+    def _payload_formulario_servicio(self, sid):
+        url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+        r = self.session.get(url, timeout=15)
+        html = getattr(r, "text", "")
+        if not isinstance(html, str) or not html.strip():
+            return url, {}
+
+        try:
+            r.raise_for_status()
+        except Exception:
+            pass
+
+        soup = BeautifulSoup(html, "html.parser")
+        payload = {}
+        form = soup.find("form")
+        if form:
+            for tag in form.select("input, textarea, select"):
+                name = tag.get("name")
+                if not name:
+                    continue
+                if tag.name == "input" and tag.get("type", "").lower() in {"submit", "button", "reset", "image"}:
+                    continue
+                if tag.name == "textarea":
+                    payload[name] = tag.get_text(" ", strip=True)
+                elif tag.name == "select":
+                    selected = tag.find("option", selected=True)
+                    payload[name] = selected.get("value", "") if selected else ""
+                else:
+                    payload[name] = tag.get("value", "")
+
+        return url, payload
+
     def _estado_actual_servicio(self, sid):
         try:
             datos, raw_html = obtener_datos_servicio(sid)
-            if datos:
-                for clave in ("ESTADO", "ESTADO ACTUAL", "ESTADO DE SERVICIO"):
-                    valor = datos.get(clave)
-                    if valor:
-                        match = re.search(r"\b(?:348|318|320)\b", str(valor))
-                        if match:
-                            return match.group(0)
-                texto_total = " ".join(str(v) for v in datos.values())
-                match = re.search(r"\b(?:348|318|320)\b", texto_total)
-                if match:
-                    return match.group(0)
+            for clave in ("ESTADO", "ESTADO ACTUAL", "ESTADO DE SERVICIO"):
+                valor = datos.get(clave)
+                if valor:
+                    match = re.search(r"\b(?:348|318|320)\b", str(valor))
+                    if match:
+                        return match.group(0)
+            texto_total = " ".join(str(v) for v in datos.values())
+            match = re.search(r"\b(?:348|318|320)\b", texto_total)
+            if match:
+                return match.group(0)
             match = re.search(r"\b(?:348|318|320)\b", str(raw_html or ""))
             if match:
                 return match.group(0)
@@ -1161,6 +1192,8 @@ class HomeServe:
     def cambiar_estado(self, sid, estado):
         try:
             estado_inicial = self._estado_actual_servicio(sid)
+            url, payload = self._payload_formulario_servicio(sid)
+
             fecha = datetime.now() + timedelta(days=3)
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
@@ -1179,7 +1212,7 @@ class HomeServe:
             else:
                 obs = "Cambio de estado tramitado desde bot"
 
-            payload = {
+            payload.update({
                 "w3exec": "ver_servicioencurso",
                 "Servicio": sid,
                 "Pag": "1",
@@ -1188,26 +1221,26 @@ class HomeServe:
                 "INFORMO": "on",
                 "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            }
+            })
 
-            respuesta = self.session.post(BASE_URL, data=payload, timeout=10)
-            html = getattr(respuesta, "text", "") or ""
-            texto_html = html.lower()
-            if any(token in texto_html for token in ["error", "illegal", "denegado", "caducada", "no autorizado", "acceso inválido", "no se puede", "no es posible"]):
-                return False, f"❌ El cambio de estado no se pudo confirmar para {sid}"
+            respuesta = self.session.post(BASE_URL, data=payload, timeout=15)
+            if getattr(respuesta, "status_code", 200) >= 400:
+                return False, f"❌ Error HTTP al cambiar el estado de {sid}"
 
-            for _ in range(3):
+            for _ in range(5):
                 estado_final = self._estado_actual_servicio(sid)
                 if estado_final == estado:
                     registrar_seguimiento(sid, estado, fecha_caducidad)
                     return True, f"✅ Estado {estado} aplicado ({fecha_str})"
                 time.sleep(1)
 
-            if estado_inicial is not None:
-                return False, f"❌ El cambio no se confirmó en la web: seguía en {estado_inicial}"
-            registrar_seguimiento(sid, estado, fecha_caducidad)
-            return True, f"✅ Estado {estado} aplicado ({fecha_str})"
+            if estado_inicial == estado:
+                registrar_seguimiento(sid, estado, fecha_caducidad)
+                return True, f"✅ Estado {estado} ya estaba aplicado ({fecha_str})"
+
+            return False, f"❌ El cambio no se confirmó en la web para {sid}"
         except Exception as e:
+            logger.error(f"Error en cambiar_estado({sid}, {estado}): {e}")
             return False, f"❌ Error: {e}"
 
 homeserve = HomeServe()

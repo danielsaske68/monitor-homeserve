@@ -29,8 +29,8 @@ class AutoCaducidadTests(unittest.TestCase):
 
         servicio = HomeServe()
         servicio.session = Mock()
-        servicio.session.get = Mock()
-        servicio.session.post = Mock(return_value=Mock(text="<html>OK</html>"))
+        servicio.session.get = Mock(return_value=Mock(text="<html></html>"))
+        servicio.session.post = Mock(return_value=Mock(text="<html>OK</html>", status_code=200))
 
         def fake_obtener_datos_servicio(sid):
             return {"ESTADO": "348"}, "<html>ESTADO 348</html>"
