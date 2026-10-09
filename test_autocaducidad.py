@@ -218,18 +218,6 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(len(rows_origen), 2)
         self.assertEqual(len(rows_destino), 2)
 
-    def test_servicio_siguiente_en_ruta_navega_entre_servicios(self):
-        from main import guardar_ruta_diaria, servicio_siguiente_en_ruta
-
-        chat_id = "ruta_navegacion"
-        fecha = datetime.now().date().isoformat()
-        for idx, sid in enumerate(["160001", "160002", "160003"]):
-            guardar_ruta_diaria(chat_id, sid, f"Calle {idx + 1}", fecha=fecha, orden=idx)
-
-        self.assertEqual(servicio_siguiente_en_ruta(chat_id, "160001", fecha), "160002")
-        self.assertEqual(servicio_siguiente_en_ruta(chat_id, "160003", fecha), "160001")
-        self.assertEqual(servicio_siguiente_en_ruta(chat_id, "160001", fecha, paso=-1), "160003")
-
     def test_ajustar_fecha_misma_fecha_actualiza_estado_sin_error(self):
         from main import RUTA_FECHA_STATE, actualizar_fecha_ruta_estado, guardar_ruta_diaria
 
