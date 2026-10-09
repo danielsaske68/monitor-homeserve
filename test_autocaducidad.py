@@ -185,6 +185,21 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(moved, 0)
         self.assertEqual(len(rows), 2)
 
+    def test_ruta_por_defecto_usa_dia_siguiente_y_reset_lo_retorna(self):
+        from main import RUTA_FECHA_STATE, fecha_ruta_predeterminada, guardar_ruta_diaria, limpiar_ruta_dia
+
+        chat_id = "ruta_default_dia_siguiente"
+        expected = fecha_ruta_predeterminada()
+
+        self.assertEqual(expected, (datetime.now().date() + timedelta(days=1)).isoformat())
+
+        RUTA_FECHA_STATE[chat_id] = "2026-01-01"
+        guardar_ruta_diaria(chat_id, "160001", "Calle A 1", fecha="2026-01-01", orden=0)
+        limpiar_ruta_dia(chat_id, "2026-01-01")
+        RUTA_FECHA_STATE[chat_id] = fecha_ruta_predeterminada()
+
+        self.assertEqual(RUTA_FECHA_STATE[chat_id], expected)
+
     def test_mover_ruta_fecha_conserva_la_ruta_original(self):
         from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha
 
