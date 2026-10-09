@@ -15,14 +15,11 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 
-# Importar la base de datos de baremos asegurando el nombre correcto
+# Importar la base de datos de baremos (asumiendo que baremos.py está en el mismo directorio)
 try:
     from baremos import BAREMOS_DATA
 except ImportError:
-    try:
-        from baremos import BAREMOS_DB as BAREMOS_DATA
-    except ImportError:
-        BAREMOS_DATA = []
+    BAREMOS_DATA = []
 
 load_dotenv()
 
@@ -57,7 +54,6 @@ SERVICIOS_ACTUALES = {}
 USER_STATE = {}
 SERV_STATE = {}
 BAREMO_STATE = {}
-CITA_STATE = {}
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -184,7 +180,7 @@ def botones():
             [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
             [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}],
             [{"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
-            [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
+            [{"text": "📊 BAREMOS", "callback_data": "BAREMO"}, {"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
         ]
     }
 
@@ -209,33 +205,9 @@ def botones_usuarios():
         ]
     }
 
-def botones_servicio(sid, texto_servicio=""):
-    gmaps_url = "https://www.google.com/maps"
-    waze_url = "https://waze.com"
-    
-    if texto_servicio:
-        pob_match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\))", texto_servicio, re.IGNORECASE)
-        pob_str = pob_match.group(1) if pob_match else "VALENCIA (46020)"
-        
-        if pob_match:
-            resto = texto_servicio[pob_match.end():].strip()
-            cortes = r"(?i)\b(ES:|PL:|PT:|PISO|PUERTA|BL|ESC|Tuber[ií]a|Aver[ií]a|Da[nñ]o|El\s+asegurado|Servicio|Encargo)\b"
-            partes = re.split(cortes, resto)
-            direccion_bruta = partes[0].strip() if partes else ""
-            
-            if direccion_bruta:
-                dir_limpia = f"{direccion_bruta}, {pob_str}"
-                dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
-                dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
-                
-                if dir_limpia:
-                    query_mapa = quote_plus(dir_limpia)
-                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                    waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
-
+def botones_servicio(sid):
     return {
         "inline_keyboard": [
-            [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
             [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"}, {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
@@ -397,8 +369,8 @@ def loop():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid, txt))
-            
+                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid))
+             
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
         except Exception as e:
@@ -413,11 +385,11 @@ def loop_recordatorios():
             with get_db() as conn:
                 cursor = conn.execute("SELECT sid, estado, fecha_cambio, ultimo_aviso FROM seguimiento WHERE estado IN ('348', '320')")
                 registros = cursor.fetchall()
-                
+              
                 ahora = datetime.now()
                 for r in registros:
                     ultimo_aviso = datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S.%f") if "." in r["ultimo_aviso"] else datetime.strptime(r["ultimo_aviso"], "%Y-%m-%d %H:%M:%S")
-                    
+                  
                     if (ahora - ultimo_aviso).total_seconds() >= 86400:
                         txt = (
                             f"⏰ <b>RECORDATORIO DE SEGUIMIENTO</b>\n\n"
@@ -426,7 +398,7 @@ def loop_recordatorios():
                         )
                         for u in obtener_usuarios():
                             tg_send(u, txt, botones_estado(r['sid']))
-                        
+                      
                         conn.execute("UPDATE seguimiento SET ultimo_aviso=? WHERE sid=?", (ahora, r["sid"]))
                         conn.commit()
         except Exception as e:
@@ -449,67 +421,46 @@ def webhook():
 
         guardar_usuario(chat)
 
-        if text == "/start":
-            tg_send(chat, "🤖 Bot activo", botones())
-            return jsonify(ok=True)
-
-        if chat in CITA_STATE:
-            state_info = CITA_STATE[chat]
-            msg_id = state_info["msg_id"]
-            telefono = state_info["telefono"]
-            base_msg = state_info["base_msg"]
-            
-            mensaje_final = f"{base_msg} para el {text}."
-            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
-            
-            kb = {
-                "inline_keyboard": [
-                    [{"text": "💬 Enviar por WhatsApp", "url": whatsapp_url}],
-                    [{"text": "⬅️ Volver al servicio", "callback_data": f"SEL_{state_info['sid']}"}]
-                ]
-            }
-            CITA_STATE.pop(chat)
-            tg_send(chat, f"✅ Mensaje preparado:\n\n<code>{mensaje_final}</code>", kb)
-            return jsonify(ok=True)
-
+        # Gestión del estado de búsqueda de baremos
         if chat in BAREMO_STATE:
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
             
-            busqueda = text.lower().strip()
+            # Limpiamos el mensaje de texto del usuario para mantener limpio el chat si se desea, o lo dejamos
+            # Realizamos la búsqueda por similitud de palabras
+            palabras = text.lower().split()
             resultados = []
             
             for item in BAREMOS_DATA:
-                codigo, nombre, precio = item
-                texto_item = f"{codigo} {nombre}".lower()
+                # Se asume que cada item en BAREMOS_DATA es un diccionario o tupla con codigo, nombre, precio
+                # Adaptable según la estructura de baremos.py: ej. {"codigo": "...", "nombre": "...", "precio": "..."}
+                codigo = item.get("codigo", item.get("code", ""))
+                nombre = item.get("nombre", item.get("name", ""))
+                precio = item.get("precio", item.get("price", ""))
                 
-                if any(p in texto_item for p in busqueda.split()):
-                    resultados.append({
-                        "codigo": codigo,
-                        "nombre": nombre,
-                        "precio": precio
-                    })
+                texto_item = f"{codigo} {nombre}".lower()
+                if all(p in texto_item for p in palabras):
+                    resultados.append(item)
             
             if not resultados:
-                respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando:"
+                respuesta = f"❌ No se han encontrado resultados para: <b>{text}</b>.\n\nEscribe otra palabra clave para seguir buscando o pulsa volver:"
             else:
                 respuesta = f"🔍 <b>Resultados para:</b> {text}\n\n"
-                for res in resultados[:10]:
-                    c = res["codigo"]
-                    n = res["nombre"]
-                    p = res["precio"]
+                for res in resultados[:10]: # Limitamos a 10 para no saturar
+                    c = res.get("codigo", "")
+                    n = res.get("nombre", "")
+                    p = res.get("precio", "")
                     respuesta += f"<code>{c}</code>\n{n}\n<b>{p}</b>\n\n"
-                
                 if len(resultados) > 10:
-                    respuesta += f"<i>(Mostrando 10 de {len(resultados)} coincidencias...)</i>\n"
+                    respuesta += f"<i>(Mostrando 10 de {len(resultados)} resultados...)</i>\n"
             
             kb = {
                 "inline_keyboard": [
-                    [{"text": "🔍 Buscar otro", "callback_data": "SEARCH_BAREMO"}],
-                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+                    [{"text": "⬅️ Volver al Menú", "callback_data": "BACK_MENU"}]
                 ]
             }
             
+            # Editamos el mensaje original en lugar de enviar uno nuevo (evita la chorrera de mensajes)
             tg_edit(chat, msg_id, respuesta, kb)
             return jsonify(ok=True)
 
@@ -523,6 +474,9 @@ def webhook():
                 actual = read_services(chat)
                 tg_edit(chat, msg_edit, f"✅ Guardado ✔️\n\n{actual}\n\nEscribe otro o TERMINAR", botones_num_serv())
             return jsonify(ok=True)
+
+        if text == "/start":
+            tg_send(chat, "🤖 Bot activo", botones())
 
         if chat in USER_STATE:
             if USER_STATE[chat] == "ADD_USER":
@@ -543,6 +497,10 @@ def webhook():
         tg_answer(cq["id"])
         guardar_usuario(chat)
 
+        # Si pulsa cualquier otro botón, limpiamos el estado de baremo si lo tuviera activo
+        if action != "SEARCH_BAREMO" and chat in BAREMO_STATE:
+            BAREMO_STATE.pop(chat, None)
+
         if action == "LOGIN":
             ok = homeserve.login()
             tg_edit(chat, msg_id, "✅ Login OK" if ok else "❌ Error Login", botones())
@@ -558,7 +516,7 @@ def webhook():
             else:
                 tg_edit(chat, msg_id, f"🌐 {len(servicios)} servicios encontrados", botones())
                 for sid, txt in servicios.items():
-                    tg_send(chat, txt, botones_servicio(sid, txt))
+                    tg_send(chat, txt, botones_servicio(sid))
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
@@ -626,7 +584,6 @@ def webhook():
 
                 inline_kb = [
                     [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-                    [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "💾 Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
                     [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
                     [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
                 ]
@@ -634,160 +591,6 @@ def webhook():
                 tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
             except Exception as e:
                 tg_edit(chat, msg_id, f"❌ Error obteniendo servicio:\n{e}", botones())
-
-        elif action.startswith("GUARDARSERV_"):
-            sid = action.split("_")[1]
-            try:
-                add_service(chat, sid)
-                
-                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-                r = homeserve.session.get(url, timeout=15)
-                soup = BeautifulSoup(r.text, "html.parser")
-                datos = {}
-                for tr in soup.find_all("tr"):
-                    tds = tr.find_all("td")
-                    if len(tds) >= 2:
-                        datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
-
-                domicilio = datos.get("DOMICILIO", "")
-                poblacion = datos.get("POBLACION-PROVINCIA", "")
-                direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
-                query_mapa = quote_plus(direccion_completa)
-                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
-
-                updated_kb = {
-                    "inline_keyboard": [
-                        [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-                        [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "✅ Guardado con éxito", "callback_data": "NOOP"}],
-                        [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
-                        [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
-                    ]
-                }
-                
-                payload = {
-                    "chat_id": chat,
-                    "message_id": msg_id,
-                    "reply_markup": updated_kb
-                }
-                tg_session.post(f"{TELEGRAM_API}/editMessageReplyMarkup", json=payload, timeout=5)
-
-            except Exception as e:
-                logger.error(f"Error al guardar servicio: {e}")
-
-        elif action.startswith("CITAWAP_"):
-            sid = action.split("_")[1]
-            try:
-                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-                r = homeserve.session.get(url, timeout=15)
-                soup = BeautifulSoup(r.text, "html.parser")
-              
-                datos = {}
-                for tr in soup.find_all("tr"):
-                    tds = tr.find_all("td")
-                    if len(tds) >= 2:
-                        clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
-                        valor = tds[1].get_text(" ", strip=True)
-                        datos[clave] = valor
-
-                telefonos = datos.get("TELEFONOS", "")
-                domicilio = datos.get("DOMICILIO", "")
-                poblacion = datos.get("POBLACION-PROVINCIA", "")
-
-                numeros = re.findall(r"\b\d{9}\b", telefonos)
-                if not numeros:
-                    tg_edit(chat, msg_id, "❌ No se encontró un número de teléfono válido para este servicio.", botones())
-                    return jsonify(ok=True)
-                
-                primer_telefono = numeros[0]
-
-                hora_actual = datetime.now().hour
-                if 6 <= hora_actual < 12:
-                    saludo = "días"
-                elif 12 <= hora_actual < 21:
-                    saludo = "tardes"
-                else:
-                    saludo = "noches"
-
-                dir_limpia = domicilio.strip() if domicilio else "su domicilio"
-                pob_limpia = poblacion.strip() if poblacion else ""
-                ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
-
-                base_mensaje = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
-
-                kb = {
-                    "inline_keyboard": [
-                        [{"text": "✅ Sí, agregar fecha y hora", "callback_data": f"CITA_YES_{sid}_{primer_telefono}"}],
-                        [{"text": "❌ Enviar sin fecha", "callback_data": f"CITA_NO_{sid}_{primer_telefono}"}],
-                        [{"text": "⬅️ Volver", "callback_data": f"SEL_{sid}"}]
-                    ]
-                }
-                tg_edit(chat, msg_id, f"💬 <b>Gestión de Cita WhatsApp</b>\n\nMensaje base:\n<i>{base_mensaje}</i>\n\n¿Deseas agregar fecha y hora para la cita?", kb)
-            except Exception as e:
-                tg_edit(chat, msg_id, f"❌ Error al preparar mensaje de WhatsApp:\n{e}", botones())
-
-        elif action.startswith("CITA_NO_"):
-            parts = action.split("_")
-            sid = parts[2]
-            telefono = parts[3]
-            
-            hora_actual = datetime.now().hour
-            saludo = "días" if 6 <= hora_actual < 12 else ("tardes" if 12 <= hora_actual < 21 else "noches")
-            
-            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-            r = homeserve.session.get(url, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            datos = {}
-            for tr in soup.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) >= 2:
-                    datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
-
-            dir_limpia = datos.get("DOMICILIO", "").strip()
-            pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
-
-            mensaje_final = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}."
-            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
-
-            kb = {
-                "inline_keyboard": [
-                    [{"text": "💬 Enviar por WhatsApp", "url": whatsapp_url}],
-                    [{"text": "⬅️ Volver al servicio", "callback_data": f"SEL_{sid}"}]
-                ]
-            }
-            tg_edit(chat, msg_id, f"✅ Mensaje preparado:\n\n<code>{mensaje_final}</code>", kb)
-
-        elif action.startswith("CITA_YES_"):
-            parts = action.split("_")
-            sid = parts[2]
-            telefono = parts[3]
-            
-            hora_actual = datetime.now().hour
-            saludo = "días" if 6 <= hora_actual < 12 else ("tardes" if 12 <= hora_actual < 21 else "noches")
-            
-            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-            r = homeserve.session.get(url, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            datos = {}
-            for tr in soup.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) >= 2:
-                    datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
-
-            dir_limpia = datos.get("DOMICILIO", "").strip()
-            pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
-
-            base_msg = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
-
-            CITA_STATE[chat] = {
-                "msg_id": msg_id,
-                "sid": sid,
-                "telefono": telefono,
-                "base_msg": base_msg
-            }
-            tg_edit(chat, msg_id, "✍️ Escribe a continuación la fecha y hora de la cita (ej. <i>mañana a las 10:00</i> o <i>el martes 25 a las 16:30</i>):", {"inline_keyboard": [[{"text": "⬅️ Cancelar", "callback_data": f"SEL_{sid}"}]]})
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
@@ -818,6 +621,20 @@ def webhook():
         elif action == "BACK_NUM_SERV":
             tg_edit(chat, msg_id, "📦 Menú", botones())
 
+        elif action == "BAREMO":
+            texto_baremo = (
+                "📊 <b>CONSULTA DE BAREMO Y TARIFAS</b>\n\n"
+                "Selecciona o consulta las condiciones y valores económicos asociados a las intervenciones y siniestros."
+            )
+            keyboard_baremo = {
+                "inline_keyboard": [
+                    [{"text": "🔍 Buscar en Baremos", "callback_data": "SEARCH_BAREMO"}],
+                    [{"text": "🌐 Ver Baremo Oficial", "url": "https://web.multiassistance.com/w3multi/documentos/cat3/Baremo2013.pdf"}],
+                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+                ]
+            }
+            tg_edit(chat, msg_id, texto_baremo, keyboard_baremo)
+
         elif action == "SEARCH_BAREMO":
             BAREMO_STATE[chat] = {"msg_id": msg_id}
             texto_busqueda = (
@@ -826,7 +643,7 @@ def webhook():
             )
             keyboard_busqueda = {
                 "inline_keyboard": [
-                    [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+                    [{"text": "⬅️ Volver", "callback_data": "BAREMO"}]
                 ]
             }
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
@@ -867,7 +684,6 @@ def webhook():
 
         elif action == "BACK_MENU":
             BAREMO_STATE.pop(chat, None)
-            CITA_STATE.pop(chat, None)
             tg_edit(chat, msg_id, "🏠 Menú", botones())
 
     return jsonify(ok=True)
