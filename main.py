@@ -61,6 +61,8 @@ CITA_STATE = {}
 VIEW_STATE = {}
 BUSCAR_STATE = {}
 IMPORTAR_STATE = {}
+RUTA_FECHA_STATE = {}
+AJUSTAR_RUTA_STATE = {}
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -122,9 +124,10 @@ def parsear_servicios_texto(texto):
 
     lineas_directas = {}
     for linea in text.splitlines():
-        if "|" not in linea:
+        linea_limpia = linea.strip()
+        if not linea_limpia:
             continue
-        match = re.match(r"^\s*(\d{7,8})\s*\|\s*(.+?)\s*$", linea)
+        match = re.match(r"^\s*(\d{7,8})\s*(?:\|\s*|[-–—:]\s*)(.+?)\s*$", linea_limpia)
         if not match:
             continue
         sid = match.group(1)
@@ -373,6 +376,60 @@ def limpiar_ruta_dia(chat_id, fecha=None):
     return int(cursor.rowcount or 0)
 
 
+def formatear_fecha_ruta(fecha=None):
+    if fecha is None:
+        fecha = datetime.now().date()
+    if isinstance(fecha, str):
+        fecha = parsear_fecha_ruta(fecha)
+    if fecha is None:
+        return "hoy"
+    return fecha.strftime("%d/%b").lower()
+
+
+def parsear_fecha_ruta(texto):
+    valor = (texto or "").strip()
+    if not valor:
+        return datetime.now().date() + timedelta(days=1)
+
+    clave = valor.lower()
+    if clave in {"mañana", "dia siguiente", "día siguiente", "siguiente", "next"}:
+        return datetime.now().date() + timedelta(days=1)
+
+    if re.fullmatch(r"\d{1,2}/\d{1,2}", valor):
+        try:
+            return datetime.strptime(f"{valor}/{datetime.now().year}", "%d/%m/%Y").date()
+        except ValueError:
+            return datetime.now().date() + timedelta(days=1)
+
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m", "%d-%m"):
+        try:
+            return datetime.strptime(valor, fmt).date()
+        except ValueError:
+            continue
+
+    return datetime.now().date() + timedelta(days=1)
+
+
+def mover_ruta_fecha(chat_id, fecha_origen, fecha_destino):
+    origen = fecha_origen or datetime.now().date().isoformat()
+    destino = fecha_destino or origen
+    rows = obtener_ruta_diaria(chat_id, origen)
+    if not rows:
+        return 0
+
+    with get_db() as conn:
+        conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), destino))
+        for row in rows:
+            conn.execute(
+                "INSERT INTO ruta_diaria (chat_id, sid, fecha, direccion, orden, completado) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(chat_id, sid, fecha) DO UPDATE SET direccion=excluded.direccion, orden=excluded.orden, completado=excluded.completado",
+                (str(chat_id), str(row["sid"]), destino, row["direccion"], row["orden"], row.get("completado", 0)),
+            )
+        conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), origen))
+        conn.commit()
+    return len(rows)
+
+
 def activar_ruta_diaria(chat_id, sid, fecha=None):
     fecha = fecha or datetime.now().date().isoformat()
     with get_db() as conn:
@@ -451,6 +508,7 @@ def limpiar_direccion_importada(texto):
 
     texto = re.sub(r"^\s*\*+\s*", "", texto)
     texto = re.sub(r"^\d{1,2}:\d{2}\s*[-–]\s*", "", texto)
+    texto = re.sub(r"^\s*\d{7,8}\s*(?:[-–—:|]\s*)?", "", texto)
     texto = texto.split("|")[-1].strip() if "|" in texto else texto
     texto = re.sub(r"(?i)\b(?:en espera de profesional|por confirmacion del siniestro|siniestro)\b.*$", "", texto)
     texto = re.sub(r"\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}.*$", "", texto, flags=re.IGNORECASE)
@@ -476,8 +534,8 @@ def importar_ruta_desde_texto(chat_id, texto, fecha=None):
     fecha = fecha or datetime.now().date().isoformat()
 
     entradas = []
-    pattern = re.compile(r"(?<!\d)(\d{7,8})\s*\|\s*(.*?)(?=(?:\s*\d{7,8}\s*\|)|$)", flags=re.DOTALL)
-    for match in pattern.finditer(texto):
+    patrón = re.compile(r"(?<!\d)(\d{7,8})\s*(?:\|\s*|[-–—:]\s*)(.*?)(?=(?:\s*(?:\d{7,8}\s*(?:\||[-–—:]))|$))", flags=re.DOTALL)
+    for match in patrón.finditer(texto):
         sid = match.group(1).strip()
         direccion = match.group(2).strip()
         if sid and direccion:
@@ -488,7 +546,10 @@ def importar_ruta_desde_texto(chat_id, texto, fecha=None):
         for idx, linea in enumerate(lineas):
             sid = f"RUTA_{idx + 1:03d}"
             direccion = linea
-            if "|" in linea:
+            match = re.match(r"^\s*(\d{7,8})\s*(?:\|\s*|[-–—:]\s*)(.+?)\s*$", linea)
+            if match:
+                sid, direccion = match.group(1), match.group(2).strip()
+            elif "|" in linea:
                 partes = [p.strip() for p in linea.split("|", 1)]
                 if len(partes) == 2 and partes[1]:
                     sid, direccion = partes[0] or sid, partes[1]
@@ -771,29 +832,34 @@ def botones_usuarios():
         ]
     }
 
+def direccion_para_mapa(texto_servicio="", domicilio="", poblacion=""):
+    if texto_servicio:
+        direccion = extraer_direccion_servicio(texto_servicio)
+        if direccion:
+            return re.sub(r"[\[\]\*\/\,\.]+", " ", direccion).strip()
+
+    base = f"{domicilio}, {poblacion}".strip(", ")
+    if not base:
+        return ""
+
+    direccion = extraer_direccion_servicio(base)
+    if direccion:
+        return re.sub(r"[\[\]\*\/\,\.]+", " ", direccion).strip()
+
+    dir_limpia = re.sub(r"[\[\]\*\/\,\.]+", " ", base)
+    dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
+    return dir_limpia
+
+
 def botones_servicio(sid, texto_servicio=""):
     gmaps_url = "https://www.google.com/maps"
     waze_url = "https://waze.com"
-    
-    if texto_servicio:
-        pob_match = re.search(r"([A-ZÁÉÍÓÚÑ\s]+\s*\(\d{5}\))", texto_servicio, re.IGNORECASE)
-        pob_str = pob_match.group(1) if pob_match else "VALENCIA (46020)"
-        
-        if pob_match:
-            resto = texto_servicio[pob_match.end():].strip()
-            cortes = r"(?i)\b(ES:|PL:|PT:|PISO|PUERTA|BL|ESC|Tuber[ií]a|Aver[ií]a|Da[nñ]o|El\s+asegurado|Servicio|Encargo)\b"
-            partes = re.split(cortes, resto)
-            direccion_bruta = partes[0].strip() if partes else ""
-            
-            if direccion_bruta:
-                dir_limpia = f"{direccion_bruta}, {pob_str}"
-                dir_limpia = re.sub(r"[\[\]\*\/\,\.]", " ", dir_limpia)
-                dir_limpia = re.sub(r"\s+", " ", dir_limpia).strip()
-                
-                if dir_limpia:
-                    query_mapa = quote_plus(dir_limpia)
-                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                    waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+
+    direccion = direccion_para_mapa(texto_servicio)
+    if direccion:
+        query_mapa = quote_plus(direccion)
+        gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
+        waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
     return {
         "inline_keyboard": [
@@ -863,8 +929,8 @@ def mostrar_servicio(chat, msg_id, sid):
         caducidad = extraer_fecha_caducidad(raw_html)
         str_caducidad = caducidad.strftime("%d/%m/%Y") if caducidad else "No disponible"
 
-        direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
-        query_mapa = quote_plus(direccion_completa)
+        direccion_completa = direccion_para_mapa(domicilio=domicilio, poblacion=poblacion)
+        query_mapa = quote_plus(direccion_completa) if direccion_completa else quote_plus(f"{domicilio}, {poblacion}".strip(", "))
         gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
         waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
@@ -1078,8 +1144,9 @@ def loop():
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
+                    mensaje_nuevo = resumen_servicio_alerta(txt)
                     for u in obtener_usuarios():
-                        tg_send(u, f"🆕 <b>Nuevo servicio</b>\n\n{txt}", botones_servicio(sid, txt))
+                        tg_send(u, mensaje_nuevo, botones_servicio(sid, txt))
             
             SERVICIOS_ACTUALES = actuales
             time.sleep(INTERVALO)
@@ -1253,9 +1320,28 @@ def webhook():
             msg_edit = IMPORTAR_STATE.pop(chat)["msg_id"]
             count = importar_ruta_desde_texto(chat, text)
             if count:
+                RUTA_FECHA_STATE[chat] = datetime.now().date().isoformat()
                 tg_edit(chat, msg_edit, f"✅ Ruta importada correctamente ({count} servicios)", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
             else:
                 tg_edit(chat, msg_edit, "❌ No se pudieron leer direcciones válidas. Reenvía una lista con una dirección por línea.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+            return jsonify(ok=True)
+
+        if chat in AJUSTAR_RUTA_STATE:
+            state_info = AJUSTAR_RUTA_STATE.pop(chat)
+            fecha_obj = parsear_fecha_ruta(text)
+            fecha_origen = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            if not fecha_obj:
+                tg_edit(chat, state_info["msg_id"], "❌ Fecha no válida. Ejemplos: 15/10, 15/10/2026 o 'mañana'.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+                return jsonify(ok=True)
+
+            fecha_destino = fecha_obj.isoformat()
+            fecha_label = formatear_fecha_ruta(fecha_obj)
+            moved = mover_ruta_fecha(chat, fecha_origen, fecha_destino)
+            if moved:
+                RUTA_FECHA_STATE[chat] = fecha_destino
+                tg_edit(chat, state_info["msg_id"], f"✅ Ruta ajustada para el {fecha_label}. La hora se mantiene por defecto del sistema.", {"inline_keyboard": [[{"text": "🧭 Ver ruta", "callback_data": "RUTA_DEL_DIA"}]]})
+            else:
+                tg_edit(chat, state_info["msg_id"], "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
             return jsonify(ok=True)
 
         if chat in SERV_STATE:
@@ -1301,9 +1387,10 @@ def webhook():
             if not servicios:
                 tg_edit(chat, msg_id, "❌ Sin servicios", botones())
             else:
-                tg_edit(chat, msg_id, f"🌐 {len(servicios)} servicios encontrados", botones())
-                for sid, txt in servicios.items():
-                    tg_send(chat, txt, botones_servicio(sid, txt))
+                total = len(servicios)
+                for idx, (sid, txt) in enumerate(servicios.items(), start=1):
+                    resumen = f"🆕 <b>Servicio {idx}/{total}</b>\n\n{resumen_servicio_alerta(txt)}"
+                    tg_edit(chat, msg_id, resumen, botones_servicio(sid, txt))
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
@@ -1444,8 +1531,8 @@ def webhook():
 
                 domicilio = datos.get("DOMICILIO", "")
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
-                direccion_completa = f"{domicilio}, {poblacion}".strip(", ")
-                query_mapa = quote_plus(direccion_completa)
+                direccion_completa = direccion_para_mapa(domicilio=domicilio, poblacion=poblacion)
+                query_mapa = quote_plus(direccion_completa) if direccion_completa else quote_plus(f"{domicilio}, {poblacion}".strip(", "))
                 gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
                 waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
 
@@ -1625,20 +1712,23 @@ def webhook():
             tg_edit(chat, msg_id, texto_busqueda, keyboard_busqueda)
 
         elif action == "RUTA_DEL_DIA":
-            rows = [r for r in obtener_ruta_diaria(chat, datetime.now().date().isoformat()) if not r.get("completado")]
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
+            fecha_label = formatear_fecha_ruta(fecha_actual)
+
             if not rows:
                 tg_edit(
                     chat,
                     msg_id,
-                    "🧭 <b>Ruta del día</b>\n\nPulsa <b>Exportar</b> para sacar los servicios activos de la web y luego importa la lista ordenada.",
+                    f"🧭 <b>Ruta del día</b>\n📅 <b>{fecha_label}</b>\n\nPulsa <b>Exportar</b> para sacar los servicios activos de la web y luego importa la lista ordenada.",
                     {"inline_keyboard": [
                         [{"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"}, {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}],
-                        [{"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}, {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
+                        [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]
                     ]}
                 )
                 return jsonify(ok=True)
 
-            texto = "🧭 <b>Ruta del día</b>"
+            texto = f"🧭 <b>Ruta del día</b>\n📅 <b>{fecha_label}</b>"
             kb = {"inline_keyboard": []}
             for idx, row in enumerate(rows[:20], start=1):
                 orden = int(row.get("orden", idx - 1) or 0)
@@ -1649,18 +1739,22 @@ def webhook():
                     {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"}
                 ])
             kb["inline_keyboard"].append([
-                {"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"},
-                {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}
+                {"text": "📅 Ajustar", "callback_data": "AJUSTAR_RUTA"},
+                {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}
             ])
             kb["inline_keyboard"].append([
-                {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"},
                 {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
             ])
             tg_edit(chat, msg_id, texto, kb)
 
         elif action == "LIMPIAR_RUTA":
-            deleted = limpiar_ruta_dia(chat, datetime.now().date().isoformat())
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            deleted = limpiar_ruta_dia(chat, fecha_actual)
             tg_edit(chat, msg_id, f"🧹 Ruta del día borrada. {deleted} servicios eliminados.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]]})
+
+        elif action == "AJUSTAR_RUTA":
+            AJUSTAR_RUTA_STATE[chat] = {"msg_id": msg_id}
+            tg_edit(chat, msg_id, "📅 Ajusta la fecha de la ruta.\n\nPuedes escribir: <code>15/10</code>, <code>15/10/2026</code> o <code>mañana</code>\n\nLa hora se mantiene por defecto según el sistema.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "EXPORTAR_RUTA":
             servicios = homeserve.obtener_curso() or {}
@@ -1682,17 +1776,17 @@ def webhook():
 
         elif action.startswith("RUTA_CITAR_"):
             sid = action.split("_")[-1]
-            fecha_hoy = datetime.now().date()
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_ruta = datetime.strptime(fecha_actual, "%Y-%m-%d").date()
             with get_db() as conn:
                 row = conn.execute(
                     "SELECT orden FROM ruta_diaria WHERE chat_id=? AND sid=? AND fecha=?",
-                    (str(chat), str(sid), fecha_hoy.isoformat()),
+                    (str(chat), str(sid), fecha_actual),
                 ).fetchone()
 
             orden = int((row["orden"] if row else 0) or 0)
             hora_orden = 9 + orden
-            fecha_cita = fecha_hoy + timedelta(days=1)
-            fecha_hora = f"{fecha_cita.strftime('%d/%m/%Y')} {hora_orden:02d}:00"
+            fecha_hora = f"{fecha_ruta.strftime('%d/%m/%Y')} {hora_orden:02d}:00"
 
             info = generar_mensaje_cita_sid(sid, fecha_hora)
             if not info:
@@ -1711,12 +1805,14 @@ def webhook():
 
         elif action.startswith("RUTA_CHECK_"):
             sid = action.split("_")[-1]
-            completar_ruta_diaria(chat, sid)
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            completar_ruta_diaria(chat, sid, fecha=fecha_actual)
             tg_edit(chat, msg_id, f"✅ Servicio {sid} marcado como completado en la ruta del día.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action.startswith("RUTA_REACT_"):
             sid = action.split("_")[-1]
-            activar_ruta_diaria(chat, sid)
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            activar_ruta_diaria(chat, sid, fecha=fecha_actual)
             tg_edit(chat, msg_id, f"🔄 Servicio {sid} reactivado para la ruta del día.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "USUARIOS":

@@ -151,6 +151,20 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertNotIn("En espera de Profesional", rows[0]["direccion"])
         self.assertNotIn("08:00 a 20:00", rows[0]["direccion"])
 
+    def test_importar_ruta_acepta_formato_id_guion_direccion(self):
+        from main import importar_ruta_desde_texto, obtener_ruta_diaria
+
+        chat_id = "ruta_import_guion"
+        texto = "16016046 - Carrer INGENIERO JOAQUIN BENLLOCH 27, valencia"
+
+        count = importar_ruta_desde_texto(chat_id, texto)
+        rows = obtener_ruta_diaria(chat_id)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(rows[0]["sid"], "16016046")
+        self.assertTrue(rows[0]["direccion"].startswith("Carrer INGENIERO JOAQUIN BENLLOCH 27"))
+        self.assertNotIn("16016046", rows[0]["direccion"])
+
     def test_export_no_incluye_servicios_en_tratamiento(self):
         from main import es_servicio_bloqueado
 
