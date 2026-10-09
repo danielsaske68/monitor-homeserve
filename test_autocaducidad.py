@@ -175,7 +175,8 @@ class AutoCaducidadTests(unittest.TestCase):
         from main import construir_mensaje_cita
 
         texto_hoy = construir_mensaje_cita("Calle Falsa 123", "09:00", "Hoy")
-        self.assertIn("para Hoy", texto_hoy)
+        self.assertIn("para mañana", texto_hoy.lower())
+        self.assertNotIn("para hoy", texto_hoy.lower())
         self.assertNotIn("para el", texto_hoy.lower())
 
         texto_manana = construir_mensaje_cita("Calle Falsa 123", "09:00")

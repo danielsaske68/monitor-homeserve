@@ -685,8 +685,8 @@ def formatear_fecha_para_mensaje(fecha_texto):
         return "mañana"
 
     clave = valor.lower()
-    if clave == "hoy":
-        return "Hoy"
+    if clave in {"hoy", "today", "actual", "current"}:
+        return "mañana"
     if clave in {"mañana", "manana"}:
         return "mañana"
     return f"el {valor}"
