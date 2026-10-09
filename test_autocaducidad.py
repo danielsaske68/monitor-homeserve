@@ -168,8 +168,8 @@ class AutoCaducidadTests(unittest.TestCase):
     def test_etiqueta_ruta_muestra_hoy_o_dia_siguiente(self):
         from main import etiqueta_fecha_ruta
 
-        self.assertEqual(etiqueta_fecha_ruta(datetime.now().date()), "Para hoy")
-        self.assertTrue(etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1)).startswith("Para el "))
+        self.assertEqual(etiqueta_fecha_ruta(datetime.now().date()), "Hoy")
+        self.assertNotIn("Para", etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1)))
 
     def test_mover_ruta_fecha_no_borra_si_es_la_misma_fecha(self):
         from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha

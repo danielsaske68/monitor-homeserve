@@ -393,8 +393,8 @@ def etiqueta_fecha_ruta(fecha=None):
         fecha = parsear_fecha_ruta(fecha)
     hoy = datetime.now().date()
     if fecha == hoy:
-        return "Para hoy"
-    return f"Para el {formatear_fecha_ruta(fecha)}"
+        return "Hoy"
+    return formatear_fecha_ruta(fecha)
 
 
 def parsear_fecha_ruta(texto):
