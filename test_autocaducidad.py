@@ -174,11 +174,17 @@ class AutoCaducidadTests(unittest.TestCase):
     def test_construir_mensaje_cita_usa_misma_etiqueta_de_fecha(self):
         from main import construir_mensaje_cita
 
-        texto = construir_mensaje_cita("Calle Falsa 123", "09:00", "Hoy")
+        texto_hoy = construir_mensaje_cita("Calle Falsa 123", "09:00", "Hoy")
+        self.assertIn("para Hoy", texto_hoy)
+        self.assertNotIn("para el", texto_hoy.lower())
 
-        self.assertIn("para Hoy", texto)
-        self.assertNotIn("para el", texto.lower())
-        self.assertNotIn("para el día", texto.lower())
+        texto_manana = construir_mensaje_cita("Calle Falsa 123", "09:00")
+        self.assertIn("para mañana", texto_manana.lower())
+        self.assertNotIn("para 10/", texto_manana.lower())
+
+        texto_fecha = construir_mensaje_cita("Calle Falsa 123", "09:00", "17/oct")
+        self.assertIn("para el 17/oct", texto_fecha.lower())
+        self.assertNotIn("para 17/oct", texto_fecha.lower())
 
     def test_mover_ruta_fecha_no_borra_si_es_la_misma_fecha(self):
         from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha

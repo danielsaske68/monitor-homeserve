@@ -679,23 +679,27 @@ def formatear_hora_humana(hora_texto):
         return str(hora_texto).strip() or "9 am"
 
 
+def formatear_fecha_para_mensaje(fecha_texto):
+    valor = (fecha_texto or "").strip()
+    if not valor:
+        return "mañana"
+
+    clave = valor.lower()
+    if clave == "hoy":
+        return "Hoy"
+    if clave in {"mañana", "manana"}:
+        return "mañana"
+    return f"el {valor}"
+
+
 def construir_mensaje_cita(direccion, hora_texto, fecha_texto=None):
     direccion = (direccion or "su domicilio").strip()
     hora_texto = str(hora_texto or "9:00").strip()
-    fecha_texto = str(fecha_texto or "").strip()
     hora_humana = formatear_hora_humana(hora_texto)
     saludo = saludo_actual()
 
-    if fecha_texto:
-        fecha_texto = fecha_texto.strip()
-        if fecha_texto.lower() == "hoy":
-            fecha_texto = "Hoy"
-        elif fecha_texto.lower() == "mañana":
-            fecha_texto = "mañana"
-        return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para {fecha_texto} a las {hora_humana}."
-
-    fecha_default = etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))
-    return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para {fecha_default} a las {hora_humana}."
+    fecha_formateada = formatear_fecha_para_mensaje(fecha_texto)
+    return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para {fecha_formateada} a las {hora_humana}."
 
 
 def generar_mensaje_cita_sid(sid, fecha_hora=None):
@@ -720,10 +724,10 @@ def generar_mensaje_cita_sid(sid, fecha_hora=None):
             fecha_fmt = etiqueta_fecha_ruta(dt.date())
             hora_fmt = dt.strftime("%H:%M")
         except ValueError:
-            fecha_fmt = etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))
+            fecha_fmt = "mañana"
             hora_fmt = str(fecha_hora).split()[-1] if " " in str(fecha_hora) else "9:00"
     else:
-        fecha_fmt = etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))
+        fecha_fmt = "mañana"
         hora_fmt = "09:00"
 
     mensaje = construir_mensaje_cita(ubicacion_str, hora_fmt, fecha_fmt)
@@ -1256,10 +1260,11 @@ def webhook():
             msg_id = state_info["msg_id"]
             telefono = state_info["telefono"]
             base_msg = state_info["base_msg"]
-            
-            mensaje_final = f"{base_msg} para el {text}."
+
+            fecha_formateada = formatear_fecha_para_mensaje(text)
+            mensaje_final = f"{base_msg} para {fecha_formateada}."
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
-            
+
             kb = {
                 "inline_keyboard": [
                     [{"text": "💬 Enviar por WhatsApp", "url": whatsapp_url}],
