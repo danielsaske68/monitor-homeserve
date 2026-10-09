@@ -1,7 +1,7 @@
 import base64
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from main import (
     calcular_fecha_caducidad,
@@ -23,6 +23,23 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(siguiente_estado_automatico("348"), "318")
         self.assertEqual(siguiente_estado_automatico("320"), "318")
         self.assertEqual(siguiente_estado_automatico("318"), "318")
+
+    def test_cambiar_estado_rechaza_si_la_web_no_confirma_el_cambio(self):
+        from main import HomeServe
+
+        servicio = HomeServe()
+        servicio.session = Mock()
+        servicio.session.get = Mock()
+        servicio.session.post = Mock(return_value=Mock(text="<html>OK</html>"))
+
+        def fake_obtener_datos_servicio(sid):
+            return {"ESTADO": "348"}, "<html>ESTADO 348</html>"
+
+        with patch("main.obtener_datos_servicio", side_effect=fake_obtener_datos_servicio):
+            ok, msg = servicio.cambiar_estado("12345678", "318")
+
+        self.assertFalse(ok)
+        self.assertIn("no se confirmó", msg.lower())
 
     def test_extraer_direccion_servicio_nuevo(self):
         texto = (

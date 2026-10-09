@@ -1015,13 +1015,10 @@ def mostrar_servicio(chat, msg_id, sid):
 
         inline_kb = [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-            [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "💾 Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
-            [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
-            [{"text": "", "callback_data": f"NAV_{prev_sid}_prev"}, {"text": "", "callback_data": f"NAV_{next_sid}_next"}],
+            [{"text": "� Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
+            [{"text": "⬅️ " + prev_sid, "callback_data": f"NAV_{prev_sid}_prev"}, {"text": next_sid + " ➡️", "callback_data": f"NAV_{next_sid}_next"}],
             [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
         ]
-        inline_kb[3][0]["text"] = f"⬅️ {prev_sid}"
-        inline_kb[3][1]["text"] = f"{next_sid} ➡️"
 
         tg_edit(chat, msg_id, texto, {"inline_keyboard": inline_kb})
     except Exception as e:
@@ -1140,8 +1137,30 @@ class HomeServe:
             self.login()
             return {}
 
+    def _estado_actual_servicio(self, sid):
+        try:
+            datos, raw_html = obtener_datos_servicio(sid)
+            if datos:
+                for clave in ("ESTADO", "ESTADO ACTUAL", "ESTADO DE SERVICIO"):
+                    valor = datos.get(clave)
+                    if valor:
+                        match = re.search(r"\b(?:348|318|320)\b", str(valor))
+                        if match:
+                            return match.group(0)
+                texto_total = " ".join(str(v) for v in datos.values())
+                match = re.search(r"\b(?:348|318|320)\b", texto_total)
+                if match:
+                    return match.group(0)
+            match = re.search(r"\b(?:348|318|320)\b", str(raw_html or ""))
+            if match:
+                return match.group(0)
+        except Exception:
+            pass
+        return None
+
     def cambiar_estado(self, sid, estado):
         try:
+            estado_inicial = self._estado_actual_servicio(sid)
             fecha = datetime.now() + timedelta(days=3)
             if fecha.weekday() == 5:
                 fecha += timedelta(days=2)
@@ -1171,7 +1190,21 @@ class HomeServe:
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
             }
 
-            self.session.post(BASE_URL, data=payload, timeout=10)
+            respuesta = self.session.post(BASE_URL, data=payload, timeout=10)
+            html = getattr(respuesta, "text", "") or ""
+            texto_html = html.lower()
+            if any(token in texto_html for token in ["error", "illegal", "denegado", "caducada", "no autorizado", "acceso inválido", "no se puede", "no es posible"]):
+                return False, f"❌ El cambio de estado no se pudo confirmar para {sid}"
+
+            for _ in range(3):
+                estado_final = self._estado_actual_servicio(sid)
+                if estado_final == estado:
+                    registrar_seguimiento(sid, estado, fecha_caducidad)
+                    return True, f"✅ Estado {estado} aplicado ({fecha_str})"
+                time.sleep(1)
+
+            if estado_inicial is not None:
+                return False, f"❌ El cambio no se confirmó en la web: seguía en {estado_inicial}"
             registrar_seguimiento(sid, estado, fecha_caducidad)
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"
         except Exception as e:
@@ -1576,7 +1609,6 @@ def webhook():
                     "inline_keyboard": [
                         [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
                         [{"text": "✅ Guardado con éxito", "callback_data": "NOOP"}],
-                        [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
                         [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
                     ]
                 }
