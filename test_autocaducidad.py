@@ -171,6 +171,37 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(etiqueta_fecha_ruta(datetime.now().date()), "Para hoy")
         self.assertTrue(etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1)).startswith("Para el "))
 
+    def test_mover_ruta_fecha_no_borra_si_es_la_misma_fecha(self):
+        from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha
+
+        chat_id = "ruta_misma_fecha"
+        fecha = datetime.now().date().isoformat()
+        guardar_ruta_diaria(chat_id, "160001", "Calle A 1", fecha=fecha, orden=0)
+        guardar_ruta_diaria(chat_id, "160002", "Calle B 2", fecha=fecha, orden=1)
+
+        moved = mover_ruta_fecha(chat_id, fecha, fecha)
+        rows = obtener_ruta_diaria(chat_id, fecha)
+
+        self.assertEqual(moved, 0)
+        self.assertEqual(len(rows), 2)
+
+    def test_mover_ruta_fecha_conserva_la_ruta_original(self):
+        from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha
+
+        chat_id = "ruta_conserva_original"
+        origen = datetime.now().date().isoformat()
+        destino = (datetime.now().date() + timedelta(days=1)).isoformat()
+        guardar_ruta_diaria(chat_id, "160001", "Calle A 1", fecha=origen, orden=0)
+        guardar_ruta_diaria(chat_id, "160002", "Calle B 2", fecha=origen, orden=1)
+
+        moved = mover_ruta_fecha(chat_id, origen, destino)
+        rows_origen = obtener_ruta_diaria(chat_id, origen)
+        rows_destino = obtener_ruta_diaria(chat_id, destino)
+
+        self.assertEqual(moved, 2)
+        self.assertEqual(len(rows_origen), 2)
+        self.assertEqual(len(rows_destino), 2)
+
     def test_export_no_incluye_servicios_en_tratamiento(self):
         from main import es_servicio_bloqueado
 

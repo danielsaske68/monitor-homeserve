@@ -426,6 +426,9 @@ def parsear_fecha_ruta(texto):
 def mover_ruta_fecha(chat_id, fecha_origen, fecha_destino):
     origen = fecha_origen or datetime.now().date().isoformat()
     destino = fecha_destino or origen
+    if origen == destino:
+        return 0
+
     rows = obtener_ruta_diaria(chat_id, origen)
     if not rows:
         return 0
@@ -438,7 +441,6 @@ def mover_ruta_fecha(chat_id, fecha_origen, fecha_destino):
                 "ON CONFLICT(chat_id, sid, fecha) DO UPDATE SET direccion=excluded.direccion, orden=excluded.orden, completado=excluded.completado",
                 (str(chat_id), str(row["sid"]), destino, row["direccion"], row["orden"], row.get("completado", 0)),
             )
-        conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), origen))
         conn.commit()
     return len(rows)
 
