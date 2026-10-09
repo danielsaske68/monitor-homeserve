@@ -697,8 +697,8 @@ def construir_mensaje_cita(direccion, hora_texto, fecha_texto=None):
     saludo = saludo_actual()
 
     if fecha_texto:
-        return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el {fecha_texto} a las {hora_humana}."
-    return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el {etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))} a las {hora_humana}."
+        return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el día {fecha_texto} a las {hora_humana}."
+    return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para el día de mañana a las {hora_humana}."
 
 
 def generar_mensaje_cita_sid(sid, fecha_hora=None):
@@ -720,16 +720,16 @@ def generar_mensaje_cita_sid(sid, fecha_hora=None):
     if fecha_hora:
         try:
             dt = datetime.strptime(str(fecha_hora), "%d/%m/%Y %H:%M")
-            fecha_fmt = etiqueta_fecha_ruta(dt.date())
+            fecha_fmt = dt.strftime("%d/%m/%Y")
             hora_fmt = dt.strftime("%H:%M")
         except ValueError:
-            fecha_fmt = etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))
+            fecha_fmt = "mañana"
             hora_fmt = str(fecha_hora).split()[-1] if " " in str(fecha_hora) else "9:00"
     else:
-        fecha_fmt = etiqueta_fecha_ruta(datetime.now().date() + timedelta(days=1))
+        fecha_fmt = "mañana"
         hora_fmt = "09:00"
 
-    mensaje = construir_mensaje_cita(ubicacion_str, hora_fmt, fecha_fmt)
+    mensaje = construir_mensaje_cita(ubicacion_str, hora_fmt, fecha_fmt if fecha_fmt != "mañana" else None)
     return telefono, mensaje
 
 
