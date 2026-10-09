@@ -1255,26 +1255,6 @@ def webhook():
             tg_send(chat, "🤖 Bot activo", botones())
             return jsonify(ok=True)
 
-        if chat in CITA_STATE:
-            state_info = CITA_STATE[chat]
-            msg_id = state_info["msg_id"]
-            telefono = state_info["telefono"]
-            base_msg = state_info["base_msg"]
-
-            fecha_formateada = formatear_fecha_para_mensaje(text)
-            mensaje_final = f"{base_msg} para {fecha_formateada}."
-            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
-
-            kb = {
-                "inline_keyboard": [
-                    [{"text": "💬 Enviar por WhatsApp", "url": whatsapp_url}],
-                    [{"text": "⬅️ Volver al servicio", "callback_data": f"SEL_{state_info['sid']}"}]
-                ]
-            }
-            CITA_STATE.pop(chat)
-            tg_send(chat, f"✅ Mensaje preparado:\n\n<code>{mensaje_final}</code>", kb)
-            return jsonify(ok=True)
-
         if chat in BAREMO_STATE:
             state_info = BAREMO_STATE[chat]
             msg_id = state_info["msg_id"]
@@ -1595,7 +1575,7 @@ def webhook():
                 updated_kb = {
                     "inline_keyboard": [
                         [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-                        [{"text": "💬 Cita WhatsApp", "callback_data": f"CITAWAP_{sid}"}, {"text": "✅ Guardado con éxito", "callback_data": "NOOP"}],
+                        [{"text": "✅ Guardado con éxito", "callback_data": "NOOP"}],
                         [{"text": "🛠 Cambiar Estado", "callback_data": f"CAMSEL_{sid}"}],
                         [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
                     ]
@@ -1611,119 +1591,6 @@ def webhook():
             except Exception as e:
                 logger.error(f"Error al guardar servicio: {e}")
 
-        elif action.startswith("CITAWAP_"):
-            sid = action.split("_")[1]
-            try:
-                url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-                r = homeserve.session.get(url, timeout=15)
-                soup = BeautifulSoup(r.text, "html.parser")
-              
-                datos = {}
-                for tr in soup.find_all("tr"):
-                    tds = tr.find_all("td")
-                    if len(tds) >= 2:
-                        clave = tds[0].get_text(" ", strip=True).replace(":", "").upper()
-                        valor = tds[1].get_text(" ", strip=True)
-                        datos[clave] = valor
-
-                telefonos = datos.get("TELEFONOS", "")
-                domicilio = datos.get("DOMICILIO", "")
-                poblacion = datos.get("POBLACION-PROVINCIA", "")
-
-                numeros = re.findall(r"\b\d{9}\b", telefonos)
-                if not numeros:
-                    tg_edit(chat, msg_id, "❌ No se encontró un número de teléfono válido para este servicio.", botones())
-                    return jsonify(ok=True)
-                
-                primer_telefono = numeros[0]
-
-                hora_actual = datetime.now().hour
-                if 6 <= hora_actual < 12:
-                    saludo = "días"
-                elif 12 <= hora_actual < 21:
-                    saludo = "tardes"
-                else:
-                    saludo = "noches"
-
-                dir_limpia = domicilio.strip() if domicilio else "su domicilio"
-                pob_limpia = poblacion.strip() if poblacion else ""
-                ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
-
-                base_mensaje = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
-
-                kb = {
-                    "inline_keyboard": [
-                        [{"text": "✅ Sí, agregar fecha y hora", "callback_data": f"CITA_YES_{sid}_{primer_telefono}"}],
-                        [{"text": "❌ Enviar sin fecha", "callback_data": f"CITA_NO_{sid}_{primer_telefono}"}],
-                        [{"text": "⬅️ Volver", "callback_data": f"SEL_{sid}"}]
-                    ]
-                }
-                tg_edit(chat, msg_id, f"💬 <b>Gestión de Cita WhatsApp</b>\n\nMensaje base:\n<i>{base_mensaje}</i>\n\n¿Deseas agregar fecha y hora para la cita?", kb)
-            except Exception as e:
-                tg_edit(chat, msg_id, f"❌ Error al preparar mensaje de WhatsApp:\n{e}", botones())
-
-        elif action.startswith("CITA_NO_"):
-            parts = action.split("_")
-            sid = parts[2]
-            telefono = parts[3]
-            
-            hora_actual = datetime.now().hour
-            saludo = "días" if 6 <= hora_actual < 12 else ("tardes" if 12 <= hora_actual < 21 else "noches")
-            
-            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-            r = homeserve.session.get(url, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            datos = {}
-            for tr in soup.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) >= 2:
-                    datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
-
-            dir_limpia = datos.get("DOMICILIO", "").strip()
-            pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
-
-            mensaje_final = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}."
-            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
-
-            kb = {
-                "inline_keyboard": [
-                    [{"text": "💬 Enviar por WhatsApp", "url": whatsapp_url}],
-                    [{"text": "⬅️ Volver al servicio", "callback_data": f"SEL_{sid}"}]
-                ]
-            }
-            tg_edit(chat, msg_id, f"✅ Mensaje preparado:\n\n<code>{mensaje_final}</code>", kb)
-
-        elif action.startswith("CITA_YES_"):
-            parts = action.split("_")
-            sid = parts[2]
-            telefono = parts[3]
-            
-            hora_actual = datetime.now().hour
-            saludo = "días" if 6 <= hora_actual < 12 else ("tardes" if 12 <= hora_actual < 21 else "noches")
-            
-            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
-            r = homeserve.session.get(url, timeout=15)
-            soup = BeautifulSoup(r.text, "html.parser")
-            datos = {}
-            for tr in soup.find_all("tr"):
-                tds = tr.find_all("td")
-                if len(tds) >= 2:
-                    datos[tds[0].get_text(" ", strip=True).replace(":", "").upper()] = tds[1].get_text(" ", strip=True)
-
-            dir_limpia = datos.get("DOMICILIO", "").strip()
-            pob_limpia = datos.get("POBLACION-PROVINCIA", "").strip()
-            ubicacion_str = f"en {dir_limpia}, {pob_limpia}".strip(", ")
-
-            base_msg = f"Hola buenas {saludo}, soy el fontanero del seguro. Le llamo por el servicio que tiene {ubicacion_str}"
-
-            CITA_STATE[chat] = {
-                "msg_id": msg_id,
-                "sid": sid,
-                "telefono": telefono,
-                "base_msg": base_msg
-            }
-            tg_edit(chat, msg_id, "✍️ Escribe a continuación la fecha y hora de la cita (ej. <i>mañana a las 10:00</i> o <i>el martes 25 a las 16:30</i>):", {"inline_keyboard": [[{"text": "⬅️ Cancelar", "callback_data": f"SEL_{sid}"}]]})
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
