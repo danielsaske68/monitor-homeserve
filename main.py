@@ -526,6 +526,8 @@ def limpiar_direccion_importada(texto):
     texto = re.sub(r"^\s*\*+\s*", "", texto)
     texto = re.sub(r"^\d{1,2}:\d{2}\s*[-–]\s*", "", texto)
     texto = re.sub(r"^\s*\d{7,8}\s*(?:[-–—:|]\s*)?", "", texto)
+    texto = re.sub(r"^(?:manitas\s+fontanero|fontanero|manitas)\s*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"^(?:\d{7,8}\s*(?:[-–—:|]\s*)?)+", "", texto)
     texto = texto.split("|")[-1].strip() if "|" in texto else texto
     texto = re.sub(r"(?i)\b(?:en espera de profesional|por confirmacion del siniestro|siniestro)\b.*$", "", texto)
     texto = re.sub(r"\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}.*$", "", texto, flags=re.IGNORECASE)

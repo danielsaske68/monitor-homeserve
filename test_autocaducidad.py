@@ -165,6 +165,20 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertTrue(rows[0]["direccion"].startswith("Carrer INGENIERO JOAQUIN BENLLOCH 27"))
         self.assertNotIn("16016046", rows[0]["direccion"])
 
+    def test_importar_ruta_ignora_id_duplicado_en_el_texto(self):
+        from main import importar_ruta_desde_texto, obtener_ruta_diaria
+
+        chat_id = "ruta_import_id_duplicado"
+        texto = "16016046|16016046 Fontanero Carrer INGENIERO JOAQUIN BENLLOCH 27, valencia"
+
+        count = importar_ruta_desde_texto(chat_id, texto)
+        rows = obtener_ruta_diaria(chat_id)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(rows[0]["sid"], "16016046")
+        self.assertIn("Carrer INGENIERO JOAQUIN BENLLOCH 27", rows[0]["direccion"])
+        self.assertNotIn("Fontanero", rows[0]["direccion"])
+
     def test_fecha_ruta_acepta_hoy_y_formatea_etiqueta_explicativa(self):
         from main import formatear_fecha_ruta, parsear_fecha_ruta
 
