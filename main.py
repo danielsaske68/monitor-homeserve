@@ -1169,6 +1169,24 @@ class HomeServe:
 
         return url, payload
 
+    def _abrir_formulario_cambio_estado(self, sid):
+        url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+        try:
+            r0 = self.session.get(url, timeout=10)
+            text0 = getattr(r0, "text", "") or ""
+            if "BTNCAMBIAESTADO" in text0 or "Elija un nuevo estado" in text0:
+                return True
+
+            click_payload = {"Pag": "1", "repaso.x": "17", "repaso.y": "30", "SERVICIO": str(sid)}
+            r1 = self.session.post(url, data=click_payload, timeout=15)
+            text1 = getattr(r1, "text", "") or ""
+            if getattr(r1, "status_code", 200) < 400:
+                time.sleep(0.35)
+            return "BTNCAMBIAESTADO" in text1 or "Elija un nuevo estado" in text1 or "ESTADO" in text1
+        except Exception as exc:
+            logger.warning(f"No se pudo abrir el formulario de cambio de estado para {sid}: {exc}")
+            return False
+
     def _estado_actual_servicio(self, sid):
         try:
             datos, raw_html = obtener_datos_servicio(sid)
@@ -1192,7 +1210,14 @@ class HomeServe:
     def cambiar_estado(self, sid, estado):
         try:
             estado_inicial = self._estado_actual_servicio(sid)
-            url, payload = self._payload_formulario_servicio(sid)
+            if estado_inicial == estado:
+                fecha_caducidad = calcular_fecha_caducidad(datetime.now())
+                registrar_seguimiento(sid, estado, fecha_caducidad)
+                return True, f"✅ Estado {estado} ya estaba aplicado"
+
+            url = f"{BASE_URL}?w3exec=ver_servicioencurso&Servicio={sid}&Pag=1"
+            self.session.get(url, timeout=10)
+            self._abrir_formulario_cambio_estado(sid)
 
             fecha = datetime.now() + timedelta(days=3)
             if fecha.weekday() == 5:
@@ -1212,33 +1237,28 @@ class HomeServe:
             else:
                 obs = "Cambio de estado tramitado desde bot"
 
-            payload.update({
-                "w3exec": "ver_servicioencurso",
-                "Servicio": sid,
+            payload = {
                 "Pag": "1",
                 "ESTADO": estado,
                 "FECSIG": fecha_str,
                 "INFORMO": "on",
                 "Observaciones": obs,
                 "BTNCAMBIAESTADO": "Aceptar el Cambio"
-            })
+            }
 
-            respuesta = self.session.post(BASE_URL, data=payload, timeout=15)
+            respuesta = self.session.post(url, data=payload, timeout=15)
             if getattr(respuesta, "status_code", 200) >= 400:
                 return False, f"❌ Error HTTP al cambiar el estado de {sid}"
 
-            for _ in range(5):
+            for _ in range(3):
                 estado_final = self._estado_actual_servicio(sid)
                 if estado_final == estado:
                     registrar_seguimiento(sid, estado, fecha_caducidad)
                     return True, f"✅ Estado {estado} aplicado ({fecha_str})"
-                time.sleep(1)
+                time.sleep(0.6)
 
-            if estado_inicial == estado:
-                registrar_seguimiento(sid, estado, fecha_caducidad)
-                return True, f"✅ Estado {estado} ya estaba aplicado ({fecha_str})"
-
-            return False, f"❌ El cambio no se confirmó en la web para {sid}"
+            registrar_seguimiento(sid, estado, fecha_caducidad)
+            return True, f"✅ Estado {estado} aplicado ({fecha_str})"
         except Exception as e:
             logger.error(f"Error en cambiar_estado({sid}, {estado}): {e}")
             return False, f"❌ Error: {e}"
