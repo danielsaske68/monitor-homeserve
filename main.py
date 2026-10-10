@@ -1062,7 +1062,7 @@ def mostrar_servicio(chat, msg_id, sid):
 
         inline_kb = [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-            [{"text": "💾 Guardar servicio": f"GUARDARSERV_{sid}"}],
+            [{"text": "💾Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
             [{"text": "⬅️ " + prev_sid, "callback_data": f"NAV_{prev_sid}_prev"}, {"text": next_sid + " ➡️", "callback_data": f"NAV_{next_sid}_next"}],
             [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
         ]
