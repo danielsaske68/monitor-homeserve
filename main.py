@@ -111,6 +111,53 @@ def siguiente_estado_automatico(estado):
     return "318" if estado in ("348", "320") else estado
 
 
+def revisar_caducados_hoy():
+    """Cambia a 348 los servicios cuya fecha de caducidad es hoy o ya vencida.
+    Solo se ejecuta una vez al día, antes de las 23:00.
+    """
+    try:
+        servicios = homeserve.obtener_curso()
+    except Exception as exc:
+        logger.error(f"Error al leer servicios para revisión de caducidad: {exc}")
+        return {"cambiados": 0, "saltados": 0, "errores": 0, "total": 0}
+
+    if not servicios:
+        return {"cambiados": 0, "saltados": 0, "errores": 0, "total": 0}
+
+    hoy = datetime.now().date()
+    cambiados = 0
+    saltados = 0
+    errores = 0
+
+    for sid, texto in servicios.items():
+        fecha_web = extraer_fecha_caducidad(texto)
+        if not fecha_web or fecha_web > hoy:
+            saltados += 1
+            continue
+
+        try:
+            estado_actual = homeserve._estado_actual_servicio(sid)
+        except Exception:
+            estado_actual = None
+
+        if estado_actual == "348":
+            saltados += 1
+            continue
+
+        ok, _ = homeserve.cambiar_estado(sid, "348")
+        if ok:
+            cambiados += 1
+        else:
+            errores += 1
+
+    return {
+        "cambiados": cambiados,
+        "saltados": saltados,
+        "errores": errores,
+        "total": len(servicios),
+    }
+
+
 def parsear_servicios_texto(texto):
     """Extrae la dirección completa del servicio para exportar/importar rutas.
 
@@ -1015,7 +1062,7 @@ def mostrar_servicio(chat, msg_id, sid):
 
         inline_kb = [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-            [{"text": "� Guardar servicio", "callback_data": f"GUARDARSERV_{sid}"}],
+            [{"text": "💾 Guardar servicio": f"GUARDARSERV_{sid}"}],
             [{"text": "⬅️ " + prev_sid, "callback_data": f"NAV_{prev_sid}_prev"}, {"text": next_sid + " ➡️", "callback_data": f"NAV_{next_sid}_next"}],
             [{"text": "⬅️ Volver", "callback_data": "CURSO"}]
         ]
@@ -1319,8 +1366,36 @@ def loop_recordatorios():
         except Exception as e:
             logger.error(f"Error en loop_recordatorios: {e}")
 
+
+def loop_caducidad_diaria():
+    """Revisión nocturna: antes de las 23:00 comprueba si hay servicios caducados hoy y los fuerza a 348."""
+    while True:
+        try:
+            ahora = datetime.now()
+            objetivo = ahora.replace(hour=22, minute=0, second=0, microsecond=0)
+            if ahora >= objetivo:
+                siguiente = (ahora + timedelta(days=1)).replace(hour=22, minute=0, second=0, microsecond=0)
+                espera = max(1, (siguiente - ahora).total_seconds())
+            else:
+                espera = max(1, (objetivo - ahora).total_seconds())
+
+            time.sleep(espera)
+
+            resultado = revisar_caducados_hoy()
+            if resultado["cambiados"] or resultado["errores"]:
+                logger.info(
+                    "🕛 [CADUCIDAD DIARIA] servicios revisados=%s, cambiados=%s, errores=%s",
+                    resultado["total"],
+                    resultado["cambiados"],
+                    resultado["errores"],
+                )
+        except Exception as exc:
+            logger.error(f"Error en loop_caducidad_diaria: {exc}")
+            time.sleep(300)
+
 threading.Thread(target=loop, daemon=True).start()
 threading.Thread(target=loop_recordatorios, daemon=True).start()
+threading.Thread(target=loop_caducidad_diaria, daemon=True).start()
 
 # =========================================================
 # WEBHOOK
