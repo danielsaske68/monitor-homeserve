@@ -239,6 +239,14 @@ class AutoCaducidadTests(unittest.TestCase):
             telefono_default, _ = generar_mensaje_cita_sid("12345678", "01/01/2026 09:00")
             self.assertEqual(telefono_default, "612345678")
 
+    def test_boton_cambiar_numero_usa_texto_verde_y_pasa_al_siguiente_telefono(self):
+        from main import boton_cambiar_numero
+
+        boton = boton_cambiar_numero("12345678", 0, 2)
+
+        self.assertEqual(boton["text"], "🟢 Cambiar número")
+        self.assertEqual(boton["callback_data"], "RUTA_TEL_12345678_1")
+
     def test_mover_ruta_fecha_no_borra_si_es_la_misma_fecha(self):
         from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha
 

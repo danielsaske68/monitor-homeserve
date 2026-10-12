@@ -760,6 +760,31 @@ def extraer_numeros_telefono(telefonos):
     return re.findall(r"\b\d{9}\b", str(telefonos or ""))
 
 
+def crear_botones_telefono(sid, telefono_idx=0):
+    try:
+        datos, _ = obtener_datos_servicio(sid)
+        numeros = extraer_numeros_telefono(datos.get("TELEFONOS", ""))
+    except Exception:
+        numeros = []
+
+    if len(numeros) <= 1:
+        return []
+
+    botones = []
+    for i, num in enumerate(numeros):
+        prefijo = "✅ " if i == telefono_idx else ""
+        botones.append({"text": f"{prefijo}{num}", "callback_data": f"RUTA_TEL_{sid}_{i}"})
+    return [botones]
+
+
+def boton_cambiar_numero(sid, telefono_idx=0, total_telefonos=1):
+    if total_telefonos <= 1:
+        return None
+
+    siguiente_idx = (telefono_idx + 1) % total_telefonos
+    return {"text": "🟢 Cambiar número", "callback_data": f"RUTA_TEL_{sid}_{siguiente_idx}"}
+
+
 def generar_mensaje_cita_sid(sid, fecha_hora=None, telefono_preferido=None):
     try:
         datos, _ = obtener_datos_servicio(sid)
@@ -1937,11 +1962,9 @@ def webhook():
 
             telefono, mensaje_final = info
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
+            tel_buttons = crear_botones_telefono(sid, telefono_idx)
             numeros = extraer_numeros_telefono(obtener_datos_servicio(sid)[0].get("TELEFONOS", ""))
-            tel_buttons = []
-            for i, num in enumerate(numeros):
-                label = f"{'✅ ' if i == telefono_idx else ''}{num}"
-                tel_buttons.append({"text": label, "callback_data": f"RUTA_TEL_{sid}_{i}"})
+            cambiar_numero_btn = boton_cambiar_numero(sid, telefono_idx, len(numeros)) if len(numeros) > 1 else None
 
             kb = {
                 "inline_keyboard": [
@@ -1949,8 +1972,10 @@ def webhook():
                         {"text": "⬅️", "callback_data": f"RUTA_CITAR_{prev_sid}" if prev_sid else "RUTA_DEL_DIA"},
                         {"text": "💬 Enviar por WhatsApp", "url": whatsapp_url},
                         {"text": "➡️", "callback_data": f"RUTA_CITAR_{next_sid}" if next_sid else "RUTA_DEL_DIA"}
-                    ]
-                ] + ([tel_buttons] if len(tel_buttons) > 1 else []) + [
+                    ],
+                    [{"text": f"📞 Teléfono: {telefono}", "callback_data": f"RUTA_TEL_{sid}_{telefono_idx}"}],
+                    [cambiar_numero_btn] if cambiar_numero_btn else [],
+                    *tel_buttons,
                     [{"text": "⬅️ Volver a ruta", "callback_data": "RUTA_DEL_DIA"}]
                 ]
             }
@@ -1992,15 +2017,9 @@ def webhook():
 
             telefono, mensaje_final = info
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
-            try:
-                datos, _ = obtener_datos_servicio(sid)
-                numeros = extraer_numeros_telefono(datos.get("TELEFONOS", ""))
-            except Exception:
-                numeros = []
-            tel_buttons = []
-            for i, num in enumerate(numeros):
-                label = f"{'✅ ' if i == telefono_idx else ''}{num}"
-                tel_buttons.append({"text": label, "callback_data": f"RUTA_TEL_{sid}_{i}"})
+            tel_buttons = crear_botones_telefono(sid, telefono_idx)
+            numeros = extraer_numeros_telefono(datos.get("TELEFONOS", ""))
+            cambiar_numero_btn = boton_cambiar_numero(sid, telefono_idx, len(numeros)) if len(numeros) > 1 else None
 
             kb = {
                 "inline_keyboard": [
@@ -2008,8 +2027,10 @@ def webhook():
                         {"text": "⬅️", "callback_data": f"RUTA_CITAR_{prev_sid}" if prev_sid else "RUTA_DEL_DIA"},
                         {"text": "💬 Enviar por WhatsApp", "url": whatsapp_url},
                         {"text": "➡️", "callback_data": f"RUTA_CITAR_{next_sid}" if next_sid else "RUTA_DEL_DIA"}
-                    ]
-                ] + ([tel_buttons] if len(tel_buttons) > 1 else []) + [
+                    ],
+                    [{"text": f"📞 Teléfono: {telefono}", "callback_data": f"RUTA_TEL_{sid}_{telefono_idx}"}],
+                    [cambiar_numero_btn] if cambiar_numero_btn else [],
+                    *tel_buttons,
                     [{"text": "⬅️ Volver a ruta", "callback_data": "RUTA_DEL_DIA"}]
                 ]
             }
