@@ -223,6 +223,22 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertIn("para el 17/oct", texto_fecha.lower())
         self.assertNotIn("para 17/oct", texto_fecha.lower())
 
+    def test_generar_mensaje_cita_sid_usa_telefono_preferido_si_se_pasa(self):
+        from main import generar_mensaje_cita_sid
+
+        with patch("main.obtener_datos_servicio") as mock_obtener:
+            mock_obtener.return_value = ({
+                "TELEFONOS": "612345678 963456789",
+                "DOMICILIO": "Calle Falsa 123",
+                "POBLACION-PROVINCIA": "Valencia",
+            }, "")
+
+            telefono, _ = generar_mensaje_cita_sid("12345678", "01/01/2026 09:00", telefono_preferido="963456789")
+            self.assertEqual(telefono, "963456789")
+
+            telefono_default, _ = generar_mensaje_cita_sid("12345678", "01/01/2026 09:00")
+            self.assertEqual(telefono_default, "612345678")
+
     def test_mover_ruta_fecha_no_borra_si_es_la_misma_fecha(self):
         from main import guardar_ruta_diaria, obtener_ruta_diaria, mover_ruta_fecha
 

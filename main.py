@@ -63,6 +63,7 @@ BUSCAR_STATE = {}
 IMPORTAR_STATE = {}
 RUTA_FECHA_STATE = {}
 AJUSTAR_RUTA_STATE = {}
+WHATSAPP_TEL_STATE = {}
 
 DATA_DIR = "/data"
 DB_PATH = os.path.join(DATA_DIR, "usuarios.db")
@@ -755,18 +756,25 @@ def construir_mensaje_cita(direccion, hora_texto, fecha_texto=None):
     return f"Hola {saludo}, soy el fontanero del seguro. Le hablo por el servicio que tiene en {direccion} para {fecha_formateada} a las {hora_humana}."
 
 
-def generar_mensaje_cita_sid(sid, fecha_hora=None):
+def extraer_numeros_telefono(telefonos):
+    return re.findall(r"\b\d{9}\b", str(telefonos or ""))
+
+
+def generar_mensaje_cita_sid(sid, fecha_hora=None, telefono_preferido=None):
     try:
         datos, _ = obtener_datos_servicio(sid)
     except Exception:
         return None
 
     telefonos = datos.get("TELEFONOS", "")
-    numeros = re.findall(r"\b\d{9}\b", telefonos)
+    numeros = extraer_numeros_telefono(telefonos)
     if not numeros:
         return None
 
-    telefono = numeros[0]
+    if telefono_preferido and telefono_preferido in numeros:
+        telefono = telefono_preferido
+    else:
+        telefono = numeros[0]
     direccion = (datos.get("DOMICILIO", "") or "").strip()
     poblacion = (datos.get("POBLACION-PROVINCIA", "") or "").strip()
     ubicacion_str = f"{direccion}, {poblacion}".strip(", ")
@@ -1891,6 +1899,63 @@ def webhook():
             IMPORTAR_STATE[chat] = {"msg_id": msg_id}
             tg_edit(chat, msg_id, "📥 Envíame la lista ordenada de direcciones para importarla a la ruta del día.\n\nRegla: una dirección por línea y sin texto extra.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
+        elif action.startswith("RUTA_TEL_"):
+            try:
+                payload = action.replace("RUTA_TEL_", "", 1)
+                sid, idx_raw = payload.rsplit("_", 1)
+                idx = int(idx_raw)
+                if sid and idx >= 0:
+                    WHATSAPP_TEL_STATE.setdefault(chat, {})[sid] = idx
+            except Exception:
+                pass
+
+            sid = action.replace("RUTA_TEL_", "", 1).rsplit("_", 1)[0]
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            fecha_ruta = datetime.strptime(fecha_actual, "%Y-%m-%d").date()
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT sid, orden FROM ruta_diaria WHERE chat_id=? AND fecha=? AND completado=0 ORDER BY orden ASC, sid ASC",
+                    (str(chat), fecha_actual),
+                ).fetchall()
+                row = conn.execute(
+                    "SELECT orden FROM ruta_diaria WHERE chat_id=? AND sid=? AND fecha=?",
+                    (str(chat), str(sid), fecha_actual),
+                ).fetchone()
+
+            orden = int((row["orden"] if row else 0) or 0)
+            ids = [str(r["sid"]) for r in rows]
+            prev_sid = ids[(ids.index(str(sid)) - 1) % len(ids)] if len(ids) > 1 else None
+            next_sid = ids[(ids.index(str(sid)) + 1) % len(ids)] if len(ids) > 1 else None
+            hora_orden = 9 + orden
+            fecha_hora = f"{fecha_ruta.strftime('%d/%m/%Y')} {hora_orden:02d}:00"
+
+            telefono_idx = WHATSAPP_TEL_STATE.get(chat, {}).get(sid, 0)
+            info = generar_mensaje_cita_sid(sid, fecha_hora, telefono_preferido=extraer_numeros_telefono(obtener_datos_servicio(sid)[0].get("TELEFONOS", ""))[telefono_idx] if extraer_numeros_telefono(obtener_datos_servicio(sid)[0].get("TELEFONOS", "")) else None)
+            if not info:
+                tg_edit(chat, msg_id, f"❌ No se pudo preparar la cita para {sid}.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+                return jsonify(ok=True)
+
+            telefono, mensaje_final = info
+            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
+            numeros = extraer_numeros_telefono(obtener_datos_servicio(sid)[0].get("TELEFONOS", ""))
+            tel_buttons = []
+            for i, num in enumerate(numeros):
+                label = f"{'✅ ' if i == telefono_idx else ''}{num}"
+                tel_buttons.append({"text": label, "callback_data": f"RUTA_TEL_{sid}_{i}"})
+
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "⬅️", "callback_data": f"RUTA_CITAR_{prev_sid}" if prev_sid else "RUTA_DEL_DIA"},
+                        {"text": "💬 Enviar por WhatsApp", "url": whatsapp_url},
+                        {"text": "➡️", "callback_data": f"RUTA_CITAR_{next_sid}" if next_sid else "RUTA_DEL_DIA"}
+                    ]
+                ] + ([tel_buttons] if len(tel_buttons) > 1 else []) + [
+                    [{"text": "⬅️ Volver a ruta", "callback_data": "RUTA_DEL_DIA"}]
+                ]
+            }
+            tg_edit(chat, msg_id, f"📞 <b>Cita lista</b>\n\n<code>{mensaje_final}</code>", kb)
+
         elif action.startswith("RUTA_CITAR_"):
             sid = action.split("_")[-1]
             fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
@@ -1912,20 +1977,39 @@ def webhook():
             hora_orden = 9 + orden
             fecha_hora = f"{fecha_ruta.strftime('%d/%m/%Y')} {hora_orden:02d}:00"
 
-            info = generar_mensaje_cita_sid(sid, fecha_hora)
+            telefono_idx = WHATSAPP_TEL_STATE.get(chat, {}).get(sid, 0)
+            try:
+                datos, _ = obtener_datos_servicio(sid)
+                numeros = extraer_numeros_telefono(datos.get("TELEFONOS", ""))
+                telefono_pref = numeros[telefono_idx] if numeros and telefono_idx < len(numeros) else None
+            except Exception:
+                telefono_pref = None
+
+            info = generar_mensaje_cita_sid(sid, fecha_hora, telefono_preferido=telefono_pref)
             if not info:
                 tg_edit(chat, msg_id, f"❌ No se pudo preparar la cita para {sid}.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
                 return jsonify(ok=True)
 
             telefono, mensaje_final = info
             whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
+            try:
+                datos, _ = obtener_datos_servicio(sid)
+                numeros = extraer_numeros_telefono(datos.get("TELEFONOS", ""))
+            except Exception:
+                numeros = []
+            tel_buttons = []
+            for i, num in enumerate(numeros):
+                label = f"{'✅ ' if i == telefono_idx else ''}{num}"
+                tel_buttons.append({"text": label, "callback_data": f"RUTA_TEL_{sid}_{i}"})
+
             kb = {
                 "inline_keyboard": [
                     [
                         {"text": "⬅️", "callback_data": f"RUTA_CITAR_{prev_sid}" if prev_sid else "RUTA_DEL_DIA"},
                         {"text": "💬 Enviar por WhatsApp", "url": whatsapp_url},
                         {"text": "➡️", "callback_data": f"RUTA_CITAR_{next_sid}" if next_sid else "RUTA_DEL_DIA"}
-                    ],
+                    ]
+                ] + ([tel_buttons] if len(tel_buttons) > 1 else []) + [
                     [{"text": "⬅️ Volver a ruta", "callback_data": "RUTA_DEL_DIA"}]
                 ]
             }
