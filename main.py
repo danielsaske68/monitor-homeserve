@@ -224,8 +224,12 @@ def parsear_servicios_texto(texto):
         return {}
 
     servicios = {}
+    seen_ids = set()
     for idx, match in enumerate(matches):
         sid = match.group(0)
+        if sid in seen_ids:
+            continue
+        seen_ids.add(sid)
         fin = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         bloque = text[match.start():fin]
         bloque = re.sub(r"\s+", " ", bloque).strip()
@@ -588,7 +592,9 @@ def limpiar_direccion_importada(texto):
     texto = re.sub(r"^\d{1,2}:\d{2}\s*[-–]\s*", "", texto)
     texto = re.sub(r"^\s*\d{7,8}\s*(?:[-–—:|]\s*)?", "", texto)
     texto = texto.split("|")[-1].strip() if "|" in texto else texto
-    texto = re.sub(r"(?i)\b(?:en espera de profesional|por confirmacion del siniestro|siniestro)\b.*$", "", texto)
+    texto = re.sub(r"^(?:\d{7,8}\s+)+", "", texto)
+    texto = re.sub(r"^(?:manitas\s+fontanero|fontanero|manitas)\s*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"(?i)\b(?:en espera de (?:cliente|profesional)|por indicaciones|por confirmacion del siniestro|siniestro)\b.*$", "", texto)
     texto = re.sub(r"\s+de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2}.*$", "", texto, flags=re.IGNORECASE)
     texto = re.sub(r"\s+\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}.*$", "", texto)
     texto = re.sub(r"\s+\d{2}/\d{2}/\d{4}.*$", "", texto)
@@ -1297,12 +1303,16 @@ class HomeServe:
             if getattr(respuesta, "status_code", 200) >= 400:
                 return False, f"❌ Error HTTP al cambiar el estado de {sid}"
 
+            confirmado = False
             for _ in range(3):
                 estado_final = self._estado_actual_servicio(sid)
                 if estado_final == estado:
-                    registrar_seguimiento(sid, estado, fecha_caducidad)
-                    return True, f"✅ Estado {estado} aplicado ({fecha_str})"
+                    confirmado = True
+                    break
                 time.sleep(0.6)
+
+            if not confirmado:
+                return False, f"❌ No se confirmó el cambio del servicio {sid} a {estado}"
 
             registrar_seguimiento(sid, estado, fecha_caducidad)
             return True, f"✅ Estado {estado} aplicado ({fecha_str})"

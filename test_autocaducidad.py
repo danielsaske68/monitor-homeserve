@@ -93,6 +93,25 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(servicios["16045791"], "Avinguda del Mar 22 46012-Valencia")
         self.assertEqual(servicios["16045792"], "Carretera de Sagunto 12 46001-Valencia")
 
+    def test_parsear_servicios_texto_ignora_id_duplicado_y_prefijo_manitas(self):
+        from main import importar_ruta_desde_texto, obtener_ruta_diaria, parsear_servicios_texto
+
+        texto = (
+            "16035845|16035845 Manitas fontanero C/CL. ESPIGOL Carrer Espigol, 19 19 2 8 46980-PATERNA "
+            "En espera de Cliente por indicaciones 05/10/2026 13/10/2026 08/10/2026 de 08:00 a 20:00 RGA Manitas"
+        )
+
+        servicios = parsear_servicios_texto(texto)
+        self.assertEqual(servicios["16035845"], "C/CL. ESPIGOL Carrer Espigol, 19 19 2 8 46980-PATERNA")
+
+        chat_id = "ruta_import_id_duplicado"
+        count = importar_ruta_desde_texto(chat_id, texto)
+        rows = obtener_ruta_diaria(chat_id)
+
+        self.assertEqual(count, 1)
+        self.assertTrue(rows[0]["direccion"].startswith("C/CL. ESPIGOL"))
+        self.assertNotIn("Manitas fontanero", rows[0]["direccion"])
+
     def test_ordenar_ruta_servicios_prioriza_horario_y_zona(self):
         items = [
             ("A", "Paterna - Carrer Espigol 19"),
