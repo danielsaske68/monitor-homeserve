@@ -169,26 +169,9 @@ def parsear_servicios_texto(texto):
         soup = BeautifulSoup(text, "html.parser")
         servicios = {}
         
-        # Iteramos fila por fila en la tabla de servicios
-        filas = soup.find_all("tr")
-        for fila in filas:
-            # Buscamos todas las celdas <td> de la fila
-            tds = fila.find_all("td")
-            if not tds:
-                continue
-            
-            # La primera celda (tds[0]) contiene los iconos de estado (candado, ojos, nada, etc.)
-            primera_celda_html = str(tds[0])
-            
-            # FILTRO ESTRICTO: Si la primera celda contiene el candado, se ignora la fila entera
-            if "candado.gif" in primera_celda_html:
-                continue
-                
-            # Buscamos el enlace del servicio dentro de la fila
-            link = fila.find("a", href=True)
-            if not link:
-                continue
-                
+        # Al buscar exclusivamente las etiquetas 'a' con 'ver_servicioencurso', 
+        # nos saltamos automáticamente todos los candados (porque los candados NO tienen enlace <a>)
+        for link in soup.find_all("a", href=True):
             href = link.get("href", "")
             if "ver_servicioencurso" not in href or "Servicio=" not in href:
                 continue
@@ -201,8 +184,10 @@ def parsear_servicios_texto(texto):
             if sid in servicios:
                 continue
 
-            # Obtenemos el texto limpio de toda la fila para extraer la dirección
-            row_text = fila.get_text(" ", strip=True)
+            # Obtenemos la fila entera para extraer la dirección
+            row = link.find_parent("tr")
+            row_text = row.get_text(" ", strip=True) if row else link.parent.get_text(" ", strip=True)
+            
             if not row_text:
                 continue
                 
