@@ -165,23 +165,27 @@ def parsear_servicios_texto(texto):
 
     text = str(texto).replace("\r", " ").replace("\u00a0", " ")
 
-    # Si nos llega HTML directamente de la página de HomeServe
     if "<a" in text or "<td" in text:
         soup = BeautifulSoup(text, "html.parser")
         servicios = {}
         
-        # Buscamos todas las filas de la tabla o los elementos td que contienen servicios
-        filas = soup.find_all("tr") if soup.find_all("tr") else soup.find_all("td")
-        
+        # Iteramos fila por fila en la tabla de servicios
+        filas = soup.find_all("tr")
         for fila in filas:
-            fila_html = str(fila)
+            # Buscamos todas las celdas <td> de la fila
+            tds = fila.find_all("td")
+            if not tds:
+                continue
             
-            # FILTRO CLAVE: Si la celda o la fila tiene el candado, la ignoramos por completo
-            if "candado.gif" in fila_html or "En tratamiento por Homeserve" in fila_html:
+            # La primera celda (tds[0]) contiene los iconos de estado (candado, ojos, nada, etc.)
+            primera_celda_html = str(tds[0])
+            
+            # FILTRO ESTRICTO: Si la primera celda contiene el candado, se ignora la fila entera
+            if "candado.gif" in primera_celda_html:
                 continue
                 
-            # Buscamos el enlace del servicio en curso
-            link = fila.find("a", href=True) if hasattr(fila, "find") else None
+            # Buscamos el enlace del servicio dentro de la fila
+            link = fila.find("a", href=True)
             if not link:
                 continue
                 
@@ -197,8 +201,8 @@ def parsear_servicios_texto(texto):
             if sid in servicios:
                 continue
 
-            # Obtenemos el texto limpio de la fila/elemento excluyendo el ID
-            row_text = fila.get_text(" ", strip=True) if hasattr(fila, "get_text") else ""
+            # Obtenemos el texto limpio de toda la fila para extraer la dirección
+            row_text = fila.get_text(" ", strip=True)
             if not row_text:
                 continue
                 
@@ -210,7 +214,6 @@ def parsear_servicios_texto(texto):
         if servicios:
             return servicios
 
-    # (El resto de tus patrones de respaldo por si entra texto plano se mantienen igual...)
     return {}
 
 
