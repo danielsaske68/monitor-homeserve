@@ -37,12 +37,12 @@ INTERVALO = int(os.getenv("INTERVALO_SEGUNDOS", 40))
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "1234")
 
-LOGIN_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales"
-ASIGNACION_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion"
-BASE_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe"
-SERVICIOS_CURSO_URL = "https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total"
+LOGIN_URL = "[https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales](https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=PROF_PASS&utm_source=homeserve.es&utm_medium=referral&utm_campaign=homeserve_footer&utm_content=profesionales)"
+ASIGNACION_URL = "[https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion](https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=prof_asignacion)"
+BASE_URL = "[https://www.clientes.homeserve.es/cgi-bin/fccgi.exe](https://www.clientes.homeserve.es/cgi-bin/fccgi.exe)"
+SERVICIOS_CURSO_URL = "[https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total](https://www.clientes.homeserve.es/cgi-bin/fccgi.exe?w3exec=lista_servicios_total)"
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TELEGRAM_API = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("bot")
@@ -113,9 +113,6 @@ def siguiente_estado_automatico(estado):
 
 
 def revisar_caducados_hoy():
-    """Cambia a 348 los servicios cuya fecha de caducidad es hoy o ya vencida.
-    Solo se ejecuta una vez al día, antes de las 23:00.
-    """
     try:
         servicios = homeserve.obtener_curso()
     except Exception as exc:
@@ -169,8 +166,6 @@ def parsear_servicios_texto(texto):
     if "<a" in text or "<td" in text:
         soup = BeautifulSoup(text, "html.parser")
         
-        # Buscamos exclusivamente los enlaces <a> que apuntan a ver_servicioencurso
-        # Como los candados NO tienen etiqueta <a>, el script los ignora al 100%.
         for link in soup.find_all("a", href=True):
             href = link.get("href", "")
             if "ver_servicioencurso" not in href or "Servicio=" not in href:
@@ -184,7 +179,6 @@ def parsear_servicios_texto(texto):
             if sid in servicios:
                 continue
 
-            # Obtenemos la fila entera <tr> de la tabla
             row = link.find_parent("tr")
             if not row:
                 continue
@@ -193,14 +187,10 @@ def parsear_servicios_texto(texto):
             if len(cols) >= 3:
                 profesion = cols[1].get_text(strip=True)
                 direccion_cruda = cols[2].get_text(strip=True)
-                
-                # Limpiamos la dirección utilizando tus funciones de limpieza habituales
                 row_text = f"{profesion} {direccion_cruda}"
                 direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text) or direccion_cruda
-                
                 servicios[sid] = direccion
             else:
-                # Fallback por si la estructura de columnas varía
                 row_text = row.get_text(" ", strip=True).replace(sid, "", 1).strip(" -:|/")
                 direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text)
                 if direccion:
@@ -210,7 +200,6 @@ def parsear_servicios_texto(texto):
 
 
 def ordenar_ruta_servicios(items):
-    """Devuelve los servicios ordenados por zona y horario para una ruta del día."""
     prioridad = {
         "paterna": 0,
         "meliana": 1,
@@ -405,6 +394,17 @@ def eliminar_servicio_ruta(chat_id, sid, fecha=None):
             (str(chat_id), str(sid), fecha),
         )
         conn.commit()
+    
+    # Reindexar automáticamente los servicios restantes para que las horas corran y rellenen el hueco
+    rows = obtener_ruta_diaria(chat_id, fecha)
+    activos = [r for r in rows if not r.get("completado")]
+    with get_db() as conn:
+        for new_idx, r in enumerate(activos):
+            conn.execute(
+                "UPDATE ruta_diaria SET orden=? WHERE chat_id=? AND sid=? AND fecha=?",
+                (new_idx, str(chat_id), str(r["sid"]), fecha)
+            )
+        conn.commit()
     return cursor.rowcount
 
 
@@ -553,8 +553,6 @@ def es_servicio_bloqueado(texto):
 
 def exportar_ruta_dia(chat_id, fecha=None, refrescar=True):
     fecha = fecha or datetime.now().date().isoformat()
-    
-    # Obtenemos los servicios y aplicamos el filtro de limpieza (sin candados) para la ruta
     r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
     r.encoding = "latin-1"
     servicios_limpios = parsear_servicios_texto(r.text) or {}
@@ -575,7 +573,6 @@ def exportar_ruta_dia(chat_id, fecha=None, refrescar=True):
         guardar_ruta_diaria(chat_id, sid, direccion, fecha=fecha, orden=idx)
         
     rows = obtener_ruta_diaria(chat_id, fecha)
-
     rows = sorted(rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
     lines = []
     for row in rows:
@@ -678,7 +675,6 @@ def generar_ruta_dia(chat_id, servicios=None, refrescar=False):
     rows = obtener_ruta_diaria(chat_id, today)
 
     if refrescar or not rows:
-        # Si no pasan servicios, los obtenemos filtrando los candados mediante parsear_servicios_texto
         if not servicios:
             r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
             r.encoding = "latin-1"
@@ -703,7 +699,6 @@ def generar_ruta_dia(chat_id, servicios=None, refrescar=False):
 
 
 def validar_orden_ruta(rows):
-    """Comprueba que la ruta tiene orden secuencial desde las 09:00."""
     if not rows:
         return {"ok": True, "issues": [], "hora_esperada": []}
 
@@ -966,7 +961,8 @@ def botones_todos_estados():
     }
 
 
-def botones_num_serv():    return {
+def botones_num_serv():
+    return {
         "inline_keyboard": [
             [{"text": "➕ Agregar servicio", "callback_data": "ADD_SERV"}],
             [{"text": "🗑 Eliminar archivo", "callback_data": "DEL_SERV"}],
@@ -1006,14 +1002,14 @@ def direccion_para_mapa(texto_servicio="", domicilio="", poblacion=""):
 
 
 def botones_servicio(sid, texto_servicio=""):
-    gmaps_url = "https://www.google.com/maps"
-    waze_url = "https://waze.com"
+    gmaps_url = "[https://www.google.com/maps](https://www.google.com/maps)"
+    waze_url = "[https://waze.com](https://waze.com)"
 
     direccion = direccion_para_mapa(texto_servicio)
     if direccion:
         query_mapa = quote_plus(direccion)
-        gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-        waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+        gmaps_url = f"[https://www.google.com/maps/search/?api=1&query=](https://www.google.com/maps/search/?api=1&query=){query_mapa}"
+        waze_url = f"[https://waze.com/ul?q=](https://waze.com/ul?q=){query_mapa}&navigate=yes"
 
     return {
         "inline_keyboard": [
@@ -1085,8 +1081,8 @@ def mostrar_servicio(chat, msg_id, sid):
 
         direccion_completa = direccion_para_mapa(domicilio=domicilio, poblacion=poblacion)
         query_mapa = quote_plus(direccion_completa) if direccion_completa else quote_plus(f"{domicilio}, {poblacion}".strip(", "))
-        gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-        waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+        gmaps_url = f"[https://www.google.com/maps/search/?api=1&query=](https://www.google.com/maps/search/?api=1&query=){query_mapa}"
+        waze_url = f"[https://waze.com/ul?q=](https://waze.com/ul?q=){query_mapa}&navigate=yes"
 
         numeros = re.findall(r"\b\d{9}\b", telefonos)
         telefonos_formateados = ""
@@ -1427,7 +1423,6 @@ def loop_recordatorios():
 
 
 def loop_caducidad_diaria():
-    """Revisión nocturna: antes de las 23:00 comprueba si hay servicios caducados hoy y los fuerza a 348."""
     while True:
         try:
             ahora = datetime.now()
@@ -1516,7 +1511,6 @@ def webhook():
             tg_edit(chat, msg_id, respuesta, kb)
             return jsonify(ok=True)
 
-        # Búsqueda por servicio: teléfono o dirección
         if chat in BUSCAR_STATE:
             state_info = BUSCAR_STATE.pop(chat)
             msg_id = state_info.get("msg_id") or msg_id
@@ -1707,7 +1701,6 @@ def webhook():
                         else:
                             errors += 1
                     else:
-                        # No seguimiento: intentar cambiar a estado por defecto (318)
                         skipped_no_seguimiento += 1
                         default_target = "318"
                         ok, _ = homeserve.cambiar_estado(sid, default_target)
@@ -1789,8 +1782,8 @@ def webhook():
                 poblacion = datos.get("POBLACION-PROVINCIA", "")
                 direccion_completa = direccion_para_mapa(domicilio=domicilio, poblacion=poblacion)
                 query_mapa = quote_plus(direccion_completa) if direccion_completa else quote_plus(f"{domicilio}, {poblacion}".strip(", "))
-                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={query_mapa}"
-                waze_url = f"https://waze.com/ul?q={query_mapa}&navigate=yes"
+                gmaps_url = f"[https://www.google.com/maps/search/?api=1&query=](https://www.google.com/maps/search/?api=1&query=){query_mapa}"
+                waze_url = f"[https://waze.com/ul?q=](https://waze.com/ul?q=){query_mapa}&navigate=yes"
 
                 updated_kb = {
                     "inline_keyboard": [
@@ -1809,7 +1802,6 @@ def webhook():
 
             except Exception as e:
                 logger.error(f"Error al guardar servicio: {e}")
-
 
         elif action.startswith("ESTADO_"):
             _, sid, estado = action.split("_")
@@ -1869,8 +1861,44 @@ def webhook():
                 )
                 return jsonify(ok=True)
 
-            texto = "🧭 <b>Ruta del día</b>\n<i>Usa ⬆️ ⬇️ para cambiar horas/orden, ❌ para borrar o ✅ para completar:</i>"
-            kb = {"inline_keyboard": []}
+            # Generar enlaces y bloques limpios como pediste
+            origen_default = "Carrer de Bernat Descoll, 63, 46026 València, España"
+            origin_encoded = quote_plus(origen_default)
+            
+            lineas_lista = []
+            direcciones_mapa = []
+            for idx, row in enumerate(rows, start=1):
+                orden = int(row.get("orden", idx - 1) or 0)
+                hora = 9 + orden
+                tiempo = f"{hora:02d}:00"
+                sid = row['sid']
+                dir_limpia = row['direccion']
+                lineas_lista.append(f"{sid}|{dir_limpia}")
+                direcciones_mapa.append(dir_limpia)
+
+            if len(direcciones_mapa) == 1:
+                dest_encoded = quote_plus(direcciones_mapa[0])
+                gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}"
+            else:
+                dest_encoded = quote_plus(direcciones_mapa[-1])
+                waypoints_list = [quote_plus(d) for d in direcciones_mapa[:-1]]
+                waypoints_str = "|".join(waypoints_list)
+                gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}&waypoints={waypoints_str}"
+
+            bloque_texto = "\n".join(lineas_lista)
+            texto = (
+                "📍 <b>RUTA ÓPTIMA CALCULADA</b>\n"
+                f"🏁 <b>Salida:</b> {origen_default}\n"
+                f"📦 <b>Avisos:</b> {len(rows)} | 🚗 <b>Km:</b> -- | ⏱️ <b>Tiempo:</b> --\n\n"
+                "📋 <b>Lista ordenada para importar (copia el siguiente bloque):</b>\n"
+                f"<pre><code>{bloque_texto}</code></pre>"
+            )
+
+            kb = {"inline_keyboard": [
+                [{"text": "🗺️ Abrir ruta en Google Maps", "url": gmaps_url}],
+            ]}
+
+            # Añadir botones individuales por cada servicio para controlar hora, borrado o WhatsApp
             for idx, row in enumerate(rows, start=1):
                 orden = int(row.get("orden", idx - 1) or 0)
                 hora = 9 + orden
@@ -1884,6 +1912,7 @@ def webhook():
                     {"text": "❌", "callback_data": f"RUTA_DELSERV_{sid}"},
                     {"text": "✅", "callback_data": f"RUTA_CHECK_{sid}"}
                 ])
+
             kb["inline_keyboard"].append([
                 {"text": "📅 Ajustar fecha", "callback_data": "AJUSTAR_RUTA"},
                 {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}
@@ -1897,16 +1926,44 @@ def webhook():
             sid = action.replace("RUTA_UP_", "")
             fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
             mover_orden_servicio(chat, sid, "up", fecha=fecha_actual)
+            # Recargar vista simulando RUTA_DEL_DIA
             rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
-            texto = "🧭 <b>Ruta del día</b>\n<i>Orden actualizado:</i>"
-            kb = {"inline_keyboard": []}
+            origen_default = "Carrer de Bernat Descoll, 63, 46026 València, España"
+            origin_encoded = quote_plus(origen_default)
+            lineas_lista = []
+            direcciones_mapa = []
             for idx, row in enumerate(rows, start=1):
                 orden = int(row.get("orden", idx - 1) or 0)
                 hora = 9 + orden
-                tiempo = f"{hora:02d}:00"
+                sid_item = row['sid']
+                dir_limpia = row['direccion']
+                lineas_lista.append(f"{sid_item}|{dir_limpia}")
+                direcciones_mapa.append(dir_limpia)
+
+            if len(direcciones_mapa) == 1:
+                dest_encoded = quote_plus(direcciones_mapa[0])
+                gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}"
+            else:
+                dest_encoded = quote_plus(direcciones_mapa[-1])
+                waypoints_list = [quote_plus(d) for d in direcciones_mapa[:-1]]
+                waypoints_str = "|".join(waypoints_list)
+                gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}&waypoints={waypoints_str}"
+
+            bloque_texto = "\n".join(lineas_lista)
+            texto = (
+                "📍 <b>RUTA ÓPTIMA CALCULADA</b>\n"
+                f"🏁 <b>Salida:</b> {origen_default}\n"
+                f"📦 <b>Avisos:</b> {len(rows)} | 🚗 <b>Km:</b> -- | ⏱️ <b>Tiempo:</b> --\n\n"
+                "📋 <b>Lista ordenada para importar (copia el siguiente bloque):</b>\n"
+                f"<pre><code>{bloque_texto}</code></pre>"
+            )
+            kb = {"inline_keyboard": [[{"text": "🗺️ Abrir ruta en Google Maps", "url": gmaps_url}]]}
+            for idx, row in enumerate(rows, start=1):
+                orden = int(row.get("orden", idx - 1) or 0)
+                hora = 9 + orden
                 s = row['sid']
                 kb["inline_keyboard"].append([
-                    {"text": f"📞 {tiempo} ({s})", "callback_data": f"RUTA_CITAR_{s}"},
+                    {"text": f"📞 {9+orden:02d}:00 ({s})", "callback_data": f"RUTA_CITAR_{s}"},
                     {"text": "⬆️", "callback_data": f"RUTA_UP_{s}"},
                     {"text": "⬇️", "callback_data": f"RUTA_DOWN_{s}"},
                     {"text": "❌", "callback_data": f"RUTA_DELSERV_{s}"},
@@ -1921,15 +1978,40 @@ def webhook():
             fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
             mover_orden_servicio(chat, sid, "down", fecha=fecha_actual)
             rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
-            texto = "🧭 <b>Ruta del día</b>\n<i>Orden actualizado:</i>"
-            kb = {"inline_keyboard": []}
+            origen_default = "Carrer de Bernat Descoll, 63, 46026 València, España"
+            origin_encoded = quote_plus(origen_default)
+            lineas_lista = []
+            direcciones_mapa = []
             for idx, row in enumerate(rows, start=1):
                 orden = int(row.get("orden", idx - 1) or 0)
-                hora = 9 + orden
-                tiempo = f"{hora:02d}:00"
+                sid_item = row['sid']
+                dir_limpia = row['direccion']
+                lineas_lista.append(f"{sid_item}|{dir_limpia}")
+                direcciones_mapa.append(dir_limpia)
+
+            if len(direcciones_mapa) == 1:
+                dest_encoded = quote_plus(direcciones_mapa[0])
+                gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}"
+            else:
+                dest_encoded = quote_plus(direcciones_mapa[-1])
+                waypoints_list = [quote_plus(d) for d in direcciones_mapa[:-1]]
+                waypoints_str = "|".join(waypoints_list)
+                gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}&waypoints={waypoints_str}"
+
+            bloque_texto = "\n".join(lineas_lista)
+            texto = (
+                "📍 <b>RUTA ÓPTIMA CALCULADA</b>\n"
+                f"🏁 <b>Salida:</b> {origen_default}\n"
+                f"📦 <b>Avisos:</b> {len(rows)} | 🚗 <b>Km:</b> -- | ⏱️ <b>Tiempo:</b> --\n\n"
+                "📋 <b>Lista ordenada para importar (copia el siguiente bloque):</b>\n"
+                f"<pre><code>{bloque_texto}</code></pre>"
+            )
+            kb = {"inline_keyboard": [[{"text": "🗺️ Abrir ruta en Google Maps", "url": gmaps_url}]]}
+            for idx, row in enumerate(rows, start=1):
+                orden = int(row.get("orden", idx - 1) or 0)
                 s = row['sid']
                 kb["inline_keyboard"].append([
-                    {"text": f"📞 {tiempo} ({s})", "callback_data": f"RUTA_CITAR_{s}"},
+                    {"text": f"📞 {9+orden:02d}:00 ({s})", "callback_data": f"RUTA_CITAR_{s}"},
                     {"text": "⬆️", "callback_data": f"RUTA_UP_{s}"},
                     {"text": "⬇️", "callback_data": f"RUTA_DOWN_{s}"},
                     {"text": "❌", "callback_data": f"RUTA_DELSERV_{s}"},
@@ -1944,24 +2026,50 @@ def webhook():
             fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
             eliminar_servicio_ruta(chat, sid, fecha=fecha_actual)
             rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
-            texto = f"🗑️ Servicio <b>{sid}</b> eliminado de la ruta.\n\n🧭 <b>Ruta del día actualizada:</b>"
-            kb = {"inline_keyboard": []}
-            for idx, row in enumerate(rows, start=1):
-                orden = int(row.get("orden", idx - 1) or 0)
-                hora = 9 + orden
-                tiempo = f"{hora:02d}:00"
-                s = row['sid']
-                kb["inline_keyboard"].append([
-                    {"text": f"📞 {tiempo} ({s})", "callback_data": f"RUTA_CITAR_{s}"},
-                    {"text": "⬆️", "callback_data": f"RUTA_UP_{s}"},
-                    {"text": "⬇️", "callback_data": f"RUTA_DOWN_{s}"},
-                    {"text": "❌", "callback_data": f"RUTA_DELSERV_{s}"},
-                    {"text": "✅", "callback_data": f"RUTA_CHECK_{s}"}
-                ])
+            
             if not rows:
                 texto = "🧭 <b>Ruta del día vacía o completada.</b>"
                 kb = {"inline_keyboard": [[{"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"}, {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}], [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]]}
             else:
+                origen_default = "Carrer de Bernat Descoll, 63, 46026 València, España"
+                origin_encoded = quote_plus(origen_default)
+                lineas_lista = []
+                direcciones_mapa = []
+                for idx, row in enumerate(rows, start=1):
+                    orden = int(row.get("orden", idx - 1) or 0)
+                    sid_item = row['sid']
+                    dir_limpia = row['direccion']
+                    lineas_lista.append(f"{sid_item}|{dir_limpia}")
+                    direcciones_mapa.append(dir_limpia)
+
+                if len(direcciones_mapa) == 1:
+                    dest_encoded = quote_plus(direcciones_mapa[0])
+                    gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}"
+                else:
+                    dest_encoded = quote_plus(direcciones_mapa[-1])
+                    waypoints_list = [quote_plus(d) for d in direcciones_mapa[:-1]]
+                    waypoints_str = "|".join(waypoints_list)
+                    gmaps_url = f"[https://www.google.com/maps/dir/?api=1&origin=](https://www.google.com/maps/dir/?api=1&origin=){origin_encoded}&destination={dest_encoded}&waypoints={waypoints_str}"
+
+                bloque_texto = "\n".join(lineas_lista)
+                texto = (
+                    "📍 <b>RUTA ÓPTIMA CALCULADA</b>\n"
+                    f"🏁 <b>Salida:</b> {origen_default}\n"
+                    f"📦 <b>Avisos:</b> {len(rows)} | 🚗 <b>Km:</b> -- | ⏱️ <b>Tiempo:</b> --\n\n"
+                    "📋 <b>Lista ordenada para importar (copia el siguiente bloque):</b>\n"
+                    f"<pre><code>{bloque_texto}</code></pre>"
+                )
+                kb = {"inline_keyboard": [[{"text": "🗺️ Abrir ruta en Google Maps", "url": gmaps_url}]]}
+                for idx, row in enumerate(rows, start=1):
+                    orden = int(row.get("orden", idx - 1) or 0)
+                    s = row['sid']
+                    kb["inline_keyboard"].append([
+                        {"text": f"📞 {9+orden:02d}:00 ({s})", "callback_data": f"RUTA_CITAR_{s}"},
+                        {"text": "⬆️", "callback_data": f"RUTA_UP_{s}"},
+                        {"text": "⬇️", "callback_data": f"RUTA_DOWN_{s}"},
+                        {"text": "❌", "callback_data": f"RUTA_DELSERV_{s}"},
+                        {"text": "✅", "callback_data": f"RUTA_CHECK_{s}"}
+                    ])
                 kb["inline_keyboard"].append([{"text": "📅 Ajustar fecha", "callback_data": "AJUSTAR_RUTA"}, {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}])
                 kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
             tg_edit(chat, msg_id, texto, kb)
@@ -2001,7 +2109,6 @@ def webhook():
                 tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "EXPORTAR_RUTA":
-            # Obtenemos el HTML real y le aplicamos el parser limpio sin candados
             try:
                 r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
                 r.encoding = "latin-1"
@@ -2022,7 +2129,7 @@ def webhook():
                 tg_edit(chat, msg_id, "❌ No hay direcciones para exportar.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
                 return jsonify(ok=True)
                 
-            tg_edit(chat, msg_id, f"📤 <b>Direcciones exportadas</b>\n\n<code>{texto}</code>", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
+            tg_edit(chat, msg_id, f"📤 <b>Direcciones exportadas</b>\n\n<pre><code>{texto}</code></pre>", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "IMPORTAR_RUTA":
             IMPORTAR_STATE[chat] = {"msg_id": msg_id}
@@ -2065,7 +2172,7 @@ def webhook():
                 return jsonify(ok=True)
 
             telefono, mensaje_final = info
-            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
+            whatsapp_url = f"[https://wa.me/34](https://wa.me/34){telefono}?text={quote_plus(mensaje_final)}"
             tel_buttons = crear_botones_telefono(sid, telefono_idx)
             numeros = extraer_numeros_telefono(obtener_datos_servicio(sid)[0].get("TELEFONOS", ""))
             cambiar_numero_btn = boton_cambiar_numero(sid, telefono_idx, len(numeros)) if len(numeros) > 1 else None
@@ -2083,7 +2190,7 @@ def webhook():
                     [{"text": "⬅️ Volver a ruta", "callback_data": "RUTA_DEL_DIA"}]
                 ]
             }
-            tg_edit(chat, msg_id, f"📞 <b>Cita lista</b>\n\n<code>{mensaje_final}</code>", kb)
+            tg_edit(chat, msg_id, f"📞 <b>Cita lista</b>\n\n<pre><code>{mensaje_final}</code></pre>", kb)
 
         elif action.startswith("RUTA_CITAR_"):
             sid = action.split("_")[-1]
@@ -2120,7 +2227,7 @@ def webhook():
                 return jsonify(ok=True)
 
             telefono, mensaje_final = info
-            whatsapp_url = f"https://wa.me/34{telefono}?text={quote_plus(mensaje_final)}"
+            whatsapp_url = f"[https://wa.me/34](https://wa.me/34){telefono}?text={quote_plus(mensaje_final)}"
             tel_buttons = crear_botones_telefono(sid, telefono_idx)
             numeros = extraer_numeros_telefono(datos.get("TELEFONOS", ""))
             cambiar_numero_btn = boton_cambiar_numero(sid, telefono_idx, len(numeros)) if len(numeros) > 1 else None
@@ -2138,7 +2245,7 @@ def webhook():
                     [{"text": "⬅️ Volver a ruta", "callback_data": "RUTA_DEL_DIA"}]
                 ]
             }
-            tg_edit(chat, msg_id, f"📞 <b>Cita lista</b>\n\n<code>{mensaje_final}</code>", kb)
+            tg_edit(chat, msg_id, f"📞 <b>Cita lista</b>\n\n<pre><code>{mensaje_final}</code></pre>", kb)
 
         elif action.startswith("RUTA_CHECK_"):
             sid = action.split("_")[-1]
