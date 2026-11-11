@@ -397,6 +397,41 @@ def limpiar_ruta_dia(chat_id, fecha=None):
     return int(cursor.rowcount or 0)
 
 
+def eliminar_servicio_ruta(chat_id, sid, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM ruta_diaria WHERE chat_id=? AND sid=? AND fecha=?",
+            (str(chat_id), str(sid), fecha),
+        )
+        conn.commit()
+    return cursor.rowcount
+
+
+def mover_orden_servicio(chat_id, sid, direccion, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    rows = obtener_ruta_diaria(chat_id, fecha)
+    sids = [r["sid"] for r in rows if not r.get("completado")]
+    if sid not in sids:
+        return False
+    idx = sids.index(sid)
+    if direccion == "up" and idx > 0:
+        sids[idx], sids[idx-1] = sids[idx-1], sids[idx]
+    elif direccion == "down" and idx < len(sids) - 1:
+        sids[idx], sids[idx+1] = sids[idx+1], sids[idx]
+    else:
+        return False
+    
+    with get_db() as conn:
+        for new_orden, s in enumerate(sids):
+            conn.execute(
+                "UPDATE ruta_diaria SET orden=? WHERE chat_id=? AND sid=? AND fecha=?",
+                (new_orden, str(chat_id), str(s), fecha)
+            )
+        conn.commit()
+    return True
+
+
 def formatear_fecha_ruta(fecha=None):
     if fecha is None:
         fecha = datetime.now().date()
@@ -1834,23 +1869,101 @@ def webhook():
                 )
                 return jsonify(ok=True)
 
-            texto = "🧭 <b>Ruta del día</b>"
+            texto = "🧭 <b>Ruta del día</b>\n<i>Usa ⬆️ ⬇️ para cambiar horas/orden, ❌ para borrar o ✅ para completar:</i>"
             kb = {"inline_keyboard": []}
-            for idx, row in enumerate(rows[:20], start=1):
+            for idx, row in enumerate(rows, start=1):
                 orden = int(row.get("orden", idx - 1) or 0)
                 hora = 9 + orden
                 tiempo = f"{hora:02d}:00"
+                sid = row['sid']
+                
                 kb["inline_keyboard"].append([
-                    {"text": f"📞 {tiempo}", "callback_data": f"RUTA_CITAR_{row['sid']}"},
-                    {"text": "✅ Hecho", "callback_data": f"RUTA_CHECK_{row['sid']}"}
+                    {"text": f"📞 {tiempo} ({sid})", "callback_data": f"RUTA_CITAR_{sid}"},
+                    {"text": "⬆️", "callback_data": f"RUTA_UP_{sid}"},
+                    {"text": "⬇️", "callback_data": f"RUTA_DOWN_{sid}"},
+                    {"text": "❌", "callback_data": f"RUTA_DELSERV_{sid}"},
+                    {"text": "✅", "callback_data": f"RUTA_CHECK_{sid}"}
                 ])
             kb["inline_keyboard"].append([
-                {"text": "📅 Ajustar", "callback_data": "AJUSTAR_RUTA"},
+                {"text": "📅 Ajustar fecha", "callback_data": "AJUSTAR_RUTA"},
                 {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}
             ])
             kb["inline_keyboard"].append([
                 {"text": "⬅️ Volver", "callback_data": "BACK_MENU"}
             ])
+            tg_edit(chat, msg_id, texto, kb)
+
+        elif action.startswith("RUTA_UP_"):
+            sid = action.replace("RUTA_UP_", "")
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            mover_orden_servicio(chat, sid, "up", fecha=fecha_actual)
+            rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
+            texto = "🧭 <b>Ruta del día</b>\n<i>Orden actualizado:</i>"
+            kb = {"inline_keyboard": []}
+            for idx, row in enumerate(rows, start=1):
+                orden = int(row.get("orden", idx - 1) or 0)
+                hora = 9 + orden
+                tiempo = f"{hora:02d}:00"
+                s = row['sid']
+                kb["inline_keyboard"].append([
+                    {"text": f"📞 {tiempo} ({s})", "callback_data": f"RUTA_CITAR_{s}"},
+                    {"text": "⬆️", "callback_data": f"RUTA_UP_{s}"},
+                    {"text": "⬇️", "callback_data": f"RUTA_DOWN_{s}"},
+                    {"text": "❌", "callback_data": f"RUTA_DELSERV_{s}"},
+                    {"text": "✅", "callback_data": f"RUTA_CHECK_{s}"}
+                ])
+            kb["inline_keyboard"].append([{"text": "📅 Ajustar fecha", "callback_data": "AJUSTAR_RUTA"}, {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}])
+            kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+            tg_edit(chat, msg_id, texto, kb)
+
+        elif action.startswith("RUTA_DOWN_"):
+            sid = action.replace("RUTA_DOWN_", "")
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            mover_orden_servicio(chat, sid, "down", fecha=fecha_actual)
+            rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
+            texto = "🧭 <b>Ruta del día</b>\n<i>Orden actualizado:</i>"
+            kb = {"inline_keyboard": []}
+            for idx, row in enumerate(rows, start=1):
+                orden = int(row.get("orden", idx - 1) or 0)
+                hora = 9 + orden
+                tiempo = f"{hora:02d}:00"
+                s = row['sid']
+                kb["inline_keyboard"].append([
+                    {"text": f"📞 {tiempo} ({s})", "callback_data": f"RUTA_CITAR_{s}"},
+                    {"text": "⬆️", "callback_data": f"RUTA_UP_{s}"},
+                    {"text": "⬇️", "callback_data": f"RUTA_DOWN_{s}"},
+                    {"text": "❌", "callback_data": f"RUTA_DELSERV_{s}"},
+                    {"text": "✅", "callback_data": f"RUTA_CHECK_{s}"}
+                ])
+            kb["inline_keyboard"].append([{"text": "📅 Ajustar fecha", "callback_data": "AJUSTAR_RUTA"}, {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}])
+            kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
+            tg_edit(chat, msg_id, texto, kb)
+
+        elif action.startswith("RUTA_DELSERV_"):
+            sid = action.replace("RUTA_DELSERV_", "")
+            fecha_actual = RUTA_FECHA_STATE.get(chat, datetime.now().date().isoformat())
+            eliminar_servicio_ruta(chat, sid, fecha=fecha_actual)
+            rows = [r for r in obtener_ruta_diaria(chat, fecha_actual) if not r.get("completado")]
+            texto = f"🗑️ Servicio <b>{sid}</b> eliminado de la ruta.\n\n🧭 <b>Ruta del día actualizada:</b>"
+            kb = {"inline_keyboard": []}
+            for idx, row in enumerate(rows, start=1):
+                orden = int(row.get("orden", idx - 1) or 0)
+                hora = 9 + orden
+                tiempo = f"{hora:02d}:00"
+                s = row['sid']
+                kb["inline_keyboard"].append([
+                    {"text": f"📞 {tiempo} ({s})", "callback_data": f"RUTA_CITAR_{s}"},
+                    {"text": "⬆️", "callback_data": f"RUTA_UP_{s}"},
+                    {"text": "⬇️", "callback_data": f"RUTA_DOWN_{s}"},
+                    {"text": "❌", "callback_data": f"RUTA_DELSERV_{s}"},
+                    {"text": "✅", "callback_data": f"RUTA_CHECK_{s}"}
+                ])
+            if not rows:
+                texto = "🧭 <b>Ruta del día vacía o completada.</b>"
+                kb = {"inline_keyboard": [[{"text": "📤 Exportar", "callback_data": "EXPORTAR_RUTA"}, {"text": "📥 Importar", "callback_data": "IMPORTAR_RUTA"}], [{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}]]}
+            else:
+                kb["inline_keyboard"].append([{"text": "📅 Ajustar fecha", "callback_data": "AJUSTAR_RUTA"}, {"text": "🧹 Limpiar ruta", "callback_data": "LIMPIAR_RUTA"}])
+                kb["inline_keyboard"].append([{"text": "⬅️ Volver", "callback_data": "BACK_MENU"}])
             tg_edit(chat, msg_id, texto, kb)
 
         elif action == "LIMPIAR_RUTA":
