@@ -1888,17 +1888,27 @@ def webhook():
                 tg_edit(chat, msg_id, "❌ No hay servicios para ajustar en esta ruta.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "EXPORTAR_RUTA":
-            servicios = homeserve.obtener_curso() or {}
+            # Obtenemos el HTML real y le aplicamos el parser limpio sin candados
+            try:
+                r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
+                r.encoding = "latin-1"
+                servicios = parsear_servicios_texto(r.text) or {}
+            except Exception:
+                servicios = {}
+
             rutas = []
-            for sid, texto in servicios.items():
-                bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
+            for sid, direccion in servicios.items():
+                bloque = re.sub(r"\s+", " ", str(direccion or "")).strip()
                 if bloque:
                     rutas.append((sid, bloque))
+                    
             rutas_ordenadas = ordenar_ruta_servicios(rutas)
             texto = "\n".join(f"{sid}|{direccion}" for sid, direccion in rutas_ordenadas)
+            
             if not texto:
                 tg_edit(chat, msg_id, "❌ No hay direcciones para exportar.", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
                 return jsonify(ok=True)
+                
             tg_edit(chat, msg_id, f"📤 <b>Direcciones exportadas</b>\n\n<code>{texto}</code>", {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "RUTA_DEL_DIA"}]]})
 
         elif action == "IMPORTAR_RUTA":
