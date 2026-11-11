@@ -169,8 +169,8 @@ def parsear_servicios_texto(texto):
     if "<a" in text or "<td" in text:
         soup = BeautifulSoup(text, "html.parser")
         
-        # Buscamos exclusivamente los enlaces de servicios en curso. 
-        # Como los candados NO tienen etiqueta <a>, los ignora al 100%.
+        # Buscamos exclusivamente los enlaces <a> que apuntan a ver_servicioencurso
+        # Como los candados NO tienen etiqueta <a>, el script los ignora al 100%.
         for link in soup.find_all("a", href=True):
             href = link.get("href", "")
             if "ver_servicioencurso" not in href or "Servicio=" not in href:
@@ -184,20 +184,28 @@ def parsear_servicios_texto(texto):
             if sid in servicios:
                 continue
 
-            # Obtenemos la fila de la tabla para extraer su dirección
+            # Obtenemos la fila entera <tr> de la tabla
             row = link.find_parent("tr")
-            row_text = row.get_text(" ", strip=True) if row else link.parent.get_text(" ", strip=True)
-            
-            if not row_text:
+            if not row:
                 continue
                 
-            row_text = row_text.replace(sid, "", 1).strip(" -:|/")
-            direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text)
-            if direccion:
+            cols = row.find_all("td")
+            if len(cols) >= 3:
+                profesion = cols[1].get_text(strip=True)
+                direccion_cruda = cols[2].get_text(strip=True)
+                
+                # Limpiamos la dirección utilizando tus funciones de limpieza habituales
+                row_text = f"{profesion} {direccion_cruda}"
+                direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text) or direccion_cruda
+                
                 servicios[sid] = direccion
+            else:
+                # Fallback por si la estructura de columnas varía
+                row_text = row.get_text(" ", strip=True).replace(sid, "", 1).strip(" -:|/")
+                direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text)
+                if direccion:
+                    servicios[sid] = direccion
 
-    # ELIMINAMOS EL BLOQUE DE RECUENTO CIEGO DE ABAJO (re.finditer) 
-    # para que NUNCA vuelva a leer números sueltos del HTML.
     return servicios
 
 
