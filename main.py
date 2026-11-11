@@ -164,13 +164,13 @@ def parsear_servicios_texto(texto):
         return {}
 
     text = str(texto).replace("\r", " ").replace("\u00a0", " ")
+    servicios = {}
 
     if "<a" in text or "<td" in text:
         soup = BeautifulSoup(text, "html.parser")
-        servicios = {}
         
-        # Al buscar exclusivamente las etiquetas 'a' con 'ver_servicioencurso', 
-        # nos saltamos automáticamente todos los candados (porque los candados NO tienen enlace <a>)
+        # Buscamos exclusivamente los enlaces de servicios en curso. 
+        # Como los candados NO tienen etiqueta <a>, los ignora al 100%.
         for link in soup.find_all("a", href=True):
             href = link.get("href", "")
             if "ver_servicioencurso" not in href or "Servicio=" not in href:
@@ -184,7 +184,7 @@ def parsear_servicios_texto(texto):
             if sid in servicios:
                 continue
 
-            # Obtenemos la fila entera para extraer la dirección
+            # Obtenemos la fila de la tabla para extraer su dirección
             row = link.find_parent("tr")
             row_text = row.get_text(" ", strip=True) if row else link.parent.get_text(" ", strip=True)
             
@@ -196,10 +196,9 @@ def parsear_servicios_texto(texto):
             if direccion:
                 servicios[sid] = direccion
 
-        if servicios:
-            return servicios
-
-    return {}
+    # ELIMINAMOS EL BLOQUE DE RECUENTO CIEGO DE ABAJO (re.finditer) 
+    # para que NUNCA vuelva a leer números sueltos del HTML.
+    return servicios
 
 
 def ordenar_ruta_servicios(items):
