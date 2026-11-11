@@ -516,13 +516,16 @@ def es_servicio_bloqueado(texto):
     return any(token in normalizado for token in tokens)
 
 
-def exportar_ruta_dia(chat_id, fecha=None, refrescar=True):  # Forzamos refrescar=True por defecto
+def exportar_ruta_dia(chat_id, fecha=None, refrescar=True):
     fecha = fecha or datetime.now().date().isoformat()
     
-    # Forzamos que consulte la web y reemplace la ruta del día con los datos limpios
-    servicios = homeserve.obtener_curso() or {}
+    # Obtenemos los servicios y aplicamos el filtro de limpieza (sin candados) para la ruta
+    r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
+    r.encoding = "latin-1"
+    servicios_limpios = parsear_servicios_texto(r.text) or {}
+    
     rutas = []
-    for sid, texto in servicios.items():
+    for sid, texto in servicios_limpios.items():
         bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
         if bloque:
             rutas.append((sid, bloque))
@@ -640,7 +643,12 @@ def generar_ruta_dia(chat_id, servicios=None, refrescar=False):
     rows = obtener_ruta_diaria(chat_id, today)
 
     if refrescar or not rows:
-        servicios = servicios or homeserve.obtener_curso() or {}
+        # Si no pasan servicios, los obtenemos filtrando los candados mediante parsear_servicios_texto
+        if not servicios:
+            r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
+            r.encoding = "latin-1"
+            servicios = parsear_servicios_texto(r.text) or {}
+            
         rutas = []
         for sid, texto in servicios.items():
             bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
