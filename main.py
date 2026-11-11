@@ -508,23 +508,27 @@ def es_servicio_bloqueado(texto):
     return any(token in normalizado for token in tokens)
 
 
-def exportar_ruta_dia(chat_id, fecha=None, refrescar=False):
+def exportar_ruta_dia(chat_id, fecha=None, refrescar=True):  # Forzamos refrescar=True por defecto
     fecha = fecha or datetime.now().date().isoformat()
+    
+    # Forzamos que consulte la web y reemplace la ruta del día con los datos limpios
+    servicios = homeserve.obtener_curso() or {}
+    rutas = []
+    for sid, texto in servicios.items():
+        bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
+        if bloque:
+            rutas.append((sid, bloque))
+            
+    rutas_ordenadas = ordenar_ruta_servicios(rutas)
+    
+    with get_db() as conn:
+        conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), fecha))
+        conn.commit()
+        
+    for idx, (sid, direccion) in enumerate(rutas_ordenadas):
+        guardar_ruta_diaria(chat_id, sid, direccion, fecha=fecha, orden=idx)
+        
     rows = obtener_ruta_diaria(chat_id, fecha)
-    if refrescar or not rows:
-        servicios = homeserve.obtener_curso() or {}
-        rutas = []
-        for sid, texto in servicios.items():
-            bloque = re.sub(r"\s+", " ", str(texto or "")).strip()
-            if bloque:
-                rutas.append((sid, bloque))
-        rutas_ordenadas = ordenar_ruta_servicios(rutas)
-        with get_db() as conn:
-            conn.execute("DELETE FROM ruta_diaria WHERE chat_id=? AND fecha=?", (str(chat_id), fecha))
-            conn.commit()
-        for idx, (sid, direccion) in enumerate(rutas_ordenadas):
-            guardar_ruta_diaria(chat_id, sid, direccion, fecha=fecha, orden=idx)
-        rows = obtener_ruta_diaria(chat_id, fecha)
 
     rows = sorted(rows, key=lambda r: (int(r.get("orden", 999) or 999), str(r.get("sid", ""))))
     lines = []
