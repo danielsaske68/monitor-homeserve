@@ -168,9 +168,6 @@ def parsear_servicios_texto(texto):
 
     if "<a" in text or "<td" in text:
         soup = BeautifulSoup(text, "html.parser")
-        
-        # Buscamos exclusivamente los enlaces <a> que apuntan a ver_servicioencurso
-        # Como los candados NO tienen etiqueta <a>, el script los ignora al 100%.
         for link in soup.find_all("a", href=True):
             href = link.get("href", "")
             if "ver_servicioencurso" not in href or "Servicio=" not in href:
@@ -184,27 +181,52 @@ def parsear_servicios_texto(texto):
             if sid in servicios:
                 continue
 
-            # Obtenemos la fila entera <tr> de la tabla
             row = link.find_parent("tr")
-            if not row:
-                continue
-                
-            cols = row.find_all("td")
-            if len(cols) >= 3:
-                profesion = cols[1].get_text(strip=True)
-                direccion_cruda = cols[2].get_text(strip=True)
-                
-                # Limpiamos la dirección utilizando tus funciones de limpieza habituales
-                row_text = f"{profesion} {direccion_cruda}"
-                direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text) or direccion_cruda
-                
-                servicios[sid] = direccion
+            if row:
+                cols = row.find_all("td")
+                if len(cols) >= 3:
+                    profesion = cols[1].get_text(" ", strip=True)
+                    direccion_cruda = cols[2].get_text(" ", strip=True)
+                    row_text = f"{profesion} {direccion_cruda}"
+                elif len(cols) >= 2:
+                    row_text = cols[1].get_text(" ", strip=True)
+                else:
+                    row_text = row.get_text(" ", strip=True).replace(sid, "", 1)
             else:
-                # Fallback por si la estructura de columnas varía
-                row_text = row.get_text(" ", strip=True).replace(sid, "", 1).strip(" -:|/")
-                direccion = limpiar_direccion_importada(row_text) or extraer_direccion_servicio(row_text)
-                if direccion:
-                    servicios[sid] = direccion
+                fragmentos = []
+                for elemento in link.next_elements:
+                    if getattr(elemento, "name", None) == "a":
+                        break
+                    if isinstance(elemento, str):
+                        fragmentos.append(str(elemento))
+                row_text = " ".join(fragmentos)
+
+            row_text = re.sub(r"\s+", " ", row_text).strip(" -:|/")
+            direccion = limpiar_direccion_importada(row_text)
+            if not direccion:
+                direccion = extraer_direccion_servicio(row_text)
+            if not direccion and row_text and not re.search(r"\d{2}/\d{2}/\d{4}", row_text):
+                direccion = row_text
+            if direccion:
+                servicios[sid] = direccion
+
+        return servicios
+
+    patrón_pipe = re.compile(
+        r"(?<!\d)(\d{7,8})\s*\|\s*(.*?)"
+        r"(?=(?:\s+\d{7,8}\s*\|)|$)",
+        flags=re.DOTALL,
+    )
+    for match in patrón_pipe.finditer(text):
+        sid = match.group(1)
+        if sid in servicios:
+            continue
+        bloque = re.sub(r"\s+", " ", match.group(2)).strip()
+        direccion = limpiar_direccion_importada(bloque)
+        if not direccion:
+            direccion = extraer_direccion_servicio(bloque)
+        if direccion:
+            servicios[sid] = direccion
 
     return servicios
 
@@ -438,9 +460,8 @@ def limpiar_spam_caducado(fecha=None):
     fecha = fecha or datetime.now().date().isoformat()
     with get_db() as conn:
         spam_cursor = conn.execute("DELETE FROM servicios_spam WHERE fecha < ?", (fecha,))
-        auto_cursor = conn.execute("DELETE FROM servicios_autoaceptar WHERE fecha < ?", (fecha,))
         conn.commit()
-        return spam_cursor.rowcount + auto_cursor.rowcount
+        return spam_cursor.rowcount
 
 
 def programar_autoaceptar(sid, fecha=None):
@@ -454,12 +475,39 @@ def programar_autoaceptar(sid, fecha=None):
         conn.commit()
 
 
+def cancelar_autoaceptar(sid):
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM servicios_autoaceptar WHERE sid=?", (str(sid),))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def limpiar_autoaceptar_ausentes(servicios):
+    sids_activos = {str(sid) for sid in servicios}
+    with get_db() as conn:
+        rows = conn.execute("SELECT sid FROM servicios_autoaceptar").fetchall()
+        ausentes = [row["sid"] for row in rows if row["sid"] not in sids_activos]
+        if ausentes:
+            conn.executemany(
+                "DELETE FROM servicios_autoaceptar WHERE sid=?",
+                [(sid,) for sid in ausentes],
+            )
+            conn.commit()
+        return ausentes
+
+
+def cancelar_spam_servicio(sid):
+    with get_db() as conn:
+        cursor = conn.execute("DELETE FROM servicios_spam WHERE sid=?", (str(sid),))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def servicio_autoaceptar(sid, fecha=None):
-    fecha = fecha or datetime.now().date().isoformat()
     with get_db() as conn:
         return conn.execute(
-            "SELECT 1 FROM servicios_autoaceptar WHERE sid=? AND fecha=?",
-            (str(sid), fecha),
+            "SELECT 1 FROM servicios_autoaceptar WHERE sid=?",
+            (str(sid),),
         ).fetchone() is not None
 
 
@@ -657,11 +705,13 @@ def es_servicio_bloqueado(texto):
 
 def exportar_ruta_dia(chat_id, fecha=None, refrescar=True):
     fecha = fecha or datetime.now().date().isoformat()
-    
-    # Obtenemos los servicios y aplicamos el filtro de limpieza (sin candados) para la ruta
-    r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
-    r.encoding = "latin-1"
-    servicios_limpios = parsear_servicios_texto(r.text) or {}
+
+    if refrescar:
+        servicios_limpios = homeserve.obtener_curso()
+    else:
+        r = homeserve.session.get(SERVICIOS_CURSO_URL, timeout=10)
+        r.encoding = "latin-1"
+        servicios_limpios = parsear_servicios_texto(r.text) or {}
     
     rutas = []
     for sid, texto in servicios_limpios.items():
@@ -1125,8 +1175,7 @@ def botones_servicio(sid, texto_servicio=""):
         "inline_keyboard": [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
             [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"}, {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
-            [{"text": "⚡ Forzar aceptar", "callback_data": f"FORZAR_{sid}"}, {"text": "🚫 Spam hoy", "callback_data": f"SPAM_{sid}"}],
-            [{"text": "🤖 Autoaceptar si vuelve hoy", "callback_data": f"AUTOACEPTAR_{sid}"}],
+            [{"text": "⚡ Forzar aceptar", "callback_data": f"FORZAR_{sid}"}, {"text": "🚫 Spam", "callback_data": f"SPAM_{sid}"}],
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
@@ -1293,6 +1342,7 @@ def lista_cambio(servicios):
 
 class HomeServe:
     def __init__(self):
+        self.ultimo_obtener_ok = False
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1321,6 +1371,7 @@ class HomeServe:
     def obtener(self):
         try:
             r = self.session.get(ASIGNACION_URL, timeout=15)
+            r.raise_for_status()
             text = BeautifulSoup(r.text, "html.parser").get_text("\n")
             bloques = re.split(r"\n(?=\d{7,8}\s)", text)
             servicios = {}
@@ -1328,12 +1379,15 @@ class HomeServe:
                 m = re.search(r"\b\d{7,8}\b", b)
                 if m:
                     servicios[m.group(0)] = " ".join(b.split())
+            self.ultimo_obtener_ok = True
             return servicios
         except Exception as e:
+            self.ultimo_obtener_ok = False
             logger.warning(f"Error obtener, re-intentando login: {e}")
             if self.login():
                 try:
                     r = self.session.get(ASIGNACION_URL, timeout=15)
+                    r.raise_for_status()
                     text = BeautifulSoup(r.text, "html.parser").get_text("\n")
                     bloques = re.split(r"\n(?=\d{7,8}\s)", text)
                     servicios = {}
@@ -1341,9 +1395,11 @@ class HomeServe:
                         m = re.search(r"\b\d{7,8}\b", b)
                         if m:
                             servicios[m.group(0)] = " ".join(b.split())
+                    self.ultimo_obtener_ok = True
                     return servicios
                 except Exception as ex:
                     logger.error(f"Error definitivo obtener: {ex}")
+            self.ultimo_obtener_ok = False
             return {}
 
     def obtener_curso(self):
@@ -1504,6 +1560,20 @@ def aceptar_servicio(sid):
     return not any(error in html for error in errores)
 
 
+def intentar_autoaceptar(sid):
+    if not servicio_autoaceptar(sid):
+        return None
+    try:
+        if aceptar_servicio(sid):
+            cancelar_autoaceptar(sid)
+            logger.info("🤖 [MONITOR] Servicio %s autoaceptado; se desactiva el reintento", sid)
+            return True
+        logger.warning("No se pudo autoaceptar el servicio %s; se reintentará al reaparecer", sid)
+    except Exception as exc:
+        logger.error("Error al autoaceptar servicio %s: %s", sid, exc)
+    return False
+
+
 # =========================================================
 # BACKGROUND LOOPS (MONITOR & RECORDATORIOS)
 # =========================================================
@@ -1518,6 +1588,10 @@ def loop():
             logger.info("🔎 [MONITOR] Consultando asignación de nuevos servicios...")
             actuales = homeserve.obtener()
             logger.info(f"📊 [MONITOR] Servicios encontrados en la web: {len(actuales)}")
+            if homeserve.ultimo_obtener_ok:
+                eliminados = limpiar_autoaceptar_ausentes(actuales)
+                for sid in eliminados:
+                    logger.info("🧹 [MONITOR] Se eliminó el reintento del servicio %s porque ya no aparece", sid)
 
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
@@ -1525,21 +1599,12 @@ def loop():
                         logger.info("🔕 [MONITOR] Servicio %s silenciado por spam hoy", sid)
                         continue
                     if servicio_autoaceptar(sid):
-                        try:
-                            if aceptar_servicio(sid):
-                                logger.info("🤖 [MONITOR] Servicio %s autoaceptado al reaparecer", sid)
-                                continue
-                            logger.warning("No se pudo autoaceptar el servicio %s al reaparecer", sid)
-                            aviso_autoaceptar = (
-                                f"⚠️ No se pudo autoaceptar el servicio <b>{sid}</b>. "
-                                "Puedes intentar aceptarlo ahora:"
-                            )
-                        except Exception as exc:
-                            logger.error("Error al autoaceptar servicio %s: %s", sid, exc)
-                            aviso_autoaceptar = (
-                                f"⚠️ Error al autoaceptar el servicio <b>{sid}</b>: {exc}. "
-                                "Puedes intentar aceptarlo ahora:"
-                            )
+                        if intentar_autoaceptar(sid):
+                            continue
+                        aviso_autoaceptar = (
+                            f"⚠️ No se pudo aceptar automáticamente el servicio <b>{sid}</b>. "
+                            "Volveré a intentarlo cuando reaparezca:"
+                        )
                         for u in obtener_usuarios():
                             tg_send(
                                 u,
@@ -2329,6 +2394,7 @@ def webhook():
                         botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
                     )
                 else:
+                    cancelar_autoaceptar(sid)
                     tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
             except Exception as e:
                 tg_edit(
@@ -2338,33 +2404,35 @@ def webhook():
 
         elif action.startswith("FORZAR_"):
             sid = action.split("_", 1)[1]
+            cancelar_spam_servicio(sid)
+            programar_autoaceptar(sid)
             try:
                 if aceptar_servicio(sid):
-                    tg_edit(chat, msg_id, f"✅ Solicitud de aceptación forzada enviada para el servicio {sid}.", botones())
+                    cancelar_autoaceptar(sid)
+                    tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente.", botones())
                 else:
                     tg_edit(
-                        chat, msg_id, f"❌ Homeserve no confirmó la aceptación forzada del servicio {sid}.",
+                        chat, msg_id,
+                        f"⚠️ No se pudo aceptar ahora el servicio {sid}. Seguiré intentándolo automáticamente "
+                        "cada vez que vuelva a aparecer, hasta que se acepte.",
                         botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
                     )
             except Exception as e:
                 logger.error("Error al forzar aceptación del servicio %s: %s", sid, e)
                 tg_edit(
-                    chat, msg_id, f"❌ Error al forzar la aceptación del servicio {sid}: {e}",
+                    chat, msg_id,
+                    f"⚠️ Error al intentar aceptar el servicio {sid}: {e}. Seguiré intentándolo "
+                    "automáticamente cada vez que vuelva a aparecer, hasta que se acepte.",
                     botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
                 )
 
         elif action.startswith("AUTOACEPTAR_"):
             sid = action.split("_", 1)[1]
-            programar_autoaceptar(sid)
-            tg_edit(
-                chat, msg_id,
-                f"🤖 Si el servicio <b>{sid}</b> vuelve a aparecer hoy, lo aceptaré automáticamente. "
-                "Esta preferencia caduca al final del día.",
-                {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "WEB"}]]},
-            )
+            tg_edit(chat, msg_id, "⚠️ Usa «Forzar aceptar» para activar los intentos automáticos.", botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")))
 
         elif action.startswith("SPAM_"):
             sid = action.split("_", 1)[1]
+            cancelar_autoaceptar(sid)
             bloquear_servicio_spam(sid)
             tg_edit(
                 chat, msg_id,
@@ -2374,6 +2442,7 @@ def webhook():
 
         elif action.startswith("RECHAZAR_"):
             sid = action.split("_")[1]
+            cancelar_autoaceptar(sid)
             homeserve.cambiar_estado(sid, "348")
             tg_edit(chat, msg_id, "❌ Rechazado", botones())
 

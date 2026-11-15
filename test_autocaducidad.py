@@ -124,11 +124,6 @@ class AutoCaducidadTests(unittest.TestCase):
             for row in botones_servicio("1", texto)["inline_keyboard"]
             for button in row
         ))
-        self.assertTrue(any(
-            button.get("callback_data") == "AUTOACEPTAR_1"
-            for row in botones_servicio("1", texto)["inline_keyboard"]
-            for button in row
-        ))
         keyboard = botones_servicio("1", texto)["inline_keyboard"]
         self.assertEqual(
             [button.get("callback_data") for button in keyboard[1]],
@@ -138,7 +133,8 @@ class AutoCaducidadTests(unittest.TestCase):
             [button.get("callback_data") for button in keyboard[2]],
             ["FORZAR_1", "SPAM_1"],
         )
-        self.assertEqual(keyboard[-1][0]["callback_data"], "WEB")
+        self.assertEqual([row[0]["callback_data"] for row in keyboard[3:]], ["WEB"])
+        self.assertEqual(keyboard[2][1]["text"], "🚫 Spam")
 
     def test_menu_inicio_conserva_su_distribucion_anterior(self):
         from main import botones
@@ -178,21 +174,77 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertEqual(limpiar_spam_caducado(manana), 1)
         self.assertFalse(servicio_en_spam(sid, manana))
 
-    def test_autoaceptar_se_aplica_al_mismo_id_y_caduca_al_final_del_dia(self):
-        from main import limpiar_spam_caducado, programar_autoaceptar, servicio_autoaceptar
+    def test_forzar_aceptar_persiste_hasta_que_se_cancela(self):
+        from main import cancelar_autoaceptar, programar_autoaceptar, servicio_autoaceptar
 
-        sid = "autoaceptar_expiracion_test"
+        sid = "forzar_aceptar_persistencia_test"
         hoy = datetime.now().date()
         manana = (hoy + timedelta(days=1)).isoformat()
         programar_autoaceptar(sid, hoy.isoformat())
 
         self.assertTrue(servicio_autoaceptar(sid, hoy.isoformat()))
         self.assertFalse(servicio_autoaceptar("otro_servicio_test", hoy.isoformat()))
-        # The preference remains available for every subsequent reappearance today.
-        self.assertTrue(servicio_autoaceptar(sid, hoy.isoformat()))
-        self.assertFalse(servicio_autoaceptar(sid, manana))
-        self.assertEqual(limpiar_spam_caducado(manana), 1)
-        self.assertFalse(servicio_autoaceptar(sid, manana))
+        self.assertTrue(servicio_autoaceptar(sid, manana))
+        self.assertTrue(cancelar_autoaceptar(sid))
+        self.assertFalse(servicio_autoaceptar(sid))
+
+    def test_limpiar_autoaceptar_borra_solo_ids_que_ya_no_aparecen(self):
+        from main import (
+            cancelar_autoaceptar,
+            limpiar_autoaceptar_ausentes,
+            programar_autoaceptar,
+            servicio_autoaceptar,
+        )
+
+        sid_activo = "forzar_activo_cleanup_test"
+        sid_ausente = "forzar_ausente_cleanup_test"
+        programar_autoaceptar(sid_activo)
+        programar_autoaceptar(sid_ausente)
+
+        eliminados = limpiar_autoaceptar_ausentes({sid_activo: "Servicio actual"})
+
+        self.assertEqual(eliminados, [sid_ausente])
+        self.assertTrue(servicio_autoaceptar(sid_activo))
+        self.assertFalse(servicio_autoaceptar(sid_ausente))
+        cancelar_autoaceptar(sid_activo)
+
+    def test_boton_forzar_aceptar_guarda_reintentos_si_falla_y_los_quita_al_aceptar(self):
+        from main import app, cancelar_autoaceptar, intentar_autoaceptar, servicio_autoaceptar
+
+        sid = "forzar_aceptar_callback_test"
+        client = app.test_client()
+
+        def enviar_forzar():
+            return client.post(
+                "/telegram_webhook",
+                json={
+                    "callback_query": {
+                        "id": "callback-test",
+                        "data": f"FORZAR_{sid}",
+                        "message": {
+                            "message_id": 1,
+                            "chat": {"id": "chat-forzar-test"},
+                        },
+                    }
+                },
+            )
+
+        cancelar_autoaceptar(sid)
+        with patch("main.tg_answer"), patch("main.guardar_usuario"), patch("main.tg_edit"), \
+                patch("main.aceptar_servicio", return_value=False):
+            response = enviar_forzar()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(servicio_autoaceptar(sid))
+
+        with patch("main.aceptar_servicio", return_value=False) as aceptar:
+            self.assertFalse(intentar_autoaceptar(sid))
+        aceptar.assert_called_once_with(sid)
+        self.assertTrue(servicio_autoaceptar(sid))
+
+        with patch("main.aceptar_servicio", return_value=True) as aceptar:
+            self.assertTrue(intentar_autoaceptar(sid))
+        aceptar.assert_called_once_with(sid)
+        self.assertFalse(servicio_autoaceptar(sid))
 
     def test_enlace_mapa_no_usa_el_mensaje_completo_si_no_reconoce_direccion(self):
         from main import botones_servicio
