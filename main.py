@@ -265,7 +265,7 @@ def extraer_direccion_servicio(texto):
 
     palabras_clave = [
         "AVENIDA", "AVDA", "AVD", "AVINGUDA", "CARRER", "CARRERA", "CRA", "CARRETERA",
-        "CTRA", "CTR", "C/CL", "C/ CL", "C / CL", "CALLE", "CL", "CR", "PASEO", "PLAZA",
+        "CTRA", "CTR", "C/CL", "C/ CL", "C / CL", "CALLE", "CAL", "CL", "CR", "PASEO", "PLAZA",
         "TRAVESIA", "TRAVESSIA", "RONDA", "URB", "URBANIZACION", "CAMI", "PZA", "RUA"
     ]
 
@@ -292,7 +292,16 @@ def extraer_direccion_servicio(texto):
 
     base = txt[pos:]
 
-    base = re.sub(r"\s+(?:en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro|por\s+pendiente\s+de\s+citar\s+al\s+cliente|atasco|averia|avería|informo|se\s+necesita|necesita)\b.*$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"(?i)^cal\s+calle\b", "Calle", base)
+    base = re.sub(
+        r"\s+(?:en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro|"
+        r"por\s+pendiente\s+de\s+citar\s+al\s+cliente|atasco|averia|avería|rotura|"
+        r"cambio|reparacion|reparación|sustitucion|sustitución|fuga|informo|"
+        r"se\s+necesita|necesita)\b.*$",
+        "",
+        base,
+        flags=re.IGNORECASE,
+    )
     base = re.sub(r"\s+\d{2}/\d{2}/\d{4}\s+(?:\d{2}/\d{2}/\d{4}\s+)?(?:de\s+\d{2}:\d{2}\s+a\s+\d{2}:\d{2})?.*$", "", base, flags=re.IGNORECASE)
     base = re.sub(r"\s+\d{2}:\d{2}\s*a\s*\d{2}:\d{2}.*$", "", base, flags=re.IGNORECASE)
     base = re.sub(r"\s+\d{2}/\d{2}/\d{4}.*$", "", base)
@@ -305,7 +314,15 @@ def extraer_direccion_servicio(texto):
     base = re.sub(r"\s+\(\d{5}\)\s*$", "", base)
 
     direccion = limpiar_direccion(base)
-    if direccion and re.search(r"\d", direccion):
+    es_via_con_nombre = bool(
+        re.match(
+            r"(?i)^(?:avenida|avda|avd|avinguda|carrer|carrera|cra|carretera|ctra|ctr|"
+            r"c\s*/\s*cl|calle|cal|cl|cr|paseo|plaza|travessia|travesia|ronda|urb|"
+            r"urbanizacion|cami|pza|rua)\b",
+            direccion,
+        )
+    )
+    if direccion and (re.search(r"\d", direccion) or es_via_con_nombre):
         return direccion
 
     if re.search(r"\d", txt):
@@ -315,16 +332,20 @@ def extraer_direccion_servicio(texto):
     return ""
 
 
-def resumen_servicio_alerta(texto):
+def resumen_servicio_alerta(texto, sid=None):
     direccion = extraer_direccion_servicio(texto)
     texto_limpio = re.sub(r"\s+", " ", str(texto or "")).strip()
     if len(texto_limpio) > 300:
         texto_limpio = texto_limpio[:297] + "..."
 
+    if not sid:
+        match_sid = re.search(r"\b\d{7,8}\b", texto_limpio)
+        sid = match_sid.group(0) if match_sid else ""
+    identificador = f"\n🔢 <b>Servicio:</b> {sid}" if sid else ""
     if direccion:
-        return f"🆕 <b>Nuevo servicio</b>\n📍 <b>Dirección:</b> {direccion}\n📝 <b>Comentario:</b> {texto_limpio}"
+        return f"🆕 <b>Nuevo servicio</b>{identificador}\n📍 <b>Dirección:</b> {direccion}\n📝 <b>Comentario:</b> {texto_limpio}"
 
-    return f"🆕 <b>Nuevo servicio</b>\n📝 <b>Comentario:</b> {texto_limpio}"
+    return f"🆕 <b>Nuevo servicio</b>{identificador}\n📝 <b>Comentario:</b> {texto_limpio}"
 
 
 def init_db():
@@ -354,10 +375,72 @@ def init_db():
                 PRIMARY KEY (chat_id, sid, fecha)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS servicios_spam (
+                sid TEXT PRIMARY KEY,
+                fecha TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS servicios_autoaceptar (
+                sid TEXT PRIMARY KEY,
+                fecha TEXT NOT NULL
+            )
+        """)
         columnas = [r[1] for r in conn.execute("PRAGMA table_info(seguimiento)").fetchall()]
         if "fecha_caducidad" not in columnas:
             conn.execute("ALTER TABLE seguimiento ADD COLUMN fecha_caducidad TIMESTAMP")
         conn.commit()
+
+
+def bloquear_servicio_spam(sid, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO servicios_spam (sid, fecha) VALUES (?, ?) "
+            "ON CONFLICT(sid) DO UPDATE SET fecha=excluded.fecha",
+            (str(sid), fecha),
+        )
+        conn.commit()
+
+
+def servicio_en_spam(sid, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT 1 FROM servicios_spam WHERE sid=? AND fecha=?",
+            (str(sid), fecha),
+        ).fetchone() is not None
+
+
+def limpiar_spam_caducado(fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        spam_cursor = conn.execute("DELETE FROM servicios_spam WHERE fecha < ?", (fecha,))
+        auto_cursor = conn.execute("DELETE FROM servicios_autoaceptar WHERE fecha < ?", (fecha,))
+        conn.commit()
+        return spam_cursor.rowcount + auto_cursor.rowcount
+
+
+def programar_autoaceptar(sid, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO servicios_autoaceptar (sid, fecha) VALUES (?, ?) "
+            "ON CONFLICT(sid) DO UPDATE SET fecha=excluded.fecha",
+            (str(sid), fecha),
+        )
+        conn.commit()
+
+
+def servicio_autoaceptar(sid, fecha=None):
+    fecha = fecha or datetime.now().date().isoformat()
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT 1 FROM servicios_autoaceptar WHERE sid=? AND fecha=?",
+            (str(sid), fecha),
+        ).fetchone() is not None
+
 
 def guardar_ruta_diaria(chat_id, sid, direccion, fecha=None, orden=None):
     fecha = fecha or datetime.now().date().isoformat()
@@ -942,11 +1025,10 @@ def tg_answer(callback_id):
 def botones():
     return {
         "inline_keyboard": [
-            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}],
+            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🧭 Ruta hoy", "callback_data": "RUTA_DEL_DIA"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
-            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
-            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}, {"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
-            [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
+            [{"text": "🛠 Estado", "callback_data": "CAMBIAR"}, {"text": "📋 En curso", "callback_data": "CURSO"}],
+            [{"text": "📦 Servicios", "callback_data": "NUM_SERV"}, {"text": "🔍 Baremo", "callback_data": "SEARCH_BAREMO"}]
         ]
     }
 
@@ -989,7 +1071,13 @@ def botones_usuarios():
 def direccion_para_mapa(texto_servicio="", domicilio="", poblacion=""):
     if texto_servicio:
         direccion = extraer_direccion_servicio(texto_servicio)
-        if direccion:
+        if direccion and re.search(
+            r"(?i)(?<![A-Za-zÁÉÍÓÚÑáéíóúñ])"
+            r"(?:avenida|avda|avd|avinguda|carrer|carrera|cra|carretera|ctra|ctr|"
+            r"c\s*/\s*cl|calle|cl|cr|paseo|plaza|travessia|travesia|ronda|urb|"
+            r"urbanizacion|cami|pza|rua)(?![A-Za-zÁÉÍÓÚÑáéíóúñ])",
+            direccion,
+        ):
             return re.sub(r"[\[\]\*\/\,\.]+", " ", direccion).strip()
 
     base = f"{domicilio}, {poblacion}".strip(", ")
@@ -1018,7 +1106,9 @@ def botones_servicio(sid, texto_servicio=""):
     return {
         "inline_keyboard": [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-            [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"}, {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
+            [{"text": "✅ Aceptar ahora", "callback_data": f"ACEPTAR_{sid}"}, {"text": "🤖 Autoaceptar si vuelve hoy", "callback_data": f"AUTOACEPTAR_{sid}"}],
+            [{"text": "🚫 Spam hoy", "callback_data": f"SPAM_{sid}"}],
+            [{"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
@@ -1371,6 +1461,15 @@ class HomeServe:
 
 homeserve = HomeServe()
 
+
+def aceptar_servicio(sid):
+    url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
+    response = homeserve.session.get(url, timeout=15)
+    html = response.text.lower()
+    errores = ["error", "illegal", "denegado", "caducada", "no autorizado", "acceso inválido"]
+    return not any(error in html for error in errores)
+
+
 # =========================================================
 # BACKGROUND LOOPS (MONITOR & RECORDATORIOS)
 # =========================================================
@@ -1381,14 +1480,41 @@ def loop():
 
     while True:
         try:
+            limpiar_spam_caducado()
             logger.info("🔎 [MONITOR] Consultando asignación de nuevos servicios...")
             actuales = homeserve.obtener()
             logger.info(f"📊 [MONITOR] Servicios encontrados en la web: {len(actuales)}")
 
             for sid, txt in actuales.items():
                 if sid not in SERVICIOS_ACTUALES:
+                    if servicio_en_spam(sid):
+                        logger.info("🔕 [MONITOR] Servicio %s silenciado por spam hoy", sid)
+                        continue
+                    if servicio_autoaceptar(sid):
+                        try:
+                            if aceptar_servicio(sid):
+                                logger.info("🤖 [MONITOR] Servicio %s autoaceptado al reaparecer", sid)
+                                continue
+                            logger.warning("No se pudo autoaceptar el servicio %s al reaparecer", sid)
+                            aviso_autoaceptar = (
+                                f"⚠️ No se pudo autoaceptar el servicio <b>{sid}</b>. "
+                                "Puedes intentar aceptarlo ahora:"
+                            )
+                        except Exception as exc:
+                            logger.error("Error al autoaceptar servicio %s: %s", sid, exc)
+                            aviso_autoaceptar = (
+                                f"⚠️ Error al autoaceptar el servicio <b>{sid}</b>: {exc}. "
+                                "Puedes intentar aceptarlo ahora:"
+                            )
+                        for u in obtener_usuarios():
+                            tg_send(
+                                u,
+                                f"{aviso_autoaceptar}\n\n{resumen_servicio_alerta(txt, sid)}",
+                                botones_servicio(sid, txt),
+                            )
+                        continue
                     logger.info(f"🚨 [NUEVO SERVICIO] Detectado servicio ID: {sid}")
-                    mensaje_nuevo = resumen_servicio_alerta(txt)
+                    mensaje_nuevo = resumen_servicio_alerta(txt, sid)
                     for u in obtener_usuarios():
                         tg_send(u, mensaje_nuevo, botones_servicio(sid, txt))
             
@@ -1645,7 +1771,7 @@ def webhook():
             else:
                 total = len(servicios)
                 for idx, (sid, txt) in enumerate(servicios.items(), start=1):
-                    resumen = f"🆕 <b>Servicio {idx}/{total}</b>\n\n{resumen_servicio_alerta(txt)}"
+                    resumen = f"🆕 <b>Servicio {idx}/{total}</b>\n\n{resumen_servicio_alerta(txt, sid)}"
                     tg_edit(chat, msg_id, resumen, botones_servicio(sid, txt))
 
         elif action == "CURSO":
@@ -2170,16 +2296,37 @@ def webhook():
         elif action.startswith("ACEPTAR_"):
             sid = action.split("_")[1]
             try:
-                url = f"{BASE_URL}?w3exec=prof_asignacion&servicio={sid}"
-                r = homeserve.session.get(url, timeout=15)
-                html = r.text.lower()
-                errores = ["error", "illegal", "denegado", "caducada", "no autorizado", "acceso inválido"]
-                if any(e in html for e in errores):
-                    tg_edit(chat, msg_id, f"❌ Error al aceptar servicio {sid}", botones())
+                if not aceptar_servicio(sid):
+                    tg_edit(
+                        chat, msg_id, f"❌ No se pudo aceptar el servicio {sid}. Puedes volver a intentarlo.",
+                        botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
+                    )
                 else:
                     tg_edit(chat, msg_id, f"✅ Servicio {sid} aceptado correctamente", botones())
             except Exception as e:
-                tg_edit(chat, msg_id, f"❌ Error: {e}", botones())
+                tg_edit(
+                    chat, msg_id, f"❌ Error al aceptar el servicio {sid}: {e}. Puedes volver a intentarlo.",
+                    botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
+                )
+
+        elif action.startswith("AUTOACEPTAR_"):
+            sid = action.split("_", 1)[1]
+            programar_autoaceptar(sid)
+            tg_edit(
+                chat, msg_id,
+                f"🤖 Si el servicio <b>{sid}</b> vuelve a aparecer hoy, lo aceptaré automáticamente. "
+                "Esta preferencia caduca al final del día.",
+                {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "WEB"}]]},
+            )
+
+        elif action.startswith("SPAM_"):
+            sid = action.split("_", 1)[1]
+            bloquear_servicio_spam(sid)
+            tg_edit(
+                chat, msg_id,
+                f"🚫 El servicio <b>{sid}</b> se ocultará de las alertas hasta el final de hoy.",
+                {"inline_keyboard": [[{"text": "⬅️ Volver", "callback_data": "WEB"}]]},
+            )
 
         elif action.startswith("RECHAZAR_"):
             sid = action.split("_")[1]

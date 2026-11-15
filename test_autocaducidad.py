@@ -62,6 +62,24 @@ class AutoCaducidadTests(unittest.TestCase):
             "AVENIDA DEL MAR 31 3ºA"
         )
 
+    def test_extraer_direccion_y_mapa_solo_direccion_de_servicio_emperador(self):
+        from main import botones_servicio
+        from urllib.parse import unquote_plus, urlparse, parse_qs
+
+        texto = (
+            "16134641 Fontanero Libre Para el 16/11/26 De 08:00 a 20:00 EMPERADOR (46135) "
+            "CAL calle DE LA TORRETA Rotura/cambio de mecanismo de cisterna CAMBIO CISTERNA."
+        )
+
+        direccion = extraer_direccion_servicio(texto)
+        url = botones_servicio("16134641", texto)["inline_keyboard"][0][0]["url"]
+        mapa_query = parse_qs(urlparse(url).query)["query"][0]
+
+        self.assertEqual(direccion, "Calle DE LA TORRETA")
+        self.assertEqual(unquote_plus(mapa_query), direccion)
+        self.assertNotIn("Rotura", mapa_query)
+        self.assertNotIn("16/11/26", mapa_query)
+
     def test_resumen_servicio_alerta_incluye_comentario_y_mapa_solo_direccion(self):
         from main import botones_servicio, resumen_servicio_alerta
 
@@ -74,9 +92,64 @@ class AutoCaducidadTests(unittest.TestCase):
         resumen = resumen_servicio_alerta(texto)
         self.assertIn("atasco en fregadero de la cocina", resumen.lower())
         self.assertIn("C/ CL CALLOSA D'EN SARRIA 2B", resumen)
+        self.assertIn("16037705", resumen_servicio_alerta(texto, "16037705"))
         self.assertIn("google.com/maps/search", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"])
         self.assertNotIn("VALENCIA", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"].upper())
         self.assertNotIn("20:00", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"].upper())
+        self.assertTrue(any(
+            button.get("callback_data") == "SPAM_1"
+            for row in botones_servicio("1", texto)["inline_keyboard"]
+            for button in row
+        ))
+        self.assertTrue(any(
+            button.get("callback_data") == "ACEPTAR_1"
+            for row in botones_servicio("1", texto)["inline_keyboard"]
+            for button in row
+        ))
+        self.assertTrue(any(
+            button.get("callback_data") == "AUTOACEPTAR_1"
+            for row in botones_servicio("1", texto)["inline_keyboard"]
+            for button in row
+        ))
+
+    def test_spam_servicio_caduca_y_se_limpia_al_cambiar_el_dia(self):
+        from main import bloquear_servicio_spam, limpiar_spam_caducado, servicio_en_spam
+
+        sid = "spam_expiracion_test"
+        hoy = datetime.now().date()
+        manana = (hoy + timedelta(days=1)).isoformat()
+        bloquear_servicio_spam(sid, hoy.isoformat())
+
+        self.assertTrue(servicio_en_spam(sid, hoy.isoformat()))
+        self.assertFalse(servicio_en_spam("otro_servicio_test", hoy.isoformat()))
+        self.assertFalse(servicio_en_spam(sid, manana))
+        self.assertEqual(limpiar_spam_caducado(manana), 1)
+        self.assertFalse(servicio_en_spam(sid, manana))
+
+    def test_autoaceptar_se_aplica_al_mismo_id_y_caduca_al_final_del_dia(self):
+        from main import limpiar_spam_caducado, programar_autoaceptar, servicio_autoaceptar
+
+        sid = "autoaceptar_expiracion_test"
+        hoy = datetime.now().date()
+        manana = (hoy + timedelta(days=1)).isoformat()
+        programar_autoaceptar(sid, hoy.isoformat())
+
+        self.assertTrue(servicio_autoaceptar(sid, hoy.isoformat()))
+        self.assertFalse(servicio_autoaceptar("otro_servicio_test", hoy.isoformat()))
+        # The preference remains available for every subsequent reappearance today.
+        self.assertTrue(servicio_autoaceptar(sid, hoy.isoformat()))
+        self.assertFalse(servicio_autoaceptar(sid, manana))
+        self.assertEqual(limpiar_spam_caducado(manana), 1)
+        self.assertFalse(servicio_autoaceptar(sid, manana))
+
+    def test_enlace_mapa_no_usa_el_mensaje_completo_si_no_reconoce_direccion(self):
+        from main import botones_servicio
+
+        texto = "16000001 Manitas fontanero Libre Para el 07/10/26 De 08:00 a 20:00 VALENCIA (46007)"
+        mapa = botones_servicio("16000001", texto)["inline_keyboard"][0][0]["url"]
+
+        self.assertEqual(mapa, "https://www.google.com/maps")
+        self.assertNotIn("16000001", mapa)
 
     def test_extraer_direccion_servicio_acepta_prefijos_valencianos(self):
         from main import parsear_servicios_texto
