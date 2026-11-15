@@ -63,7 +63,7 @@ class AutoCaducidadTests(unittest.TestCase):
         )
 
     def test_extraer_direccion_y_mapa_solo_direccion_de_servicio_emperador(self):
-        from main import botones_servicio
+        from main import botones_servicio, extraer_localidad_servicio, resumen_servicio_alerta
         from urllib.parse import unquote_plus, urlparse, parse_qs
 
         texto = (
@@ -76,9 +76,26 @@ class AutoCaducidadTests(unittest.TestCase):
         mapa_query = parse_qs(urlparse(url).query)["query"][0]
 
         self.assertEqual(direccion, "Calle DE LA TORRETA")
-        self.assertEqual(unquote_plus(mapa_query), direccion)
+        self.assertEqual(extraer_localidad_servicio(texto), "EMPERADOR (46135)")
+        self.assertEqual(unquote_plus(mapa_query), "Calle DE LA TORRETA, EMPERADOR (46135)")
+        self.assertIn("EMPERADOR (46135)", resumen_servicio_alerta(texto, "16134641"))
         self.assertNotIn("Rotura", mapa_query)
         self.assertNotIn("16/11/26", mapa_query)
+
+    def test_direccion_sin_prefijo_de_calle_conserva_localidad_en_mapa(self):
+        from main import botones_servicio, extraer_direccion_servicio
+        from urllib.parse import urlparse, parse_qs
+
+        texto = (
+            "16140088 Fontanero Urgente Libre Para el 15/11/26 De 02:41 a 05:41 "
+            "PATERNA (46980) CAÑADA PUIGCAMPANA Texto manual ASEGURADA INDICA QUE LE CAE AGUA"
+        )
+        direccion = extraer_direccion_servicio(texto)
+        url = botones_servicio("16140088", texto)["inline_keyboard"][0][0]["url"]
+        mapa_query = parse_qs(urlparse(url).query)["query"][0]
+
+        self.assertEqual(direccion, "CAÑADA PUIGCAMPANA")
+        self.assertEqual(mapa_query, "CAÑADA PUIGCAMPANA, PATERNA (46980)")
 
     def test_resumen_servicio_alerta_incluye_comentario_y_mapa_solo_direccion(self):
         from main import botones_servicio, resumen_servicio_alerta
@@ -94,7 +111,8 @@ class AutoCaducidadTests(unittest.TestCase):
         self.assertIn("C/ CL CALLOSA D'EN SARRIA 2B", resumen)
         self.assertIn("16037705", resumen_servicio_alerta(texto, "16037705"))
         self.assertIn("google.com/maps/search", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"])
-        self.assertNotIn("VALENCIA", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"].upper())
+        self.assertIn("VALENCIA", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"].upper())
+        self.assertIn("46007", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"])
         self.assertNotIn("20:00", botones_servicio("1", texto)["inline_keyboard"][0][0]["url"].upper())
         self.assertTrue(any(
             button.get("callback_data") == "SPAM_1"
@@ -111,6 +129,40 @@ class AutoCaducidadTests(unittest.TestCase):
             for row in botones_servicio("1", texto)["inline_keyboard"]
             for button in row
         ))
+        keyboard = botones_servicio("1", texto)["inline_keyboard"]
+        self.assertEqual(
+            [button.get("callback_data") for button in keyboard[1]],
+            ["ACEPTAR_1", "RECHAZAR_1"],
+        )
+        self.assertEqual(
+            [button.get("callback_data") for button in keyboard[2]],
+            ["FORZAR_1", "SPAM_1"],
+        )
+        self.assertEqual(keyboard[-1][0]["callback_data"], "WEB")
+
+    def test_menu_inicio_conserva_su_distribucion_anterior(self):
+        from main import botones
+
+        keyboard = botones()["inline_keyboard"]
+
+        self.assertEqual(len(keyboard), 5)
+        self.assertEqual(keyboard[2][0]["callback_data"], "CAMBIAR")
+        self.assertEqual(keyboard[3][0]["callback_data"], "CURSO")
+        self.assertEqual(keyboard[3][1]["callback_data"], "NUM_SERV")
+
+    def test_volver_a_web_muestra_todos_los_servicios(self):
+        from main import mostrar_lista_servicios_nuevos
+
+        servicios = {
+            "16140088": "16140088 Fontanero PATERNA (46980) CAÑADA PUIGCAMPANA",
+            "16134641": "16134641 Fontanero EMPERADOR (46135) CAL calle DE LA TORRETA",
+        }
+        with patch("main.tg_edit") as tg_edit, patch("main.tg_send") as tg_send:
+            mostrar_lista_servicios_nuevos("chat", 10, servicios)
+
+        tg_edit.assert_called_once()
+        self.assertIn("16140088", tg_edit.call_args.args[2])
+        self.assertIn("16134641", tg_send.call_args.args[1])
 
     def test_spam_servicio_caduca_y_se_limpia_al_cambiar_el_dia(self):
         from main import bloquear_servicio_spam, limpiar_spam_caducado, servicio_en_spam

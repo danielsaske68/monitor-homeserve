@@ -247,6 +247,19 @@ def limpiar_direccion(direccion):
     return texto
 
 
+def extraer_localidad_servicio(texto):
+    if not texto:
+        return ""
+    txt = re.sub(r"\s+", " ", str(texto).replace("\u00a0", " ")).strip()
+    patron = r"\b([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s,'-]{1,40}?)\s*\((\d{5})\)"
+    coincidencias = list(re.finditer(patron, txt))
+    if not coincidencias:
+        return ""
+    coincidencia = coincidencias[-1]
+    localidad = re.sub(r"\s+", " ", coincidencia.group(1)).strip(" ,'-")
+    return f"{localidad} ({coincidencia.group(2)})" if localidad else ""
+
+
 def extraer_direccion_servicio(texto):
     if not texto:
         return ""
@@ -288,7 +301,11 @@ def extraer_direccion_servicio(texto):
                 pos = match.start() if pos is None else min(pos, match.start())
 
     if pos is None:
-        pos = 0
+        localidad_match = re.search(
+            r"\b[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s,'-]{1,40}?\s*\(\d{5}\)\s*",
+            txt,
+        )
+        pos = localidad_match.end() if localidad_match else 0
 
     base = txt[pos:]
 
@@ -297,7 +314,7 @@ def extraer_direccion_servicio(texto):
         r"\s+(?:en\s+espera\s+de\s+profesional|por\s+confirmacion\s+del\s+siniestro|"
         r"por\s+pendiente\s+de\s+citar\s+al\s+cliente|atasco|averia|avería|rotura|"
         r"cambio|reparacion|reparación|sustitucion|sustitución|fuga|informo|"
-        r"se\s+necesita|necesita)\b.*$",
+        r"texto\s+manual|asegurada\s+indica|se\s+necesita|necesita)\b.*$",
         "",
         base,
         flags=re.IGNORECASE,
@@ -322,7 +339,8 @@ def extraer_direccion_servicio(texto):
             direccion,
         )
     )
-    if direccion and (re.search(r"\d", direccion) or es_via_con_nombre):
+    localidad = extraer_localidad_servicio(txt)
+    if direccion and (re.search(r"\d", direccion) or es_via_con_nombre or localidad):
         return direccion
 
     if re.search(r"\d", txt):
@@ -334,6 +352,9 @@ def extraer_direccion_servicio(texto):
 
 def resumen_servicio_alerta(texto, sid=None):
     direccion = extraer_direccion_servicio(texto)
+    localidad = extraer_localidad_servicio(texto)
+    if direccion and localidad:
+        direccion = f"{direccion}, {localidad}"
     texto_limpio = re.sub(r"\s+", " ", str(texto or "")).strip()
     if len(texto_limpio) > 300:
         texto_limpio = texto_limpio[:297] + "..."
@@ -1025,10 +1046,11 @@ def tg_answer(callback_id):
 def botones():
     return {
         "inline_keyboard": [
-            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🧭 Ruta hoy", "callback_data": "RUTA_DEL_DIA"}],
+            [{"text": "🔐 Login", "callback_data": "LOGIN"}, {"text": "🧭 Ruta del día", "callback_data": "RUTA_DEL_DIA"}],
             [{"text": "🌐 Web", "callback_data": "WEB"}, {"text": "👥 Usuarios", "callback_data": "USUARIOS"}],
-            [{"text": "🛠 Estado", "callback_data": "CAMBIAR"}, {"text": "📋 En curso", "callback_data": "CURSO"}],
-            [{"text": "📦 Servicios", "callback_data": "NUM_SERV"}, {"text": "🔍 Baremo", "callback_data": "SEARCH_BAREMO"}]
+            [{"text": "🛠 Cambiar estado", "callback_data": "CAMBIAR"}],
+            [{"text": "📋 Servicios en curso", "callback_data": "CURSO"}, {"text": "📦 Número de servicios", "callback_data": "NUM_SERV"}],
+            [{"text": "🔍 Buscar Baremo", "callback_data": "SEARCH_BAREMO"}]
         ]
     }
 
@@ -1071,14 +1093,10 @@ def botones_usuarios():
 def direccion_para_mapa(texto_servicio="", domicilio="", poblacion=""):
     if texto_servicio:
         direccion = extraer_direccion_servicio(texto_servicio)
-        if direccion and re.search(
-            r"(?i)(?<![A-Za-zÁÉÍÓÚÑáéíóúñ])"
-            r"(?:avenida|avda|avd|avinguda|carrer|carrera|cra|carretera|ctra|ctr|"
-            r"c\s*/\s*cl|calle|cl|cr|paseo|plaza|travessia|travesia|ronda|urb|"
-            r"urbanizacion|cami|pza|rua)(?![A-Za-zÁÉÍÓÚÑáéíóúñ])",
-            direccion,
-        ):
-            return re.sub(r"[\[\]\*\/\,\.]+", " ", direccion).strip()
+        localidad = extraer_localidad_servicio(texto_servicio)
+        if direccion:
+            direccion_completa = f"{direccion}, {localidad}" if localidad else direccion
+            return re.sub(r"\s+", " ", direccion_completa).strip(" ,")
 
     base = f"{domicilio}, {poblacion}".strip(", ")
     if not base:
@@ -1106,12 +1124,28 @@ def botones_servicio(sid, texto_servicio=""):
     return {
         "inline_keyboard": [
             [{"text": "📍 Google Maps", "url": gmaps_url}, {"text": "🚙 Waze", "url": waze_url}],
-            [{"text": "✅ Aceptar ahora", "callback_data": f"ACEPTAR_{sid}"}, {"text": "🤖 Autoaceptar si vuelve hoy", "callback_data": f"AUTOACEPTAR_{sid}"}],
-            [{"text": "🚫 Spam hoy", "callback_data": f"SPAM_{sid}"}],
-            [{"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
+            [{"text": "✅ Aceptar", "callback_data": f"ACEPTAR_{sid}"}, {"text": "❌ Rechazar", "callback_data": f"RECHAZAR_{sid}"}],
+            [{"text": "⚡ Forzar aceptar", "callback_data": f"FORZAR_{sid}"}, {"text": "🚫 Spam hoy", "callback_data": f"SPAM_{sid}"}],
+            [{"text": "🤖 Autoaceptar si vuelve hoy", "callback_data": f"AUTOACEPTAR_{sid}"}],
             [{"text": "⬅️ Volver", "callback_data": "WEB"}]
         ]
     }
+
+
+def mostrar_lista_servicios_nuevos(chat, msg_id, servicios):
+    if not servicios:
+        tg_edit(chat, msg_id, "❌ Sin servicios", botones())
+        return
+
+    total = len(servicios)
+    for idx, (sid, texto) in enumerate(servicios.items(), start=1):
+        resumen = f"🆕 <b>Servicio {idx}/{total}</b>\n\n{resumen_servicio_alerta(texto, sid)}"
+        markup = botones_servicio(sid, texto)
+        if idx == 1:
+            tg_edit(chat, msg_id, resumen, markup)
+        else:
+            tg_send(chat, resumen, markup)
+
 
 def botones_estado(sid):
     return {
@@ -1765,14 +1799,7 @@ def webhook():
             tg_edit(chat, msg_id, f"🔄 {total} servicios", botones())
 
         elif action == "WEB":
-            servicios = homeserve.obtener()
-            if not servicios:
-                tg_edit(chat, msg_id, "❌ Sin servicios", botones())
-            else:
-                total = len(servicios)
-                for idx, (sid, txt) in enumerate(servicios.items(), start=1):
-                    resumen = f"🆕 <b>Servicio {idx}/{total}</b>\n\n{resumen_servicio_alerta(txt, sid)}"
-                    tg_edit(chat, msg_id, resumen, botones_servicio(sid, txt))
+            mostrar_lista_servicios_nuevos(chat, msg_id, homeserve.obtener())
 
         elif action == "CURSO":
             curso = homeserve.obtener_curso()
@@ -2306,6 +2333,23 @@ def webhook():
             except Exception as e:
                 tg_edit(
                     chat, msg_id, f"❌ Error al aceptar el servicio {sid}: {e}. Puedes volver a intentarlo.",
+                    botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
+                )
+
+        elif action.startswith("FORZAR_"):
+            sid = action.split("_", 1)[1]
+            try:
+                if aceptar_servicio(sid):
+                    tg_edit(chat, msg_id, f"✅ Solicitud de aceptación forzada enviada para el servicio {sid}.", botones())
+                else:
+                    tg_edit(
+                        chat, msg_id, f"❌ Homeserve no confirmó la aceptación forzada del servicio {sid}.",
+                        botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
+                    )
+            except Exception as e:
+                logger.error("Error al forzar aceptación del servicio %s: %s", sid, e)
+                tg_edit(
+                    chat, msg_id, f"❌ Error al forzar la aceptación del servicio {sid}: {e}",
                     botones_servicio(sid, SERVICIOS_ACTUALES.get(sid, "")),
                 )
 
